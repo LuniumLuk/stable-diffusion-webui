@@ -1,6 +1,6 @@
 # Local LLM Chat Interface
 
-A minimal, self-contained chat UI for running the GLM-4.7-Flash model locally with full conversation history.
+A minimal, self-contained chat UI for running GGUF models locally with full conversation history.
 
 ## Features
 
@@ -20,13 +20,13 @@ A minimal, self-contained chat UI for running the GLM-4.7-Flash model locally wi
 
 ### 1. Download the Model
 
-Download the GLM-4.7-Flash GGUF model from HuggingFace:
-- **Repository**: https://huggingface.co/DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF
+Download a GGUF model from HuggingFace mirror (default downloader target):
+- **Repository**: https://hf-mirror.com/HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive
 - **Place the `.gguf` file in**: `local-llm/models/`
 
 Example:
 ```
-local-llm/models/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF.gguf
+local-llm/models/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
 ```
 
 ### 2. Install Dependencies
@@ -62,6 +62,7 @@ Navigate to: **http://localhost:5000**
 3. **Send**: Press Ctrl+Enter or click Send button
 4. **View History**: Left sidebar shows all past conversations
 5. **Delete**: Click ✕ to delete a conversation
+6. **Switch Model**: Use the model selector in the status bar and click "Switch Model"
 
 ## File Structure
 
@@ -112,9 +113,11 @@ local-llm/
 
 ### "Model not found"
 
-Ensure the `.gguf` file is in `local-llm/models/` with exact name:
+Ensure at least one `.gguf` file from the repo is present in `local-llm/models/`.
+
+Example filename:
 ```
-GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF.gguf
+Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
 ```
 
 ### "Slow inference on CPU"

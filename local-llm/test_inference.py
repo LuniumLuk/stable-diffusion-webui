@@ -1,10 +1,10 @@
-"""Test GLM-4.7 model inference with GPU."""
+"""Test Qwen2.5-Coder GGUF model inference with GPU."""
 import time
 from pathlib import Path
 from models import load_model, generate_response, get_model_info
 
 print("=" * 70)
-print("GLM-4.7 Model Inference Test (GPU)")
+print("Qwen2.5-Coder Model Inference Test (GPU)")
 print("=" * 70)
 print()
 

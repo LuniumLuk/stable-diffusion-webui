@@ -5,7 +5,8 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from pathlib import Path
 
-from models import load_model, generate_response, get_model_info
+import re as _re
+from models import load_model, generate_response, get_model_info, list_local_models
 from history import (
     create_conversation,
     add_message,
@@ -14,6 +15,32 @@ from history import (
     delete_conversation,
     update_conversation_title,
 )
+
+
+def _auto_title(conversation_id, first_user_message):
+    """Generate a short title from the first user message using the model."""
+    try:
+        title_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You create very short conversation titles (5 words max). "
+                    "Reply with ONLY the title, no punctuation, no explanation."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Summarize this as a chat title: {first_user_message[:200]}",
+            },
+        ]
+        raw = generate_response(messages=title_messages, max_tokens=16)
+        # Strip markdown / quotes, collapse whitespace, cap at 60 chars.
+        title = _re.sub(r"[#*`>_\[\]()\"']", "", raw or "").strip()
+        title = _re.sub(r"\s+", " ", title)[:60].strip() or "Chat"
+        update_conversation_title(conversation_id, title)
+        return title
+    except Exception:
+        return None
 
 app = Flask(__name__, template_folder="static", static_folder="static")
 CORS(app)
@@ -137,12 +164,23 @@ def send_message():
             )
 
         add_message(current_conversation, "assistant", response_text)
-        
-        return jsonify({
+
+        # Auto-title on the very first exchange (title is still "New Chat").
+        auto_title = None
+        conversations = get_conversations()
+        for c in conversations:
+            if c["id"] == current_conversation and c["title"] == "New Chat":
+                auto_title = _auto_title(current_conversation, user_message)
+                break
+
+        payload = {
             "user_message": user_message,
             "assistant_message": response_text,
-            "success": True
-        })
+            "success": True,
+        }
+        if auto_title:
+            payload["auto_title"] = auto_title
+        return jsonify(payload)
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -206,6 +244,41 @@ def status():
         "model_info": get_model_info(),
         "current_conversation": current_conversation
     })
+
+
+# ============= Model Routes =============
+
+@app.route("/api/models/list", methods=["GET"])
+def list_models():
+    """List local GGUF models."""
+    models = list_local_models()
+    return jsonify({
+        "models": models,
+        "current_model": get_model_info().get("model_name"),
+    })
+
+
+@app.route("/api/models/select", methods=["POST"])
+def select_model_route():
+    """Switch active model by filename or stem."""
+    global model_loaded
+
+    data = request.json or {}
+    model_name = (data.get("model") or "").strip()
+    if not model_name:
+        return jsonify({"error": "Missing model name"}), 400
+
+    try:
+        load_model(model_name=model_name)
+        model_loaded = True
+        return jsonify({
+            "success": True,
+            "model_info": get_model_info(),
+        })
+    except FileNotFoundError:
+        return jsonify({"error": f"Model not found: {model_name}"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

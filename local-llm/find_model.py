@@ -1,45 +1,41 @@
-"""Fetch GGUF models from HuggingFace repo using web scraping."""
+"""Fetch GGUF model filenames from the configured Hugging Face endpoint."""
+import os
+
 import requests
-from bs4 import BeautifulSoup
-import re
 
-REPO_URL = "https://huggingface.co/DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF"
 
-print(f"Fetching {REPO_URL}...")
+REPO_ID = "Olak17/Qwen2.5-Coder-1.5B-Unsensored-DPO-i1-GGUF"
+HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com").rstrip("/")
+API_URL = f"{HF_ENDPOINT}/api/models/{REPO_ID}"
+
+print(f"Fetching model metadata from {REPO_ID}...")
+print(f"Endpoint: {HF_ENDPOINT}")
 print()
 
 try:
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    response = requests.get(REPO_URL, headers=headers, timeout=10)
+    response = requests.get(API_URL, timeout=20)
     response.raise_for_status()
-    
-    # Look for download links with .gguf extension
-    gguf_pattern = r'href="([^"]*\.gguf[^"]*)"'
-    matches = re.findall(gguf_pattern, response.text)
-    
-    if matches:
-        print("Found GGUF files:")
-        print()
-        for url in matches:
-            # Extract filename
-            if '/blob/' in url:
-                filename = url.split('/')[-1]
-                print(f"  • {filename}")
-                print(f"    URL: {url}")
-                print()
-    else:
-        print("No .gguf files found in page.")
-        print()
-        print("Trying to extract from page source...")
-        
-        # Try alternative method - look for data attributes
-        if 'GLM' in response.text:
-            print("✓ Repository page loaded successfully")
-            print("  Repository appears to exist")
-        else:
-            print("✗ Repository page not found or empty")
+    data = response.json()
 
-except requests.exceptions.RequestException as e:
-    print(f"Error: {e}")
+    gguf_files = sorted(
+        [f for f in data.get("siblings", []) if f.get("rfilename", "").endswith(".gguf")],
+        key=lambda f: f.get("rfilename", "").lower(),
+    )
+
+    if not gguf_files:
+        print("No .gguf files found in repository metadata.")
+    else:
+        print(f"Found {len(gguf_files)} GGUF file(s):")
+        print()
+        for item in gguf_files:
+            filename = item.get("rfilename", "")
+            size = item.get("size")
+            if isinstance(size, int):
+                size_text = f"{size / (1024 ** 3):.2f} GB"
+            else:
+                size_text = "N/A"
+            print(f"  - {filename}")
+            print(f"    Size: {size_text}")
+
+except requests.exceptions.RequestException as exc:
+    print(f"Error: {exc}")

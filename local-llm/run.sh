@@ -13,7 +13,7 @@ echo ""
 # Check if model exists
 if ! ls models/*.gguf 1> /dev/null 2>&1; then
     echo "[WARNING] No .gguf model found in models/ folder"
-    echo "Download from: https://huggingface.co/DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF"
+    echo "Download from: https://hf-mirror.com/HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive"
     echo ""
     read -p "Press Enter to continue..."
 fi

@@ -1,4 +1,5 @@
 """Model management with llama-cpp-python."""
+import gc
 import os
 import re
 from pathlib import Path
@@ -59,12 +60,53 @@ def get_model():
     return _model
 
 
+def list_local_models():
+    """List available local GGUF files sorted by newest first."""
+    gguf_files = sorted(MODELS_DIR.glob("*.gguf"), key=lambda p: p.stat().st_mtime, reverse=True)
+    models = []
+    for model_path in gguf_files:
+        stat = model_path.stat()
+        models.append(
+            {
+                "name": model_path.name,
+                "stem": model_path.stem,
+                "size_bytes": stat.st_size,
+                "mtime": stat.st_mtime,
+            }
+        )
+    return models
+
+
+def _resolve_explicit_model(model_name):
+    """Resolve explicit model input to a file path if present."""
+    if not model_name:
+        return None
+
+    raw = str(model_name).strip()
+    if not raw:
+        return None
+
+    direct_candidate = MODELS_DIR / raw
+    if direct_candidate.exists() and direct_candidate.suffix.lower() == ".gguf":
+        return direct_candidate
+
+    stem_candidate = MODELS_DIR / f"{raw}.gguf"
+    if stem_candidate.exists():
+        return stem_candidate
+
+    return None
+
+
 def _select_model_path(model_name=None):
     """Resolve GGUF model path by explicit name or by newest file in models dir."""
-    if model_name:
-        candidate = MODELS_DIR / f"{model_name}.gguf"
-        if candidate.exists():
-            return candidate
+    explicit = _resolve_explicit_model(model_name)
+    if explicit:
+        return explicit
+
+    env_default = os.getenv("LOCAL_LLM_MODEL_FILE")
+    env_model = _resolve_explicit_model(env_default)
+    if env_model:
+        return env_model
 
     gguf_files = sorted(MODELS_DIR.glob("*.gguf"), key=lambda p: p.stat().st_mtime, reverse=True)
     if gguf_files:
@@ -88,6 +130,10 @@ def load_model(model_name=None):
     
     print(f"Loading model from {model_path}...")
 
+    if _model is not None:
+        _model = None
+        gc.collect()
+
     # GPU/CPU mode selection via env with safe fallback defaults.
     # LOCAL_LLM_GPU_LAYERS: -1 (all), 0 (cpu), N (partial offload)
     # IQ3_M / Q4_K_M quants are stable at higher offload values.
@@ -110,6 +156,7 @@ def load_model(model_name=None):
         "gpu_supported": gpu_supported,
         "n_gpu_layers": n_gpu_layers,
         "requested_gpu_layers": requested_gpu_layers,
+        "model_name": model_path.name,
         "model_path": str(model_path),
     }
     
@@ -126,21 +173,19 @@ def _clean_response_text(text):
     lines = []
     for line in cleaned.splitlines():
         s = line.strip()
-        if not s:
-            continue
-        if re.match(r"^\d+\.\s+\*\*", s):
+        # Only drop lines that are purely repeated garbage punctuation with no content.
+        if re.match(r"^[=;,]{4,}$", s):
             continue
         if re.match(r"^\d+\.\s*$", s):
             continue
-        if re.match(r"^[*#`>-]+\s*$", s):
-            continue
-        lines.append(s)
+        # Normalize horizontal whitespace per line but keep markdown structure.
+        lines.append(re.sub(r"[ \t]+", " ", s).strip())
 
     if lines:
-        cleaned = " ".join(lines)
+        cleaned = "\n".join(lines)
 
-    # Collapse repeated spaces and trim noisy trailing punctuation blocks.
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Trim noisy trailing punctuation blocks but keep newlines intact.
+    cleaned = cleaned.strip()
     cleaned = re.sub(r"([;:,.!?])\1{2,}", r"\1", cleaned)
     return cleaned
 
@@ -190,6 +235,7 @@ def get_model_info():
         "gpu_supported": _model_meta.get("gpu_supported"),
         "n_gpu_layers": _model_meta.get("n_gpu_layers"),
         "requested_gpu_layers": _model_meta.get("requested_gpu_layers"),
+        "model_name": _model_meta.get("model_name"),
         "model_path": _model_meta.get("model_path"),
         "context_size": model.n_ctx(),
         "vocabulary_size": model.n_vocab(),

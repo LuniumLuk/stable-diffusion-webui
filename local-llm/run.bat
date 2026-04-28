@@ -12,7 +12,7 @@ echo.
 REM Check if model exists
 if not exist "models\*.gguf" (
     echo [WARNING] No .gguf model found in models/ folder
-    echo Download from: https://huggingface.co/DavidAU/GLM-4.7-Flash-Uncensored-Heretic-NEO-CODE-Imatrix-MAX-GGUF
+    echo Download from: https://hf-mirror.com/HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive
     echo.
     pause
 )
