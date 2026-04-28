@@ -42,3 +42,8 @@ notification.mp3
 /cache
 trace.json
 /sysinfo-????-??-??-??-??.json
+/local-llm/models
+/local-llm/history.db
+/local-llm/__pycache__
+/local-llm/.env
+.venv

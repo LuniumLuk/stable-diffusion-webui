@@ -391,11 +391,11 @@ def prepare_environment():
     startup_timer.record("torch GPU test")
 
     if not is_installed("clip"):
-        run_pip(f"install {clip_package}", "clip")
+        run_pip(f"install --no-build-isolation {clip_package}", "clip")
         startup_timer.record("install clip")
 
     if not is_installed("open_clip"):
-        run_pip(f"install {openclip_package}", "open_clip")
+        run_pip(f"install --no-build-isolation {openclip_package}", "open_clip")
         startup_timer.record("install open_clip")
 
     if (not is_installed("xformers") or args.reinstall_xformers) and args.xformers:

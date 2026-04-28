@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local LLM Chat</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container-main {
+            display: flex;
+            height: 100vh;
+            gap: 0;
+        }
+
+        .sidebar {
+            width: 280px;
+            background: rgba(10, 10, 20, 0.8);
+            border-right: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            padding: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .new-chat-btn {
+            width: 100%;
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+
+        .new-chat-btn:hover {
+            background: #0b5ed7;
+        }
+
+        .conversations-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .conversation-item {
+            padding: 10px 12px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 14px;
+            border-left: 3px solid transparent;
+        }
+
+        .conversation-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .conversation-item.active {
+            background: rgba(13, 110, 253, 0.2);
+            border-left-color: #0d6efd;
+        }
+
+        .delete-btn {
+            float: right;
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0 5px;
+        }
+
+        .delete-btn:hover {
+            color: #ff6b6b;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, #0f3460 0%, #1a1a2e 100%);
+        }
+
+        .chat-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid #333;
+            background: rgba(10, 10, 20, 0.5);
+            font-weight: 600;
+        }
+
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message.assistant {
+            justify-content: flex-start;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-content {
+            background: #0d6efd;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .message-content {
+            background: rgba(255, 255, 255, 0.1);
+            border-left: 3px solid #0d6efd;
+            border-bottom-left-radius: 4px;
+        }
+
+        .input-area {
+            padding: 20px;
+            background: rgba(10, 10, 20, 0.8);
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-field {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid #444;
+            color: #eee;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            resize: none;
+            max-height: 120px;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: #0d6efd;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .send-btn {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.3s;
+            white-space: nowrap;
+        }
+
+        .send-btn:hover {
+            background: #0b5ed7;
+        }
+
+        .send-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .status-bar {
+            padding: 8px 20px;
+            font-size: 12px;
+            background: rgba(10, 10, 20, 0.9);
+            border-top: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        .status-indicator.ready {
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.loading {
+            background: #ffc107;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .sidebar {
+            scrollbar-width: thin;
+        }
+
+        .conversations-list {
+            scrollbar-width: thin;
+        }
+
+        .messages-container {
+            scrollbar-width: thin;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            margin-top: 40px;
+        }
+
+        .empty-state h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-main">
+        <!-- Sidebar -->
+        <div class="sidebar scrollbar-thin">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" onclick="newConversation()">+ New Chat</button>
+            </div>
+            <div class="conversations-list scrollbar-thin" id="conversationsList">
+                <div class="empty-state">
+                    <small>No conversations yet</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="chat-area">
+            <div class="chat-header" id="chatHeader">Select a conversation or start a new chat</div>
+
+            <div class="messages-container scrollbar-thin" id="messagesContainer">
+                <div class="empty-state">
+                    <h3>Welcome to Local LLM Chat</h3>
+                    <p>Start a new conversation to begin chatting</p>
+                </div>
+            </div>
+
+            <div class="input-area" id="inputArea" style="display: none;">
+                <textarea class="input-field" id="messageInput" placeholder="Type your message..." rows="1"></textarea>
+                <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+            </div>
+
+            <div class="status-bar">
+                <span id="statusText">
+                    <span class="status-indicator loading"></span>
+                    Loading...
+                </span>
+                <span id="modelStatus">Model Status: Unknown</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentConversation = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            checkStatus();
+            loadConversations();
+
+            // Auto-expand textarea as user types
+            const messageInput = document.getElementById('messageInput');
+            messageInput.addEventListener('input', () => {
+                messageInput.style.height = 'auto';
+                messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+            });
+
+            // Send message on Ctrl+Enter
+            messageInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && e.ctrlKey) {
+                    sendMessage();
+                }
+            });
+
+            setInterval(checkStatus, 5000);
+        });
+
+        async function checkStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                if (data.model_loaded) {
+                    document.getElementById('statusText').innerHTML =
+                        '<span class="status-indicator ready"></span>Ready';
+                    document.getElementById('modelStatus').textContent = 'Model: Loaded ✓';
+                } else {
+                    document.getElementById('statusText').innerHTML =
+                        '<span class="status-indicator loading"></span>Loading...';
+                    document.getElementById('modelStatus').textContent = 'Model: Loading...';
+                }
+            } catch (e) {
+                document.getElementById('statusText').innerHTML =
+                    '<span class="status-indicator"></span>Error connecting';
+            }
+        }
+
+        async function newConversation() {
+            const response = await fetch('/api/chat/new', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: 'New Chat' })
+            });
+
+            const data = await response.json();
+            currentConversation = data.conversation_id;
+
+            document.getElementById('chatHeader').textContent = 'New Conversation';
+            document.getElementById('messagesContainer').innerHTML = '';
+            document.getElementById('inputArea').style.display = 'flex';
+
+            loadConversations();
+        }
+
+        async function loadConversations() {
+            const response = await fetch('/api/history/list');
+            const conversations = await response.json();
+
+            const list = document.getElementById('conversationsList');
+            list.innerHTML = '';
+
+            if (conversations.length === 0) {
+                list.innerHTML = '<div class="empty-state"><small>No conversations yet</small></div>';
+                return;
+            }
+
+            conversations.forEach(conv => {
+                const item = document.createElement('div');
+                item.className = 'conversation-item';
+                if (conv.id === currentConversation) item.classList.add('active');
+
+                const title = conv.title || 'Untitled';
+                const date = new Date(conv.updated_at).toLocaleDateString();
+
+                item.innerHTML = `
+                    <span onclick="loadConversation(${conv.id})" style="display: block; cursor: pointer;">
+                        ${title}
+                        <br><small style="opacity: 0.6;">${date}</small>
+                    </span>
+                    <button class="delete-btn" onclick="deleteConversation(event, ${conv.id})">✕</button>
+                `;
+
+                list.appendChild(item);
+            });
+        }
+
+        async function loadConversation(convId) {
+            currentConversation = convId;
+            const response = await fetch(`/api/history/load/${convId}`);
+            const data = await response.json();
+
+            document.getElementById('chatHeader').textContent = 'Loaded Conversation';
+            document.getElementById('inputArea').style.display = 'flex';
+
+            const container = document.getElementById('messagesContainer');
+            container.innerHTML = '';
+
+            data.messages.forEach(msg => {
+                addMessageToUI(msg.role, msg.content);
+            });
+
+            loadConversations();
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            if (!currentConversation) {
+                await newConversation();
+            }
+
+            document.getElementById('sendBtn').disabled = true;
+            input.value = '';
+            input.style.height = 'auto';
+
+            addMessageToUI('user', message);
+
+            try {
+                const response = await fetch('/api/chat/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    addMessageToUI('assistant', data.assistant_message);
+                } else {
+                    addMessageToUI('assistant', '❌ Error: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                addMessageToUI('assistant', '❌ Connection error: ' + e.message);
+            }
+
+            document.getElementById('sendBtn').disabled = false;
+            document.getElementById('messagesContainer').scrollTop =
+                document.getElementById('messagesContainer').scrollHeight;
+        }
+
+        function addMessageToUI(role, content) {
+            const container = document.getElementById('messagesContainer');
+
+            // Clear empty state
+            if (container.querySelector('.empty-state')) {
+                container.innerHTML = '';
+            }
+
+            const message = document.createElement('div');
+            message.className = 'message ' + role;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+
+            message.appendChild(contentDiv);
+            container.appendChild(message);
+        }
+
+        async function deleteConversation(event, convId) {
+            event.stopPropagation();
+
+            if (!confirm('Delete this conversation?')) return;
+
+            await fetch(`/api/history/delete/${convId}`, { method: 'DELETE' });
+
+            if (currentConversation === convId) {
+                currentConversation = null;
+                document.getElementById('messagesContainer').innerHTML =
+                    '<div class="empty-state"><h3>Welcome to Local LLM Chat</h3><p>Start a new conversation to begin chatting</p></div>';
+                document.getElementById('inputArea').style.display = 'none';
+            }
+
+            loadConversations();
+        }
+    </script>
+</body>
+</html>

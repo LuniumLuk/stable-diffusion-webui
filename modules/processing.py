@@ -28,8 +28,14 @@ import modules.images as images
 import modules.styles
 import modules.sd_models as sd_models
 import modules.sd_vae as sd_vae
-from ldm.data.util import AddMiDaS
-from ldm.models.diffusion.ddpm import LatentDepth2ImageDiffusion
+try:
+    from ldm.data.util import AddMiDaS
+    from ldm.models.diffusion.ddpm import LatentDepth2ImageDiffusion
+except Exception:
+    AddMiDaS = None
+
+    class LatentDepth2ImageDiffusion:  # type: ignore[no-redef]
+        pass
 
 from einops import repeat, rearrange
 from blendmodes.blend import blendLayers, BlendType
@@ -302,6 +308,9 @@ class StableDiffusionProcessing:
         return txt2img_image_conditioning(self.sd_model, x, width or self.width, height or self.height)
 
     def depth2img_image_conditioning(self, source_image):
+        if AddMiDaS is None:
+            raise RuntimeError("Depth model support is unavailable with the current stable-diffusion repository; use a non-depth model.")
+
         # Use the AddMiDaS helper to Format our source image to suit the MiDaS model
         transformer = AddMiDaS(model_type="dpt_hybrid")
         transformed = transformer({"jpg": rearrange(source_image[0], "c h w -> h w c")})

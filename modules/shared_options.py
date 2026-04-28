@@ -350,7 +350,7 @@ Infotext is what this software calls the text that contains generation parameter
 It is displayed in UI below the image. To use infotext, paste it into the prompt and click the ↙️ paste button.
 """),
     "enable_pnginfo": OptionInfo(True, "Write infotext to metadata of the generated image"),
-    "save_txt": OptionInfo(False, "Create a text file with infotext next to every generated image"),
+    "save_txt": OptionInfo(True, "Create a text file with infotext next to every generated image"),
 
     "add_model_name_to_info": OptionInfo(True, "Add model name to infotext"),
     "add_model_hash_to_info": OptionInfo(True, "Add model hash to infotext"),
