@@ -1,0 +1,3 @@
+[submodule "repositories/rembg"]
+	path = repositories/rembg
+	url = https://github.com/danielgatis/rembg
