@@ -86,6 +86,7 @@ options_templates.update(options_section(('saving-paths', "Paths for saving", "s
     "outdir_img2img_grids": OptionInfo(util.truncate_path(os.path.join(default_output_dir, 'img2img-grids')), 'Output directory for img2img grids', component_args=hide_dirs),
     "outdir_save": OptionInfo(util.truncate_path(os.path.join(data_path, 'log', 'images')), "Directory for saving images using the Save button", component_args=hide_dirs),
     "outdir_init_images": OptionInfo(util.truncate_path(os.path.join(default_output_dir, 'init-images')), "Directory for saving init images when using img2img", component_args=hide_dirs),
+    "outdir_txt": OptionInfo(util.truncate_path(os.path.join(default_output_dir, 'txt-info')), "Output directory for infotext TXT sidecar files; leave empty to save next to each image", component_args=hide_dirs),
 }))
 
 options_templates.update(options_section(('saving-to-dirs', "Saving to a directory", "saving"), {
@@ -351,6 +352,7 @@ It is displayed in UI below the image. To use infotext, paste it into the prompt
 """),
     "enable_pnginfo": OptionInfo(True, "Write infotext to metadata of the generated image"),
     "save_txt": OptionInfo(True, "Create a text file with infotext next to every generated image"),
+    "gen_history_max": OptionInfo(100, "Maximum number of entries to keep in generation history", gr.Slider, {"minimum": 10, "maximum": 1000, "step": 10}),
 
     "add_model_name_to_info": OptionInfo(True, "Add model name to infotext"),
     "add_model_hash_to_info": OptionInfo(True, "Add model hash to infotext"),

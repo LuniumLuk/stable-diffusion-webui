@@ -756,7 +756,12 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
             errors.display(e, "saving image as downscaled JPG")
 
     if opts.save_txt and info is not None:
-        txt_fullfn = f"{fullfn_without_extension}.txt"
+        _txt_outdir = getattr(opts, 'outdir_txt', '').strip()
+        if _txt_outdir:
+            os.makedirs(_txt_outdir, exist_ok=True)
+            txt_fullfn = os.path.join(_txt_outdir, os.path.basename(fullfn_without_extension) + ".txt")
+        else:
+            txt_fullfn = f"{fullfn_without_extension}.txt"
         with open(txt_fullfn, "w", encoding="utf8") as file:
             file.write(f"{info}\n")
     else:

@@ -70,7 +70,7 @@ def is_unreadable_text(text):
     return odd_ratio > 0.33
 
 
-def build_chat_messages(conversation_id, user_message):
+def build_chat_messages(conversation_id, user_message, history_limit_override=None):
     """Build message list with recent history for chat completion."""
     # Keep context bounded to reduce drift and latency.
     history_limit = int(os.getenv("LOCAL_LLM_HISTORY_LIMIT", "12"))
@@ -80,7 +80,10 @@ def build_chat_messages(conversation_id, user_message):
     )
 
     history = get_conversation_messages(conversation_id)
-    recent_history = history[-history_limit:] if history_limit > 0 else history
+    if history_limit_override is None:
+        recent_history = history[-history_limit:] if history_limit > 0 else history
+    else:
+        recent_history = history[-history_limit_override:] if history_limit_override > 0 else []
 
     messages = [{"role": "system", "content": system_prompt}]
     for item in recent_history:
@@ -90,6 +93,73 @@ def build_chat_messages(conversation_id, user_message):
 
     messages.append({"role": "user", "content": user_message})
     return messages
+
+
+def _is_context_window_error(error):
+    """Return True if error looks like a context-window/token-limit failure."""
+    text = str(error or "").lower()
+    if not text:
+        return False
+
+    context_signals = (
+        "context",
+        "n_ctx",
+        "ctx",
+        "token",
+        "prompt",
+        "kv cache",
+    )
+    overflow_signals = (
+        "too long",
+        "too many",
+        "exceed",
+        "overflow",
+        "out of",
+    )
+
+    has_context = any(sig in text for sig in context_signals)
+    has_overflow = any(sig in text for sig in overflow_signals)
+    return has_context and has_overflow
+
+
+def _generate_response_with_trimmed_history(conversation_id, user_message, max_tokens=512):
+    """Generate response with progressive history trimming on context overflow."""
+    configured_limit = int(os.getenv("LOCAL_LLM_HISTORY_LIMIT", "12"))
+    if configured_limit > 0:
+        start_limit = configured_limit
+    else:
+        start_limit = len(get_conversation_messages(conversation_id))
+
+    limits = []
+    if start_limit > 0:
+        current = start_limit
+        while current > 0:
+            if current not in limits:
+                limits.append(current)
+            if current == 1:
+                break
+            current = max(current // 2, 1)
+    if 0 not in limits:
+        limits.append(0)
+
+    last_error = None
+    for limit in limits:
+        try:
+            messages = build_chat_messages(
+                conversation_id,
+                user_message,
+                history_limit_override=limit,
+            )
+            return generate_response(messages=messages, max_tokens=max_tokens)
+        except Exception as e:
+            last_error = e
+            if _is_context_window_error(e):
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Failed to generate response")
 
 
 @app.before_request
@@ -152,9 +222,11 @@ def send_message():
     # The previous flow saved the message first, then appended it again here,
     # so the current user prompt was sent to the model twice.
     try:
-        messages = build_chat_messages(current_conversation, user_message)
-        add_message(current_conversation, "user", user_message)
-        response_text = generate_response(messages=messages, max_tokens=512)
+        response_text = _generate_response_with_trimmed_history(
+            current_conversation,
+            user_message,
+            max_tokens=512,
+        )
         if not response_text:
             response_text = "I could not generate a clear answer. Please try rephrasing that."
         elif is_unreadable_text(response_text):
@@ -163,6 +235,7 @@ def send_message():
                 "Please retry your prompt, or switch to a higher-quality quant like IQ3_M/Q4_K_M for cleaner chat."
             )
 
+        add_message(current_conversation, "user", user_message)
         add_message(current_conversation, "assistant", response_text)
 
         # Auto-title on the very first exchange (title is still "New Chat").

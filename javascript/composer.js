@@ -19,6 +19,8 @@
     const layerList = root.querySelector("#composer_layers");
     const mirrorBtn = root.querySelector("#composer_mirror_btn");
     const deleteBtn = root.querySelector("#composer_delete_btn");
+    const layerUpBtn = root.querySelector("#composer_layer_up_btn");
+    const layerDownBtn = root.querySelector("#composer_layer_down_btn");
     const statusText = root.querySelector("#composer_status_text");
 
     function loadImageFromFile(file) {
@@ -261,6 +263,26 @@
       if (state.active < 0) return;
       state.layers.splice(state.active, 1);
       state.active = Math.min(state.active, state.layers.length - 1);
+      renderLayerList();
+      draw();
+    });
+
+    layerUpBtn.addEventListener("click", () => {
+      if (state.active < 0 || state.active >= state.layers.length - 1) return;
+      const tmp = state.layers[state.active];
+      state.layers[state.active] = state.layers[state.active + 1];
+      state.layers[state.active + 1] = tmp;
+      state.active += 1;
+      renderLayerList();
+      draw();
+    });
+
+    layerDownBtn.addEventListener("click", () => {
+      if (state.active <= 0) return;
+      const tmp = state.layers[state.active];
+      state.layers[state.active] = state.layers[state.active - 1];
+      state.layers[state.active - 1] = tmp;
+      state.active -= 1;
       renderLayerList();
       draw();
     });

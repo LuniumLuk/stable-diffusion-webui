@@ -48,6 +48,8 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
             <div id="composer_actions" style="margin-top:8px;">
                 <button id="composer_mirror_btn" type="button">Mirror Selected</button>
                 <button id="composer_delete_btn" type="button">Delete Selected</button>
+                <button id="composer_layer_up_btn" type="button" title="Move layer up (toward front)">&#9650; Up</button>
+                <button id="composer_layer_down_btn" type="button" title="Move layer down (toward back)">&#9660; Down</button>
             </div>
             <div id="composer_status_text">Tip: Drag layer to move. Corner handle to resize. Top handle to rotate.</div>
         </div>
