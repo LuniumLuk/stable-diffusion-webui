@@ -176,17 +176,51 @@
         }
 
         .system-prompt-banner {
-            padding: 7px 20px;
             background: rgba(13, 110, 253, 0.07);
             border-bottom: 1px solid rgba(13, 110, 253, 0.18);
+        }
+
+        .system-prompt-banner.hidden { display: none; }
+
+        .system-prompt-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 20px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .system-prompt-header:hover {
+            background: rgba(13, 110, 253, 0.12);
+        }
+
+        .system-prompt-toggle {
+            font-size: 12px;
+            color: #8ea8cc;
+            width: 16px;
+            text-align: center;
+        }
+
+        .system-prompt-title {
+            font-size: 11px;
+            color: #8ea8cc;
+            font-weight: 500;
+        }
+
+        .system-prompt-content {
+            padding: 7px 20px;
             font-size: 11px;
             color: #8ea8cc;
             line-height: 1.5;
             white-space: pre-wrap;
             word-break: break-word;
+            display: none;
         }
 
-        .system-prompt-banner.hidden { display: none; }
+        .system-prompt-content.expanded {
+            display: block;
+        }
 
         .messages-container {
             flex: 1;
@@ -403,6 +437,26 @@
             cursor: not-allowed;
         }
 
+        .gpu-unload-btn {
+            background: #dc3545;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .gpu-unload-btn:hover {
+            background: #c82333;
+        }
+
+        .gpu-unload-btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
         .status-indicator {
             display: inline-block;
             width: 8px;
@@ -496,7 +550,13 @@
         <!-- Chat Area -->
         <div class="chat-area">
             <div class="chat-header" id="chatHeader">Select a conversation or start a new chat</div>
-            <div class="system-prompt-banner hidden" id="systemPromptBanner"></div>
+            <div class="system-prompt-banner hidden" id="systemPromptBanner">
+                <div class="system-prompt-header" onclick="toggleSystemPrompt()">
+                    <span class="system-prompt-toggle" id="systemPromptToggle">▶</span>
+                    <span class="system-prompt-title">System Prompt</span>
+                </div>
+                <div class="system-prompt-content" id="systemPromptContent"></div>
+            </div>
 
             <div class="messages-container scrollbar-thin" id="messagesContainer">
                 <div class="empty-state">
@@ -519,6 +579,7 @@
                     <span id="modelStatus">Model Status: Unknown</span>
                     <select id="modelSelect" class="model-select" title="Select loaded model"></select>
                     <button id="switchModelBtn" class="model-btn" onclick="switchModel()">Switch Model</button>
+                    <button id="unloadGpuBtn" class="gpu-unload-btn" onclick="unloadGpu()" title="Unload model from GPU and release VRAM">Unload GPU</button>
                 </div>
             </div>
         </div>
@@ -701,6 +762,32 @@
             }
         }
 
+        async function unloadGpu() {
+            const unloadBtn = document.getElementById('unloadGpuBtn');
+            unloadBtn.disabled = true;
+            document.getElementById('modelStatus').textContent = 'Unloading GPU...';
+
+            try {
+                const response = await fetch('/api/models/unload-gpu', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+                if (data.freed) {
+                    document.getElementById('modelStatus').textContent = 'GPU VRAM released ✓';
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await checkStatus();
+                } else {
+                    document.getElementById('modelStatus').textContent = `Unload failed: ${data.error || data.status}`;
+                }
+            } catch (e) {
+                document.getElementById('modelStatus').textContent = `Unload error: ${escapeHtml(e.message)}`;
+            } finally {
+                unloadBtn.disabled = false;
+            }
+        }
+
         async function loadPromptPresets() {
             const presetList = document.getElementById('presetList');
             const hint = document.getElementById('presetHint');
@@ -793,11 +880,19 @@
             });
         }
 
+        function toggleSystemPrompt() {
+            const content = document.getElementById('systemPromptContent');
+            const toggle = document.getElementById('systemPromptToggle');
+            content.classList.toggle('expanded');
+            toggle.textContent = content.classList.contains('expanded') ? '▼' : '▶';
+        }
+
         function setSystemPromptBanner(systemPrompt) {
             const banner = document.getElementById('systemPromptBanner');
+            const content = document.getElementById('systemPromptContent');
             if (!systemPrompt) {
                 banner.classList.add('hidden');
-                banner.textContent = '';
+                content.textContent = '';
                 return;
             }
             const cleaned = systemPrompt
@@ -805,7 +900,9 @@
                 .map(l => l.trim())
                 .filter(l => l.length > 0)
                 .join('\n');
-            banner.textContent = cleaned;
+            content.textContent = cleaned;
+            content.classList.remove('expanded');
+            document.getElementById('systemPromptToggle').textContent = '▶';
             banner.classList.remove('hidden');
         }
 

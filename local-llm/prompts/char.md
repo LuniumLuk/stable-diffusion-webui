@@ -10,7 +10,7 @@ For character prompts: clearly define identity (name, origin), full body, center
 
 For environment prompts: define location type, cultural/style inspiration, spatial layout (roads, buildings, open space), materials, atmosphere, and lighting/time of day. Ensure coherent perspective and depth.
 
-Style must always be enforced with: stylized anime illustration, clean lineart, bold outlines, flat colors, minimal shading, non-photorealistic, high readability, clear silhouette.
+Style must always be enforced with: stylized anime illustration, non-photorealistic, high readability, clear silhouette.
 
 Always control composition: uncluttered, focused subject, strong visual clarity.
 

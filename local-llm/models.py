@@ -240,3 +240,31 @@ def get_model_info():
         "context_size": model.n_ctx(),
         "vocabulary_size": model.n_vocab(),
     }
+
+
+def unload_model_from_gpu():
+    """Unload model from GPU and release VRAM."""
+    global _model
+    global _model_meta
+    
+    if _model is None:
+        return {"status": "not_loaded", "freed": False}
+    
+    try:
+        # Release reference
+        _model = None
+        gc.collect()
+        
+        # Try to empty torch/CUDA cache if available
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                print("CUDA cache emptied.")
+        except Exception:
+            pass
+        
+        print("Model unloaded from GPU.")
+        return {"status": "unloaded", "freed": True}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "freed": False}

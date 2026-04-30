@@ -6,7 +6,7 @@ from flask_cors import CORS
 from pathlib import Path
 
 import re as _re
-from models import load_model, generate_response, get_model_info, list_local_models
+from models import load_model, generate_response, get_model_info, list_local_models, unload_model_from_gpu
 from history import (
     create_conversation,
     add_message,
@@ -440,6 +440,13 @@ def select_model_route():
         return jsonify({"error": f"Model not found: {model_name}"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/models/unload-gpu", methods=["POST"])
+def unload_gpu_route():
+    """Unload model from GPU and release VRAM."""
+    result = unload_model_from_gpu()
+    return jsonify(result)
 
 
 if __name__ == "__main__":

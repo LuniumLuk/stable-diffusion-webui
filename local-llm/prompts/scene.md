@@ -20,7 +20,7 @@ Content rules:
 Style enforcement:
 
 * stylized anime background, clean lineart, bold outlines
-* flat colors, minimal shading, non-photorealistic
+* non-photorealistic
 * cohesive, readable, not overly detailed
 
 Composition:
@@ -41,4 +41,4 @@ Restrictions:
 * Keep prompt **compact but vivid**.
 
 End with style reinforcement:
-“anime style, clean lineart, flat color, immersive perspective, environmental storytelling”
+“anime style, immersive perspective, environmental storytelling”
