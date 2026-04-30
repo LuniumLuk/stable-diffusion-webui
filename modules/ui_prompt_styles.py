@@ -14,18 +14,24 @@ def select_style(name):
 
     prompt = style.prompt if style else gr.update()
     negative_prompt = style.negative_prompt if style else gr.update()
+    rating = style.rating if style else gr.update()
 
-    return prompt, negative_prompt, gr.update(visible=existing), gr.update(visible=not empty)
+    return prompt, negative_prompt, rating, gr.update(visible=existing), gr.update(visible=not empty)
 
 
-def save_style(name, prompt, negative_prompt):
+def save_style(name, prompt, negative_prompt, rating):
     if not name:
         return gr.update(visible=False)
 
     existing_style = shared.prompt_styles.styles.get(name)
     path = existing_style.path if existing_style is not None else None
 
-    style = styles.PromptStyle(name, prompt, negative_prompt, path)
+    try:
+        rating = float(rating or 0.0)
+    except (TypeError, ValueError):
+        rating = 0.0
+
+    style = styles.PromptStyle(name, prompt, negative_prompt, path, rating)
     shared.prompt_styles.styles[style.name] = style
     shared.prompt_styles.save_styles()
 
@@ -77,6 +83,9 @@ class UiPromptStyles:
                 self.neg_prompt = gr.Textbox(label="Negative prompt", show_label=True, elem_id=f"{tabname}_edit_style_neg_prompt", lines=3, elem_classes=["prompt"])
 
             with gr.Row():
+                self.rating = gr.Slider(label="Rating", minimum=0.0, maximum=5.0, step=0.5, value=0.0, elem_id=f"{tabname}_edit_style_rating", info="Endorse this keyword combination from 0 to 5.")
+
+            with gr.Row():
                 self.save = gr.Button('Save', variant='primary', elem_id=f'{tabname}_edit_style_save', visible=False)
                 self.delete = gr.Button('Delete', variant='primary', elem_id=f'{tabname}_edit_style_delete', visible=False)
                 self.close = gr.Button('Close', variant='secondary', elem_id=f'{tabname}_edit_style_close')
@@ -84,13 +93,13 @@ class UiPromptStyles:
         self.selection.change(
             fn=select_style,
             inputs=[self.selection],
-            outputs=[self.prompt, self.neg_prompt, self.delete, self.save],
+            outputs=[self.prompt, self.neg_prompt, self.rating, self.delete, self.save],
             show_progress=False,
         )
 
         self.save.click(
             fn=save_style,
-            inputs=[self.selection, self.prompt, self.neg_prompt],
+            inputs=[self.selection, self.prompt, self.neg_prompt, self.rating],
             outputs=[self.delete],
             show_progress=False,
         ).then(refresh_styles, outputs=[self.dropdown, self.selection], show_progress=False)

@@ -113,6 +113,12 @@ class Toprow:
             self.interrupt.click(fn=interrupt_function, _js='function(){ showSubmitInterruptingPlaceholder("' + self.id_part + '"); }')
             self.interrupting.click(fn=interrupt_function)
 
+        if not self.is_compact:
+            gr.HTML(
+                value=f"<div id=\"{self.id_part}_compare_dropzone\" class=\"prompt-compare-dropzone\" data-tabname=\"{self.id_part}\">Drop .txt or image here to compare against current prompt/settings</div>",
+                elem_id=f"{self.id_part}_compare_dropzone_wrap",
+            )
+
     def create_tools_row(self):
         with gr.Row(elem_id=f"{self.id_part}_tools"):
             from modules.ui import paste_symbol, clear_prompt_symbol, restore_progress_symbol

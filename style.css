@@ -238,6 +238,210 @@ input[type="checkbox"].input-accordion-checkbox{
     border: 2px solid rgba(255,0,0,0.4) !important;
 }
 
+.prompt-compare-dropzone {
+    margin-top: 8px;
+    border: 2px dashed #64748b;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #94a3b8;
+    text-align: center;
+    cursor: copy;
+}
+
+.prompt-compare-dropzone.drag-over {
+    border-color: #38bdf8;
+    background: rgba(56, 189, 248, 0.08);
+    color: #cbd5e1;
+}
+
+.prompt-compare-popup {
+    width: min(1680px, calc(100vw - 32px));
+    max-width: 100%;
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto auto auto;
+    gap: 12px;
+    overflow: visible;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.prompt-compare-popup::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.prompt-compare-title {
+    margin: 0 0 10px 0;
+    font-size: 18px;
+    padding-right: 56px;
+}
+
+.prompt-compare-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    min-height: auto;
+    overflow: visible;
+}
+
+.prompt-compare-col {
+    border: 1px solid var(--block-border-color);
+    border-radius: 8px;
+    padding: 10px;
+    background: var(--background-fill-primary);
+    min-width: 0;
+    overflow: visible;
+}
+
+.prompt-compare-col h4 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+}
+
+.prompt-compare-label {
+    margin: 8px 0 4px 0;
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+.global-popup .prompt-compare-textarea {
+    width: 100%;
+    min-height: 180px;
+    resize: none;
+    font-size: 12px;
+    background: var(--input-background-fill) !important;
+    color: var(--body-text-color) !important;
+    border: 1px solid var(--input-border-color, var(--block-border-color)) !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    border-radius: 6px;
+    padding: 8px 10px;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    caret-color: var(--body-text-color) !important;
+}
+
+.global-popup .prompt-compare-textarea.settings {
+    min-height: 260px;
+}
+
+.global-popup .prompt-compare-textarea:read-only {
+    background: var(--input-background-fill) !important;
+    color: var(--body-text-color-subdued, var(--body-text-color)) !important;
+}
+
+.prompt-compare-diff-container {
+    display: grid;
+    gap: 12px;
+    margin-top: 0;
+    max-height: none;
+    overflow: visible;
+}
+
+.prompt-compare-diff {
+    border: 1px solid var(--block-border-color);
+    border-radius: 8px;
+    overflow: visible;
+    background: var(--background-fill-primary);
+    min-height: 0;
+    max-height: none;
+}
+
+.prompt-compare-diff-title {
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--body-text-color);
+    background: var(--background-fill-secondary);
+    border-bottom: 1px solid var(--block-border-color);
+}
+
+.prompt-compare-diff-grid {
+    display: grid;
+    min-height: 0;
+    overflow: visible;
+}
+
+.prompt-compare-diff-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.prompt-compare-diff-cell {
+    min-height: 24px;
+    padding: 4px 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    color: var(--body-text-color);
+    border-top: 1px solid var(--block-border-color);
+}
+
+.prompt-compare-diff-cell.left {
+    border-right: 1px solid var(--block-border-color);
+}
+
+.prompt-compare-diff-row.same .prompt-compare-diff-cell {
+    background: var(--input-background-fill);
+    color: var(--body-text-color-subdued, var(--body-text-color));
+}
+
+.prompt-compare-diff-row.remove .prompt-compare-diff-cell.left {
+    background: color-mix(in srgb, #dc2626 18%, var(--input-background-fill));
+    color: var(--body-text-color);
+}
+
+.prompt-compare-diff-row.remove .prompt-compare-diff-cell.right {
+    background: var(--input-background-fill);
+    color: var(--body-text-color-subdued, var(--body-text-color));
+}
+
+.prompt-compare-diff-row.add .prompt-compare-diff-cell.left {
+    background: var(--input-background-fill);
+    color: var(--body-text-color-subdued, var(--body-text-color));
+}
+
+.prompt-compare-diff-row.add .prompt-compare-diff-cell.right {
+    background: color-mix(in srgb, #16a34a 18%, var(--input-background-fill));
+    color: var(--body-text-color);
+}
+
+.prompt-compare-diff-cell .prefix {
+    display: inline-block;
+    width: 1.2em;
+    opacity: 0.8;
+}
+
+@media (max-width: 900px) {
+    .prompt-compare-popup {
+        width: calc(100vw - 16px);
+        max-height: calc(100vh - 16px);
+    }
+
+    .prompt-compare-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .prompt-compare-diff-container {
+        max-height: none;
+    }
+
+    .prompt-compare-diff {
+        max-height: none;
+    }
+
+    .prompt-compare-diff-row {
+        grid-template-columns: 1fr;
+    }
+
+    .prompt-compare-diff-cell.left {
+        border-right: 0;
+    }
+}
+
 .block.token-counter div{
     display: inline;
 }
@@ -628,6 +832,7 @@ table.popup-table .link{
     width: 100%;
     height: 100%;
     overflow: auto;
+    overscroll-behavior: contain;
 }
 
 .global-popup *{
@@ -635,13 +840,42 @@ table.popup-table .link{
 }
 
 .global-popup-close:before {
-    content: "×";
+    content: "";
     position: fixed;
     right: 0.25em;
     top: 0;
     cursor: pointer;
     color: white;
     font-size: 32pt;
+}
+
+.global-popup-close-button {
+    position: fixed;
+    right: 14px;
+    top: 10px;
+    z-index: 1002;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: 1px solid var(--block-border-color);
+    background: var(--background-fill-secondary);
+    color: var(--body-text-color);
+    font-size: 30px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.global-popup-close-button:hover {
+    background: var(--input-background-fill);
+}
+
+.global-popup-close-button:focus-visible {
+    outline: 2px solid var(--primary-500, #60a5fa);
+    outline-offset: 2px;
 }
 
 .global-popup-close{
@@ -660,6 +894,16 @@ table.popup-table .link{
     z-index: 1001;
     max-height: 90%;
     max-width: 90%;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.global-popup-inner::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
 }
 
 /* fullpage image viewer */

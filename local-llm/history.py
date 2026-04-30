@@ -31,6 +31,15 @@ def init_db():
             FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         )
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_settings (
+            conversation_id INTEGER PRIMARY KEY,
+            preset_key TEXT,
+            system_prompt TEXT,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        )
+    """)
     
     conn.commit()
     conn.close()
@@ -119,6 +128,7 @@ def delete_conversation(conversation_id):
     cursor = conn.cursor()
     
     cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+    cursor.execute("DELETE FROM conversation_settings WHERE conversation_id = ?", (conversation_id,))
     cursor.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
     conn.commit()
     conn.close()
@@ -135,6 +145,47 @@ def update_conversation_title(conversation_id, title):
     )
     conn.commit()
     conn.close()
+
+
+def set_conversation_settings(conversation_id, system_prompt=None, preset_key=None):
+    """Create or update prompt settings for a conversation."""
+    conn = sqlite3.connect(HISTORY_DB)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO conversation_settings (conversation_id, preset_key, system_prompt)
+        VALUES (?, ?, ?)
+        ON CONFLICT(conversation_id)
+        DO UPDATE SET
+            preset_key = excluded.preset_key,
+            system_prompt = excluded.system_prompt
+        """,
+        (conversation_id, preset_key, system_prompt),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_conversation_settings(conversation_id):
+    """Get prompt settings for a conversation."""
+    conn = sqlite3.connect(HISTORY_DB)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT preset_key, system_prompt FROM conversation_settings WHERE conversation_id = ?",
+        (conversation_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {}
+
+    return {
+        "preset_key": row[0],
+        "system_prompt": row[1],
+    }
 
 
 # Initialize on module import

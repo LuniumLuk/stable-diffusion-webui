@@ -14,6 +14,8 @@ from history import (
     get_conversation_messages,
     delete_conversation,
     update_conversation_title,
+    get_conversation_settings,
+    set_conversation_settings,
 )
 
 
@@ -48,6 +50,58 @@ CORS(app)
 # Global state
 current_conversation = None
 model_loaded = False
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+def _extract_section(text, section_name):
+    """Extract markdown-like [SECTION] blocks from prompt files."""
+    pattern = re.compile(
+        rf"\[{re.escape(section_name)}\]\s*(.*?)(?=\n\s*\[[^\]]+\]|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(text or "")
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _load_prompt_presets():
+    """Load prompt presets from local-llm/prompts/*.md."""
+    presets = []
+    if not PROMPTS_DIR.exists():
+        return presets
+
+    for file_path in sorted(PROMPTS_DIR.glob("*.md")):
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        title = _extract_section(content, "title") or file_path.stem
+        prompt = _extract_section(content, "PROMPT")
+        if not prompt:
+            continue
+
+        presets.append(
+            {
+                "key": file_path.stem,
+                "title": title,
+                "file": file_path.name,
+                "prompt": prompt,
+            }
+        )
+
+    return presets
+
+
+def _get_prompt_preset(preset_key):
+    """Find one preset by key."""
+    if not preset_key:
+        return None
+    for preset in _load_prompt_presets():
+        if preset["key"] == preset_key:
+            return preset
+    return None
 
 
 def is_unreadable_text(text):
@@ -74,10 +128,12 @@ def build_chat_messages(conversation_id, user_message, history_limit_override=No
     """Build message list with recent history for chat completion."""
     # Keep context bounded to reduce drift and latency.
     history_limit = int(os.getenv("LOCAL_LLM_HISTORY_LIMIT", "12"))
-    system_prompt = os.getenv(
+    default_system_prompt = os.getenv(
         "LOCAL_LLM_SYSTEM_PROMPT",
         "You are a helpful assistant."
     )
+    settings = get_conversation_settings(conversation_id)
+    system_prompt = settings.get("system_prompt") or default_system_prompt
 
     history = get_conversation_messages(conversation_id)
     if history_limit_override is None:
@@ -192,12 +248,26 @@ def new_conversation():
     
     data = request.json or {}
     title = data.get("title", "New Chat")
+    preset_key = (data.get("preset_key") or "").strip()
     
     current_conversation = create_conversation(title)
+
+    # Persist selected preset prompt for this conversation.
+    if preset_key:
+        preset = _get_prompt_preset(preset_key)
+        if preset:
+            set_conversation_settings(
+                current_conversation,
+                system_prompt=preset["prompt"],
+                preset_key=preset["key"],
+            )
     
+    settings = get_conversation_settings(current_conversation)
     return jsonify({
         "conversation_id": current_conversation,
-        "title": title
+        "title": title,
+        "preset_key": preset_key or None,
+        "system_prompt": settings.get("system_prompt"),
     })
 
 
@@ -275,10 +345,13 @@ def load_conversation(conversation_id):
     
     current_conversation = conversation_id
     messages = get_conversation_messages(conversation_id)
+    settings = get_conversation_settings(conversation_id)
     
     return jsonify({
         "conversation_id": conversation_id,
-        "messages": messages
+        "messages": messages,
+        "preset_key": settings.get("preset_key"),
+        "system_prompt": settings.get("system_prompt"),
     })
 
 
@@ -320,6 +393,21 @@ def status():
 
 
 # ============= Model Routes =============
+
+@app.route("/api/prompts/list", methods=["GET"])
+def list_prompt_presets():
+    """List available startup prompt presets from prompts folder."""
+    presets = _load_prompt_presets()
+    # Do not return full prompt body in listing response.
+    compact = [
+        {
+            "key": p["key"],
+            "title": p["title"],
+            "file": p["file"],
+        }
+        for p in presets
+    ]
+    return jsonify({"presets": compact})
 
 @app.route("/api/models/list", methods=["GET"])
 def list_models():

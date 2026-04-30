@@ -16,6 +16,11 @@ COMPOSER_HTML = """
 #composer_root { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
 #composer_left { display: grid; gap: 10px; }
 #composer_left .composer-box { border: 1px solid var(--block-border-color); border-radius: 8px; padding: 10px; }
+#composer_upload_row { margin-bottom: 8px; gap: 10px; }
+#composer_upload_row #composer_bg_upload,
+#composer_upload_row #composer_chars_upload { min-height: 110px; }
+#composer_upload_row #composer_bg_upload .label-wrap,
+#composer_upload_row #composer_chars_upload .label-wrap { margin-bottom: 4px; }
 #composer_left h4 { margin: 0 0 8px 0; font-size: 14px; }
 #composer_canvas_wrap { border: 1px solid var(--block-border-color); border-radius: 8px; padding: 8px; background: #0f172a; }
 #composer_canvas { width: 100%; height: 70vh; min-height: 420px; display: block; background:
@@ -29,29 +34,46 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
 .composer-layer-item { border: 1px solid #475569; color: #e2e8f0; border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
 .composer-layer-item.active { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8 inset; }
 #composer_actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#composer_actions button.active { border-color: #22d3ee; box-shadow: 0 0 0 1px #22d3ee inset; }
+#composer_bg_lock_btn {
+        margin-top: 6px;
+        width: 100%;
+        font-size: 11px;
+        color: #9ca3af;
+        border-color: #4b5563;
+}
+#composer_bg_lock_btn.active {
+        color: #cbd5e1;
+}
+#composer_assets { max-height: 220px; overflow: auto; display: grid; gap: 8px; }
+.composer-asset-item { border: 1px solid #475569; border-radius: 6px; padding: 6px; display: grid; grid-template-columns: 48px 1fr; gap: 8px; align-items: center; }
+.composer-asset-item img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; border: 1px solid #334155; }
+.composer-asset-meta { display: grid; gap: 4px; min-width: 0; }
+.composer-asset-name { color: #e2e8f0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer-asset-actions { display: flex; gap: 6px; }
+.composer-asset-actions button { font-size: 11px; padding: 2px 6px; }
 #composer_status_text { color: #cbd5e1; font-size: 12px; margin-top: 8px; }
 </style>
 
 <div id="composer_root">
     <div id="composer_left">
         <div class="composer-box">
-            <h4>1) Background (drag/drop)</h4>
-            <input id="composer_bg_input" type="file" accept="image/*" />
-        </div>
-        <div class="composer-box">
-            <h4>2) Character PNGs (drag/drop multiple)</h4>
-            <input id="composer_chars_input" type="file" accept="image/*" multiple />
-        </div>
-        <div class="composer-box">
             <h4>Layers</h4>
             <div id="composer_layers"></div>
             <div id="composer_actions" style="margin-top:8px;">
+                                <button id="composer_lock_mode_btn" type="button" title="When enabled, canvas edits only affect the selected layer">Lock Edit To Selected: OFF</button>
+                                <button id="composer_restore_bg_btn" type="button" title="Reset background position, scale, rotation and mirror to default">Restore BG Transform</button>
                 <button id="composer_mirror_btn" type="button">Mirror Selected</button>
                 <button id="composer_delete_btn" type="button">Delete Selected</button>
                 <button id="composer_layer_up_btn" type="button" title="Move layer up (toward front)">&#9650; Up</button>
                 <button id="composer_layer_down_btn" type="button" title="Move layer down (toward back)">&#9660; Down</button>
+                                <button id="composer_bg_lock_btn" type="button" class="active" title="Background is locked by default. Enable this to edit only the background layer.">Lock Edit Background: OFF</button>
             </div>
-            <div id="composer_status_text">Tip: Drag layer to move. Corner handle to resize. Top handle to rotate.</div>
+                        <div id="composer_status_text">Tip: Background is locked by default. Enable background edit lock to edit only background. Selected-lock mode supports WASD move and +/- scale.</div>
+                </div>
+                <div class="composer-box">
+                        <h4>Staged Character Images</h4>
+                        <div id="composer_assets"></div>
         </div>
     </div>
     <div id="composer_canvas_wrap">
@@ -83,12 +105,13 @@ def compose_from_payload(payload_json):
         width = int(payload.get("width", 1024))
         height = int(payload.get("height", 768))
 
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+        # Backward compatibility with older payloads that only provided a background image.
         background = _image_from_data_url(payload.get("background"))
-        if background is not None:
+        if background is not None and not payload.get("layers"):
                 background = background.resize((width, height), Image.Resampling.LANCZOS)
-                canvas = background
-        else:
-                canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                canvas = Image.alpha_composite(canvas, background)
 
         for layer in payload.get("layers", []):
                 layer_img = _image_from_data_url(layer.get("src"))
@@ -141,6 +164,12 @@ def save_composite(image):
 
 def on_ui_tabs():
         with gr.Blocks(analytics_enabled=False) as composer_ui:
+                with gr.Row(elem_id="composer_upload_row", equal_height=True):
+                        with gr.Column(scale=1, min_width=220):
+                                gr.Image(label="Background", type="filepath", image_mode="RGBA", sources=["upload"], elem_id="composer_bg_upload")
+                        with gr.Column(scale=1, min_width=220):
+                                gr.Files(label="Character PNGs", file_types=["image"], elem_id="composer_chars_upload")
+
                 gr.HTML(COMPOSER_HTML)
 
                 payload_state = gr.Textbox(value="", visible=False, elem_id="composer_payload_state")

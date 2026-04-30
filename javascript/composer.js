@@ -1,9 +1,13 @@
 (function () {
   function makeComposerController(root) {
     const state = {
-      bg: null,
       layers: [],
       active: -1,
+      lockToSelected: false,
+      lockEditBackground: false,
+      backgroundLocked: true,
+      assets: [],
+      assetKeys: new Set(),
       dragMode: null,
       startX: 0,
       startY: 0,
@@ -14,14 +18,101 @@
 
     const canvas = root.querySelector("#composer_canvas");
     const ctx = canvas.getContext("2d");
-    const bgInput = root.querySelector("#composer_bg_input");
-    const charsInput = root.querySelector("#composer_chars_input");
+    const bgUploadWrap = document.getElementById("composer_bg_upload");
+    const charsUploadWrap = document.getElementById("composer_chars_upload");
     const layerList = root.querySelector("#composer_layers");
+    const assetList = root.querySelector("#composer_assets");
+    const lockModeBtn = root.querySelector("#composer_lock_mode_btn");
+    const bgLockBtn = root.querySelector("#composer_bg_lock_btn");
+    const restoreBgBtn = root.querySelector("#composer_restore_bg_btn");
     const mirrorBtn = root.querySelector("#composer_mirror_btn");
     const deleteBtn = root.querySelector("#composer_delete_btn");
     const layerUpBtn = root.querySelector("#composer_layer_up_btn");
     const layerDownBtn = root.querySelector("#composer_layer_down_btn");
     const statusText = root.querySelector("#composer_status_text");
+
+    function updateLockModeUi() {
+      if (!lockModeBtn) return;
+      lockModeBtn.textContent = state.lockToSelected
+        ? "Lock Edit To Selected: ON"
+        : "Lock Edit To Selected: OFF";
+      lockModeBtn.classList.toggle("active", state.lockToSelected);
+    }
+
+    function updateBgLockUi() {
+      if (!bgLockBtn) return;
+      bgLockBtn.textContent = state.lockEditBackground
+        ? "Lock Edit Background: ON"
+        : "Lock Edit Background: OFF";
+      bgLockBtn.classList.toggle("active", state.lockEditBackground);
+    }
+
+    function setStatus(text) {
+      statusText.textContent = text;
+    }
+
+    function getBackgroundIndex() {
+      return state.layers.findIndex((x) => x.isBackground);
+    }
+
+    function canEditLayer(layer) {
+      if (!layer) return false;
+      if (layer.isBackground && state.backgroundLocked && !state.lockEditBackground) {
+        return false;
+      }
+      if (state.lockEditBackground) {
+        return !!layer.isBackground;
+      }
+      return true;
+    }
+
+    function setActiveToBackground() {
+      const bgIndex = getBackgroundIndex();
+      if (bgIndex >= 0) {
+        state.active = bgIndex;
+      }
+    }
+
+    function restoreBackgroundTransform() {
+      const bgIndex = getBackgroundIndex();
+      if (bgIndex < 0) {
+        setStatus("No background layer to restore.");
+        return;
+      }
+
+      const bgLayer = state.layers[bgIndex];
+      bgLayer.x = canvas.width / 2;
+      bgLayer.y = canvas.height / 2;
+      bgLayer.scale = 1;
+      bgLayer.rot = 0;
+      bgLayer.mirror = false;
+
+      state.active = bgIndex;
+      renderLayerList();
+      draw();
+      setStatus("Background transform restored.");
+    }
+
+    function uiPxToCanvas(px) {
+      const rect = canvas.getBoundingClientRect();
+      if (!rect || rect.width <= 0) {
+        return px;
+      }
+      return px * (canvas.width / rect.width);
+    }
+
+    function clearUploadWidget(uploadWrap) {
+      if (!uploadWrap) return;
+
+      const clearBtn = uploadWrap.querySelector('button[aria-label*="Clear"], button[title*="Clear"], .clear-button');
+      if (clearBtn) {
+        clearBtn.click();
+      }
+
+      uploadWrap.querySelectorAll('input[type="file"]').forEach((el) => {
+        el.value = "";
+      });
+    }
 
     function loadImageFromFile(file) {
       return new Promise((resolve, reject) => {
@@ -65,6 +156,11 @@
       const img = layer.img;
       const w = img.width * layer.scale;
       const h = img.height * layer.scale;
+      const lineWidth = Math.max(1, uiPxToCanvas(2));
+      const handleSize = Math.max(8, uiPxToCanvas(12));
+      const rotateDistance = Math.max(12, uiPxToCanvas(24));
+      const rotateRadius = Math.max(4, uiPxToCanvas(7));
+
       ctx.save();
       ctx.translate(layer.x, layer.y);
       ctx.rotate(layer.rot);
@@ -78,12 +174,12 @@
         ctx.translate(layer.x, layer.y);
         ctx.rotate(layer.rot);
         ctx.strokeStyle = "#38bdf8";
-        ctx.lineWidth = 2;
+        ctx.lineWidth = lineWidth;
         ctx.strokeRect(-w / 2, -h / 2, w, h);
         ctx.fillStyle = "#22d3ee";
-        ctx.fillRect(w / 2 - 6, h / 2 - 6, 12, 12);
+        ctx.fillRect(w / 2 - handleSize / 2, h / 2 - handleSize / 2, handleSize, handleSize);
         ctx.beginPath();
-        ctx.arc(0, -h / 2 - 24, 7, 0, Math.PI * 2);
+        ctx.arc(0, -h / 2 - rotateDistance, rotateRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
@@ -91,9 +187,6 @@
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (state.bg) {
-        ctx.drawImage(state.bg, 0, 0, canvas.width, canvas.height);
-      }
       state.layers.forEach((layer, i) => {
         layer.selected = i === state.active;
         drawLayer(layer);
@@ -105,7 +198,8 @@
       state.layers.forEach((layer, i) => {
         const item = document.createElement("div");
         item.className = "composer-layer-item" + (i === state.active ? " active" : "");
-        item.textContent = `${i + 1}. ${layer.name}`;
+        const label = layer.isBackground ? `BG. ${layer.name}` : `${i + 1}. ${layer.name}`;
+        item.textContent = label;
         item.onclick = () => {
           state.active = i;
           renderLayerList();
@@ -113,6 +207,106 @@
         };
         layerList.appendChild(item);
       });
+    }
+
+    function renderAssetList() {
+      if (!assetList) return;
+
+      assetList.innerHTML = "";
+      if (state.assets.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "No staged images yet.";
+        empty.style.color = "#94a3b8";
+        empty.style.fontSize = "12px";
+        assetList.appendChild(empty);
+        return;
+      }
+
+      state.assets.forEach((asset) => {
+        const card = document.createElement("div");
+        card.className = "composer-asset-item";
+
+        const img = document.createElement("img");
+        img.src = asset.src;
+        img.alt = asset.name;
+        card.appendChild(img);
+
+        const meta = document.createElement("div");
+        meta.className = "composer-asset-meta";
+
+        const name = document.createElement("div");
+        name.className = "composer-asset-name";
+        name.textContent = asset.name;
+        meta.appendChild(name);
+
+        const actions = document.createElement("div");
+        actions.className = "composer-asset-actions";
+
+        const addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.textContent = "Add to Layers";
+        addBtn.addEventListener("click", () => {
+          addAssetToLayers(asset);
+        });
+        actions.appendChild(addBtn);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => {
+          state.assets = state.assets.filter((x) => x.id !== asset.id);
+          state.assetKeys.delete(asset.key);
+          renderAssetList();
+          setStatus(`Removed staged image: ${asset.name}`);
+        });
+        actions.appendChild(removeBtn);
+
+        meta.appendChild(actions);
+        card.appendChild(meta);
+        assetList.appendChild(card);
+      });
+    }
+
+    function makeLayerFromImage(img, name, isBackground = false) {
+      return {
+        id: crypto.randomUUID(),
+        name,
+        src: img.src,
+        img,
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        scale: 1,
+        rot: 0,
+        mirror: false,
+        opacity: 1,
+        isBackground,
+      };
+    }
+
+    function addAssetToLayers(asset) {
+      const layer = makeLayerFromImage(asset.img, asset.name, false);
+      state.layers.push(layer);
+      state.active = state.layers.length - 1;
+      renderLayerList();
+      draw();
+      setStatus(`Added to layers: ${asset.name}`);
+    }
+
+    async function addAssetFromFile(file) {
+      const key = `${file.name}::${file.size}::${file.lastModified}`;
+      if (state.assetKeys.has(key)) {
+        return;
+      }
+
+      const img = await loadImageFromFile(file);
+      state.assets.push({
+        id: crypto.randomUUID(),
+        key,
+        name: file.name,
+        img,
+        src: img.src,
+      });
+      state.assetKeys.add(key);
     }
 
     function getMousePos(evt) {
@@ -136,19 +330,73 @@
     }
 
     function hitTest(px, py) {
-      for (let i = state.layers.length - 1; i >= 0; i--) {
-        const layer = state.layers[i];
+      const handleHitPadding = Math.max(8, uiPxToCanvas(12));
+      const rotateDistance = Math.max(12, uiPxToCanvas(24));
+      const rotateHitRadius = Math.max(7, uiPxToCanvas(10));
+
+      if (state.lockEditBackground) {
+        const bgIndex = getBackgroundIndex();
+        if (bgIndex < 0) return null;
+        const layer = state.layers[bgIndex];
         const w = layer.img.width * layer.scale;
         const h = layer.img.height * layer.scale;
         const local = toLocal(layer, px, py);
 
         const resizeX = w / 2;
         const resizeY = h / 2;
-        if (Math.abs(local.x - resizeX) < 12 && Math.abs(local.y - resizeY) < 12) {
+        if (Math.abs(local.x - resizeX) < handleHitPadding && Math.abs(local.y - resizeY) < handleHitPadding) {
+          return { index: bgIndex, mode: "resize" };
+        }
+
+        if (Math.hypot(local.x, local.y + h / 2 + rotateDistance) < rotateHitRadius) {
+          return { index: bgIndex, mode: "rotate" };
+        }
+
+        if (Math.abs(local.x) <= w / 2 && Math.abs(local.y) <= h / 2) {
+          return { index: bgIndex, mode: "move" };
+        }
+
+        return null;
+      }
+
+      if (state.lockToSelected && state.active >= 0) {
+        const layer = state.layers[state.active];
+        if (!canEditLayer(layer)) return null;
+        const w = layer.img.width * layer.scale;
+        const h = layer.img.height * layer.scale;
+        const local = toLocal(layer, px, py);
+
+        const resizeX = w / 2;
+        const resizeY = h / 2;
+        if (Math.abs(local.x - resizeX) < handleHitPadding && Math.abs(local.y - resizeY) < handleHitPadding) {
+          return { index: state.active, mode: "resize" };
+        }
+
+        if (Math.hypot(local.x, local.y + h / 2 + rotateDistance) < rotateHitRadius) {
+          return { index: state.active, mode: "rotate" };
+        }
+
+        if (Math.abs(local.x) <= w / 2 && Math.abs(local.y) <= h / 2) {
+          return { index: state.active, mode: "move" };
+        }
+
+        return null;
+      }
+
+      for (let i = state.layers.length - 1; i >= 0; i--) {
+        const layer = state.layers[i];
+        if (!canEditLayer(layer)) continue;
+        const w = layer.img.width * layer.scale;
+        const h = layer.img.height * layer.scale;
+        const local = toLocal(layer, px, py);
+
+        const resizeX = w / 2;
+        const resizeY = h / 2;
+        if (Math.abs(local.x - resizeX) < handleHitPadding && Math.abs(local.y - resizeY) < handleHitPadding) {
           return { index: i, mode: "resize" };
         }
 
-        if (Math.hypot(local.x, local.y + h / 2 + 24) < 10) {
+        if (Math.hypot(local.x, local.y + h / 2 + rotateDistance) < rotateHitRadius) {
           return { index: i, mode: "rotate" };
         }
 
@@ -164,9 +412,11 @@
       const p = getMousePos(evt);
       const hit = hitTest(p.x, p.y);
       if (!hit) {
-        state.active = -1;
-        renderLayerList();
-        draw();
+        if (!state.lockToSelected) {
+          state.active = -1;
+          renderLayerList();
+          draw();
+        }
         return;
       }
 
@@ -215,52 +465,156 @@
       state.dragMode = null;
     });
 
-    bgInput.addEventListener("change", async () => {
-      const f = bgInput.files && bgInput.files[0];
-      if (!f) return;
-      state.bg = await loadImageFromFile(f);
-      canvas.width = state.bg.width;
-      canvas.height = state.bg.height;
-      fitCanvasToParent();
-      draw();
-      statusText.textContent = `Background loaded: ${f.name} (${canvas.width}x${canvas.height})`;
+    canvas.addEventListener("pointercancel", () => {
+      state.dragMode = null;
     });
 
-    charsInput.addEventListener("change", async () => {
-      const files = Array.from(charsInput.files || []);
-      for (const file of files) {
-        const img = await loadImageFromFile(file);
-        state.layers.push({
-          id: crypto.randomUUID(),
-          name: file.name,
-          src: img.src,
-          img,
-          x: canvas.width / 2,
-          y: canvas.height / 2,
-          scale: 1,
-          rot: 0,
-          mirror: false,
-          opacity: 1,
-        });
+    window.addEventListener("keydown", (evt) => {
+      if (!state.lockToSelected || state.active < 0) return;
+
+      const target = evt.target;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
       }
 
-      if (state.active < 0 && state.layers.length > 0) {
-        state.active = state.layers.length - 1;
+      if (state.lockEditBackground) {
+        setActiveToBackground();
       }
 
-      renderLayerList();
-      draw();
-      statusText.textContent = `Loaded ${files.length} character image(s).`;
+      const layer = state.layers[state.active];
+      if (!canEditLayer(layer)) return;
+
+      const key = evt.key.toLowerCase();
+      const moveStep = evt.shiftKey ? 20 : 8;
+      let changed = false;
+
+      if (key === "w") {
+        layer.y -= moveStep;
+        changed = true;
+      } else if (key === "s") {
+        layer.y += moveStep;
+        changed = true;
+      } else if (key === "a") {
+        layer.x -= moveStep;
+        changed = true;
+      } else if (key === "d") {
+        layer.x += moveStep;
+        changed = true;
+      } else if (evt.key === "+" || evt.key === "=") {
+        layer.scale = Math.max(0.05, layer.scale * 1.05);
+        changed = true;
+      } else if (evt.key === "-" || evt.key === "_") {
+        layer.scale = Math.max(0.05, layer.scale / 1.05);
+        changed = true;
+      }
+
+      if (changed) {
+        evt.preventDefault();
+        draw();
+      }
     });
+
+    function bindBgInput() {
+      if (!bgUploadWrap) return;
+      const fileInput = bgUploadWrap.querySelector('input[type="file"]');
+      if (!fileInput || fileInput.dataset.composerBound === "1") return;
+
+      fileInput.dataset.composerBound = "1";
+      fileInput.addEventListener("change", async () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+
+        const img = await loadImageFromFile(f);
+        canvas.width = img.width;
+        canvas.height = img.height;
+
+        const existingBgIndex = state.layers.findIndex((x) => x.isBackground);
+        const bgLayer = makeLayerFromImage(img, f.name, true);
+        if (existingBgIndex >= 0) {
+          state.layers[existingBgIndex] = bgLayer;
+          state.active = existingBgIndex;
+        } else {
+          state.layers.unshift(bgLayer);
+          state.active = 0;
+        }
+
+        fitCanvasToParent();
+        renderLayerList();
+        draw();
+        setStatus(`Background loaded: ${f.name} (${canvas.width}x${canvas.height})`);
+        clearUploadWidget(bgUploadWrap);
+      });
+    }
+
+    function bindCharsInput() {
+      if (!charsUploadWrap) return;
+      const fileInput = charsUploadWrap.querySelector('input[type="file"]');
+      if (!fileInput || fileInput.dataset.composerBound === "1") return;
+
+      fileInput.dataset.composerBound = "1";
+      fileInput.addEventListener("change", async () => {
+        const files = Array.from(fileInput.files || []);
+        for (const file of files) {
+          await addAssetFromFile(file);
+        }
+
+        renderAssetList();
+        clearUploadWidget(charsUploadWrap);
+        setStatus(`Staged ${files.length} character image(s). Click Add to Layers for each.`);
+      });
+    }
+
+    function bindUploadInputs() {
+      bindBgInput();
+      bindCharsInput();
+    }
+
+    if (lockModeBtn) {
+      lockModeBtn.addEventListener("click", () => {
+        state.lockToSelected = !state.lockToSelected;
+        updateLockModeUi();
+        if (state.lockToSelected) {
+          state.lockEditBackground = false;
+          updateBgLockUi();
+        }
+        if (state.lockToSelected && state.active < 0 && state.layers.length > 0) {
+          state.active = state.layers.length - 1;
+          renderLayerList();
+          draw();
+        }
+      });
+    }
+
+    if (bgLockBtn) {
+      bgLockBtn.addEventListener("click", () => {
+        state.lockEditBackground = !state.lockEditBackground;
+        updateBgLockUi();
+        if (state.lockEditBackground) {
+          state.lockToSelected = false;
+          updateLockModeUi();
+          setActiveToBackground();
+          renderLayerList();
+          draw();
+        }
+      });
+    }
+
+    if (restoreBgBtn) {
+      restoreBgBtn.addEventListener("click", () => {
+        restoreBackgroundTransform();
+      });
+    }
 
     mirrorBtn.addEventListener("click", () => {
       if (state.active < 0) return;
+      if (!canEditLayer(state.layers[state.active])) return;
       state.layers[state.active].mirror = !state.layers[state.active].mirror;
       draw();
     });
 
     deleteBtn.addEventListener("click", () => {
       if (state.active < 0) return;
+      if (!canEditLayer(state.layers[state.active])) return;
       state.layers.splice(state.active, 1);
       state.active = Math.min(state.active, state.layers.length - 1);
       renderLayerList();
@@ -269,6 +623,7 @@
 
     layerUpBtn.addEventListener("click", () => {
       if (state.active < 0 || state.active >= state.layers.length - 1) return;
+      if (!canEditLayer(state.layers[state.active])) return;
       const tmp = state.layers[state.active];
       state.layers[state.active] = state.layers[state.active + 1];
       state.layers[state.active + 1] = tmp;
@@ -279,6 +634,7 @@
 
     layerDownBtn.addEventListener("click", () => {
       if (state.active <= 0) return;
+      if (!canEditLayer(state.layers[state.active])) return;
       const tmp = state.layers[state.active];
       state.layers[state.active] = state.layers[state.active - 1];
       state.layers[state.active - 1] = tmp;
@@ -288,6 +644,11 @@
     });
 
     window.addEventListener("resize", fitCanvasToParent);
+    bindUploadInputs();
+    updateLockModeUi();
+    updateBgLockUi();
+    renderAssetList();
+    state.bindUploadInputs = bindUploadInputs;
     root.__composer_state = state;
     fitCanvasToParent();
     draw();
@@ -317,7 +678,7 @@
     const payload = {
       width: canvas.width,
       height: canvas.height,
-      background: state.bg ? state.bg.src : null,
+      background: null,
       layers: state.layers.map((l) => ({
         name: l.name,
         src: l.src,
@@ -327,6 +688,7 @@
         rot_deg: (l.rot * 180) / Math.PI,
         mirror: l.mirror,
         opacity: l.opacity,
+        is_background: !!l.isBackground,
       })),
     };
 
@@ -335,6 +697,10 @@
 
   const observer = new MutationObserver(() => {
     window.composer_ensure_init();
+    const root = document.getElementById("composer_root");
+    if (root && root.__composer_state && typeof root.__composer_state.bindUploadInputs === "function") {
+      root.__composer_state.bindUploadInputs();
+    }
   });
 
   const startObserve = () => {

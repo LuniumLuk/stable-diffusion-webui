@@ -42,6 +42,66 @@
             border-bottom: 1px solid #333;
         }
 
+        .preset-list {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .preset-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 8px;
+            margin-bottom: 4px;
+        }
+
+        .preset-btn {
+            width: 100%;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.06);
+            color: #eaeaea;
+            border: 1px solid #3f3f3f;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .preset-btn:hover {
+            background: rgba(13, 110, 253, 0.2);
+        }
+
+        .preset-title {
+            font-size: 12px;
+            opacity: 0.7;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .preset-reload-btn {
+            background: rgba(255, 255, 255, 0.06);
+            color: #eaeaea;
+            border: 1px solid #3f3f3f;
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .preset-reload-btn:hover {
+            background: rgba(13, 110, 253, 0.2);
+        }
+
+        .preset-hint {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-bottom: 4px;
+        }
+
         .new-chat-btn {
             width: 100%;
             background: #0d6efd;
@@ -114,6 +174,19 @@
             background: rgba(10, 10, 20, 0.5);
             font-weight: 600;
         }
+
+        .system-prompt-banner {
+            padding: 7px 20px;
+            background: rgba(13, 110, 253, 0.07);
+            border-bottom: 1px solid rgba(13, 110, 253, 0.18);
+            font-size: 11px;
+            color: #8ea8cc;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .system-prompt-banner.hidden { display: none; }
 
         .messages-container {
             flex: 1;
@@ -404,6 +477,14 @@
         <div class="sidebar scrollbar-thin">
             <div class="sidebar-header">
                 <button class="new-chat-btn" onclick="newConversation()">+ New Chat</button>
+                <div class="preset-toolbar">
+                    <div class="preset-title">Prompt Presets</div>
+                    <button id="reloadPresetsBtn" class="preset-reload-btn" onclick="reloadPromptPresets()">Reload</button>
+                </div>
+                <div id="presetHint" class="preset-hint">Loaded presets from prompts folder.</div>
+                <div id="presetList" class="preset-list">
+                    <small style="opacity:0.7;">No presets found</small>
+                </div>
             </div>
             <div class="conversations-list scrollbar-thin" id="conversationsList">
                 <div class="empty-state">
@@ -415,6 +496,7 @@
         <!-- Chat Area -->
         <div class="chat-area">
             <div class="chat-header" id="chatHeader">Select a conversation or start a new chat</div>
+            <div class="system-prompt-banner hidden" id="systemPromptBanner"></div>
 
             <div class="messages-container scrollbar-thin" id="messagesContainer">
                 <div class="empty-state">
@@ -445,12 +527,14 @@
     <script>
         let currentConversation = null;
         let currentModelName = null;
+        let promptPresets = [];
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             checkStatus();
             loadConversations();
             loadModelList();
+            loadPromptPresets();
 
             // Auto-expand textarea as user types
             const messageInput = document.getElementById('messageInput');
@@ -617,19 +701,62 @@
             }
         }
 
-        async function newConversation() {
+        async function loadPromptPresets() {
+            const presetList = document.getElementById('presetList');
+            const hint = document.getElementById('presetHint');
+            const reloadBtn = document.getElementById('reloadPresetsBtn');
+            try {
+                reloadBtn.disabled = true;
+                const response = await fetch('/api/prompts/list');
+                const data = await response.json();
+                promptPresets = data.presets || [];
+
+                presetList.innerHTML = '';
+                if (promptPresets.length === 0) {
+                    presetList.innerHTML = '<small style="opacity:0.7;">No presets found</small>';
+                    hint.textContent = 'No valid preset files found (need [title] and [PROMPT]).';
+                    return;
+                }
+
+                promptPresets.forEach((preset) => {
+                    const btn = document.createElement('button');
+                    btn.className = 'preset-btn';
+                    btn.textContent = preset.title;
+                    btn.title = `Load preset from ${preset.file}`;
+                    btn.addEventListener('click', () => newConversation(preset.key, preset.title));
+                    presetList.appendChild(btn);
+                });
+                hint.textContent = `Loaded ${promptPresets.length} preset(s).`;
+            } catch (e) {
+                presetList.innerHTML = '<small style="opacity:0.7;">Failed to load presets</small>';
+                hint.textContent = 'Failed to reload presets.';
+            } finally {
+                reloadBtn.disabled = false;
+            }
+        }
+
+        async function reloadPromptPresets() {
+            await loadPromptPresets();
+        }
+
+        async function newConversation(presetKey = null, presetTitle = null) {
+            const title = presetTitle || 'New Chat';
             const response = await fetch('/api/chat/new', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: 'New Chat' })
+                body: JSON.stringify({
+                    title,
+                    preset_key: presetKey
+                })
             });
 
             const data = await response.json();
             currentConversation = data.conversation_id;
 
-            document.getElementById('chatHeader').textContent = 'New Conversation';
+            document.getElementById('chatHeader').textContent = presetTitle ? `Preset: ${presetTitle}` : 'New Conversation';
             document.getElementById('messagesContainer').innerHTML = '';
             document.getElementById('inputArea').style.display = 'flex';
+            setSystemPromptBanner(data.system_prompt);
 
             loadConversations();
         }
@@ -666,6 +793,22 @@
             });
         }
 
+        function setSystemPromptBanner(systemPrompt) {
+            const banner = document.getElementById('systemPromptBanner');
+            if (!systemPrompt) {
+                banner.classList.add('hidden');
+                banner.textContent = '';
+                return;
+            }
+            const cleaned = systemPrompt
+                .split('\n')
+                .map(l => l.trim())
+                .filter(l => l.length > 0)
+                .join('\n');
+            banner.textContent = cleaned;
+            banner.classList.remove('hidden');
+        }
+
         async function loadConversation(convId) {
             currentConversation = convId;
             const response = await fetch(`/api/history/load/${convId}`);
@@ -673,6 +816,7 @@
 
             document.getElementById('chatHeader').textContent = 'Loaded Conversation';
             document.getElementById('inputArea').style.display = 'flex';
+            setSystemPromptBanner(data.system_prompt);
 
             const container = document.getElementById('messagesContainer');
             container.innerHTML = '';

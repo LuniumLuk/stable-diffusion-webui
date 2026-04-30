@@ -64,8 +64,47 @@ GEN_TOOLS_HTML = """
     overflow: hidden; display: -webkit-box;
     -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
+#gen_tools_diff_compare {
+    margin-top: 12px;
+    border: 1px solid var(--block-border-color, #334155);
+    border-radius: 8px;
+    padding: 10px;
+}
+#gen_tools_diff_dropzone {
+    border: 2px dashed #38bdf8;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 8px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+#gen_tools_diff_dropzone.drag-over {
+    background: #0c4a6e22;
+    border-color: #22d3ee;
+}
+#gen_tools_diff_summary {
+    color: #94a3b8;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+#gen_tools_diff_output {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 8px;
+    color: #cbd5e1;
+}
 </style>
 <div id="gen_tools_history_grid"></div>
+<div id="gen_tools_diff_compare">
+    <div id="gen_tools_diff_dropzone">Drop an image or .txt here to diff against current extracted params (no auto-overwrite).</div>
+    <div id="gen_tools_diff_summary">Diff compare is idle.</div>
+    <div id="gen_tools_diff_output">Waiting for drop...</div>
+</div>
 """
 
 # ---------------------------------------------------------------------------

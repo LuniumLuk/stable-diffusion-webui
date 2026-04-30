@@ -12,6 +12,7 @@ class PromptStyle(typing.NamedTuple):
     prompt: str | None
     negative_prompt: str | None
     path: str | None = None
+    rating: float = 0.0
 
 
 def merge_prompts(style_prompt: str, prompt: str) -> str:
@@ -81,7 +82,7 @@ def extract_original_prompts(style: PromptStyle, prompt, negative_prompt):
 
 class StyleDatabase:
     def __init__(self, paths: list[str | Path]):
-        self.no_style = PromptStyle("None", "", "", None)
+        self.no_style = PromptStyle("None", "", "", None, 0.0)
         self.styles = {}
         self.paths = paths
         self.all_styles_files: list[Path] = []
@@ -125,7 +126,7 @@ class StyleDatabase:
                 # add divider when more than styles file
                 # '---------------- STYLES ----------------'
                 divider = f' {styles_file.stem.upper()} '.center(40, '-')
-                self.styles[divider] = PromptStyle(f"{divider}", None, None, "do_not_save")
+                self.styles[divider] = PromptStyle(f"{divider}", None, None, "do_not_save", 0.0)
             if styles_file.is_file():
                 self.load_from_csv(styles_file)
 
@@ -140,9 +141,13 @@ class StyleDatabase:
                     # Support loading old CSV format with "name, text"-columns
                     prompt = row["prompt"] if "prompt" in row else row["text"]
                     negative_prompt = row.get("negative_prompt", "")
+                    try:
+                        rating = float(row.get("rating", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        rating = 0.0
                     # Add style to database
                     self.styles[row["name"]] = PromptStyle(
-                        row["name"], prompt, negative_prompt, str(path)
+                        row["name"], prompt, negative_prompt, str(path), rating
                     )
         except Exception:
             errors.report(f'Error loading styles from {path}: ', exc_info=True)

@@ -245,6 +245,173 @@
     }
 
     // -----------------------------------------------------------------------
+    // Diff compare drop zone
+    // -----------------------------------------------------------------------
+
+    function parseInfotext(text) {
+        const info = {
+            prompt: "",
+            negative: "",
+            params: {},
+        };
+
+        const lines = (text || "").split(/\r?\n/).map((x) => x.trim());
+        if (lines.length > 0) {
+            info.prompt = lines[0] || "";
+        }
+
+        const negLine = lines.find((line) => line.startsWith("Negative prompt:"));
+        if (negLine) {
+            info.negative = negLine.slice("Negative prompt:".length).trim();
+        }
+
+        const paramsLine = lines.find((line) => line.includes("Steps:")) || "";
+        for (const part of paramsLine.split(",")) {
+            const idx = part.indexOf(":");
+            if (idx <= 0) continue;
+            const key = part.slice(0, idx).trim();
+            const value = part.slice(idx + 1).trim();
+            if (key) {
+                info.params[key] = value;
+            }
+        }
+
+        return info;
+    }
+
+    function renderDiffText(beforeText, afterText) {
+        const before = parseInfotext(beforeText);
+        const after = parseInfotext(afterText);
+        const lines = [];
+
+        if ((before.prompt || "") !== (after.prompt || "")) {
+            lines.push("Prompt:");
+            lines.push("- " + (before.prompt || "(empty)"));
+            lines.push("+ " + (after.prompt || "(empty)"));
+            lines.push("");
+        }
+
+        if ((before.negative || "") !== (after.negative || "")) {
+            lines.push("Negative prompt:");
+            lines.push("- " + (before.negative || "(empty)"));
+            lines.push("+ " + (after.negative || "(empty)"));
+            lines.push("");
+        }
+
+        const keys = new Set([...Object.keys(before.params), ...Object.keys(after.params)]);
+        const changed = [];
+        for (const key of keys) {
+            const oldVal = before.params[key] || "";
+            const newVal = after.params[key] || "";
+            if (oldVal !== newVal) {
+                changed.push({ key, oldVal, newVal });
+            }
+        }
+
+        if (changed.length > 0) {
+            lines.push("Parameters:");
+            for (const item of changed.sort((a, b) => a.key.localeCompare(b.key))) {
+                lines.push(`- ${item.key}: ${item.oldVal || "(empty)"}`);
+                lines.push(`+ ${item.key}: ${item.newVal || "(empty)"}`);
+            }
+        }
+
+        if (lines.length === 0) {
+            return "No differences found.";
+        }
+
+        return lines.join("\n");
+    }
+
+    function setupDiffCompareDropZone() {
+        const dropZone = document.getElementById("gen_tools_diff_dropzone");
+        const diffSummary = document.getElementById("gen_tools_diff_summary");
+        const diffOutput = document.getElementById("gen_tools_diff_output");
+        const fileWrap = document.getElementById("gen_tools_drop_file");
+
+        if (!dropZone || !diffSummary || !diffOutput || !fileWrap) return;
+        if (dropZone.dataset.bound === "1") return;
+        dropZone.dataset.bound = "1";
+
+        function setDragVisual(on) {
+            dropZone.classList.toggle("drag-over", !!on);
+        }
+
+        function hasFiles(event) {
+            const dt = event && event.dataTransfer;
+            if (!dt) return false;
+            if (dt.files && dt.files.length > 0) return true;
+            if (dt.items && dt.items.length > 0) {
+                return Array.from(dt.items).some((item) => item.kind === "file");
+            }
+            return false;
+        }
+
+        function dispatchToParser(files) {
+            const fileInput = fileWrap.querySelector('input[type="file"]');
+            if (!fileInput || !files || files.length === 0) return false;
+
+            const data = new DataTransfer();
+            for (const file of files) {
+                data.items.add(file);
+            }
+
+            fileInput.files = data.files;
+            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+            return true;
+        }
+
+        dropZone.addEventListener("dragover", (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = "copy";
+            setDragVisual(true);
+        });
+
+        dropZone.addEventListener("dragleave", () => {
+            setDragVisual(false);
+        });
+
+        dropZone.addEventListener("drop", (e) => {
+            setDragVisual(false);
+            if (!hasFiles(e)) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const before = getTextboxValue("gen_tools_infotext_for_apply") || "";
+            const files = e.dataTransfer.files;
+            if (!dispatchToParser(files)) {
+                diffSummary.textContent = "Could not send dropped file to parser.";
+                return;
+            }
+
+            diffSummary.textContent = "Parsing dropped file and comparing...";
+
+            let tries = 0;
+            const maxTries = 60;
+            const poll = setInterval(() => {
+                tries += 1;
+                const after = getTextboxValue("gen_tools_infotext_for_apply") || "";
+                if (after && after !== before) {
+                    clearInterval(poll);
+                    const diffText = renderDiffText(before, after);
+                    const changedCount = diffText === "No differences found." ? 0 : diffText.split("\n").filter((x) => x.startsWith("- ")).length;
+                    diffSummary.textContent = `Compared dropped content against current params. Changed entries: ${changedCount}.`;
+                    diffOutput.textContent = diffText;
+                    return;
+                }
+
+                if (tries >= maxTries) {
+                    clearInterval(poll);
+                    diffSummary.textContent = "Timed out while waiting for parsed params.";
+                }
+            }, 100);
+        });
+    }
+
+    // -----------------------------------------------------------------------
     // Initialisation
     // -----------------------------------------------------------------------
 
@@ -252,6 +419,7 @@
         watchHistoryJsonState();
         setupAutoRefresh();
         setupDropAutoPaste();
+        setupDiffCompareDropZone();
     }
 
     if (document.readyState === "loading") {

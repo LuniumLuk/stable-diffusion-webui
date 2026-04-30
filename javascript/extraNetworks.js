@@ -485,6 +485,14 @@ function popup(contents) {
         close.title = "Close";
         globalPopup.appendChild(close);
 
+        var closeButton = document.createElement('button');
+        closeButton.classList.add('global-popup-close-button');
+        closeButton.type = 'button';
+        closeButton.textContent = '×';
+        closeButton.addEventListener("click", closePopup);
+        closeButton.title = "Close";
+        globalPopup.appendChild(closeButton);
+
         globalPopupInner = document.createElement('div');
         globalPopupInner.classList.add('global-popup-inner');
         globalPopup.appendChild(globalPopupInner);
