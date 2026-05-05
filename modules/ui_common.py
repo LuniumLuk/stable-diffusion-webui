@@ -152,6 +152,73 @@ def save_files(js_data, images, do_make_zip, index):
     return gr.File.update(value=fullfns, visible=True), plaintext_to_html(f"Saved: {filenames[0]}")
 
 
+def endorse_current(js_data, images, index):
+    """Star/endorse the currently selected generated image – saves a copy + DB record."""
+    import modules.endorsement_db as edb
+    from PIL.PngImagePlugin import PngInfo
+    from datetime import datetime as _dt
+
+    try:
+        data = json.loads(js_data)
+    except Exception:
+        return plaintext_to_html("Endorse failed: could not parse generation info.")
+
+    if not images:
+        return plaintext_to_html("No image to endorse.")
+
+    idx = int(index or 0)
+    if idx < 0 or idx >= len(images):
+        idx = 0
+
+    infotexts = data.get("infotexts", [])
+    if not infotexts:
+        return plaintext_to_html("No generation info available.")
+
+    infotext_idx = idx if idx < len(infotexts) else 0
+    infotext_str = infotexts[infotext_idx]
+    params = parameters_copypaste.parse_generation_parameters(infotext_str, [])
+
+    try:
+        image = image_from_url_text(images[idx])
+    except Exception as e:
+        return plaintext_to_html(f"Endorse failed: could not read image: {e}")
+
+    # Save a permanent copy under <outdir_save>/endorsed/
+    try:
+        endorsed_dir = os.path.join(shared.opts.outdir_save or "outputs/save", "endorsed")
+        os.makedirs(endorsed_dir, exist_ok=True)
+        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        seed = params.get("Seed", "unk")
+        img_path = os.path.join(endorsed_dir, f"endorsed_{ts}_{seed}.png")
+        png_info = PngInfo()
+        png_info.add_text("parameters", infotext_str)
+        image.save(img_path, pnginfo=png_info)
+    except Exception as e:
+        return plaintext_to_html(f"Endorse failed: could not save image: {e}")
+
+    try:
+        edb.init_db()
+        edb.endorse(
+            image_path=img_path,
+            prompt=params.get("Prompt", ""),
+            negative_prompt=params.get("Negative prompt", ""),
+            seed=params.get("Seed", ""),
+            steps=int(params.get("Steps", 0) or 0),
+            sampler=params.get("Sampler", ""),
+            cfg_scale=float(params.get("CFG scale", 0) or 0),
+            width=int(data.get("width", 0) or 0),
+            height=int(data.get("height", 0) or 0),
+            model_name=data.get("sd_model_name", ""),
+            model_hash=data.get("sd_model_hash", ""),
+            infotext=infotext_str,
+        )
+    except Exception as e:
+        return plaintext_to_html(f"Endorse failed (DB): {e}")
+
+    seed_disp = params.get("Seed", "?")
+    return plaintext_to_html(f"\u2b50 Endorsed! Seed: {seed_disp}")
+
+
 @dataclasses.dataclass
 class OutputPanel:
     gallery = None
@@ -192,6 +259,7 @@ def create_output_panel(tabname, outdir, toprow=None):
                 if tabname != "extras":
                     save = ToolButton('💾', elem_id=f'save_{tabname}', tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
                     save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
+                    endorse_btn = ToolButton('\u2b50', elem_id=f'endorse_{tabname}', tooltip="Endorse this image – save a copy and record it in the starred gallery.")
 
                 buttons = {
                     'img2img': ToolButton('🖼️', elem_id=f'{tabname}_send_to_img2img', tooltip="Send image and generation parameters to img2img tab."),
@@ -243,6 +311,18 @@ def create_output_panel(tabname, outdir, toprow=None):
                             download_files,
                             res.html_log,
                         ],
+                        show_progress=False,
+                    )
+
+                    endorse_btn.click(
+                        fn=call_queue.wrap_gradio_call_no_job(endorse_current),
+                        _js="(x, y, z) => [x, y, selected_gallery_index()]",
+                        inputs=[
+                            res.generation_info,
+                            res.gallery,
+                            res.infotext,
+                        ],
+                        outputs=[res.html_log],
                         show_progress=False,
                     )
 

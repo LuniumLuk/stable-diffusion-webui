@@ -11,6 +11,10 @@ from modules import infotext_utils as parameters_copypaste
 from modules import script_callbacks, shared
 
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
+
+
 COMPOSER_HTML = """
 <style>
 #composer_root { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
@@ -35,6 +39,26 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
 .composer-layer-item.active { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8 inset; }
 #composer_actions { display: flex; gap: 8px; flex-wrap: wrap; }
 #composer_actions button.active { border-color: #22d3ee; box-shadow: 0 0 0 1px #22d3ee inset; }
+#composer_bg_color_row {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+}
+#composer_bg_color {
+        width: 42px;
+        height: 30px;
+        padding: 0;
+        border: 1px solid #4b5563;
+        border-radius: 6px;
+        background: transparent;
+}
+#composer_bg_color_apply,
+#composer_bg_color_random {
+        font-size: 11px;
+        padding: 4px 8px;
+}
 #composer_bg_lock_btn {
         margin-top: 6px;
         width: 100%;
@@ -69,6 +93,11 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                 <button id="composer_layer_down_btn" type="button" title="Move layer down (toward back)">&#9660; Down</button>
                                 <button id="composer_bg_lock_btn" type="button" class="active" title="Background is locked by default. Enable this to edit only the background layer.">Lock Edit Background: OFF</button>
             </div>
+                        <div id="composer_bg_color_row">
+                                <input id="composer_bg_color" type="color" value="#1e293b" title="Pure color background" />
+                                <button id="composer_bg_color_apply" type="button" title="Use selected color as background">Use Color BG</button>
+                                <button id="composer_bg_color_random" type="button" title="Random background color">Random</button>
+                        </div>
                         <div id="composer_status_text">Tip: Background is locked by default. Enable background edit lock to edit only background. Selected-lock mode supports WASD move and +/- scale.</div>
                 </div>
                 <div class="composer-box">
@@ -106,6 +135,18 @@ def compose_from_payload(payload_json):
         height = int(payload.get("height", 768))
 
         canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+        bg_color = (payload.get("background_color") or "").strip()
+        if bg_color:
+                try:
+                        c = bg_color.lstrip("#")
+                        if len(c) == 6:
+                                r = int(c[0:2], 16)
+                                g = int(c[2:4], 16)
+                                b = int(c[4:6], 16)
+                                canvas = Image.new("RGBA", (width, height), (r, g, b, 255))
+                except Exception:
+                        pass
 
         # Backward compatibility with older payloads that only provided a background image.
         background = _image_from_data_url(payload.get("background"))
@@ -145,20 +186,29 @@ def compose_from_payload(payload_json):
                 stage.paste(layer_img, (paste_x, paste_y), layer_img)
                 canvas = Image.alpha_composite(canvas, stage)
 
-        return canvas, f"Composited {len(payload.get('layers', []))} layer(s)."
+        saved_path = _save_composite_png(canvas)
+        return canvas, f"Composited {len(payload.get('layers', []))} layer(s). Auto-saved: {saved_path}"
+
+
+def _composer_output_dir() -> str:
+        return os.path.join(_ROOT_DIR, "outputs", "composition")
+
+
+def _save_composite_png(image: Image.Image) -> str:
+        outdir = _composer_output_dir()
+        os.makedirs(outdir, exist_ok=True)
+
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        outpath = os.path.join(outdir, f"composition-{ts}.png")
+        image.save(outpath, format="PNG")
+        return outpath
 
 
 def save_composite(image):
         if image is None:
                 return "No composite image to save."
 
-        outdir = shared.opts.outdir_extras_samples or os.path.join(shared.cmd_opts.data_dir, "outputs", "extras-images")
-        composer_dir = os.path.join(outdir, "composer")
-        os.makedirs(composer_dir, exist_ok=True)
-
-        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        outpath = os.path.join(composer_dir, f"composer-{ts}.png")
-        image.save(outpath, format="PNG")
+        outpath = _save_composite_png(image)
         return f"Saved: {outpath}"
 
 

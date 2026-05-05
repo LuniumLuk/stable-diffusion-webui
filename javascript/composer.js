@@ -14,6 +14,8 @@
       startLayer: null,
       startDist: 0,
       startAngle: 0,
+      useColorBackground: false,
+      backgroundColor: "#1e293b",
     };
 
     const canvas = root.querySelector("#composer_canvas");
@@ -25,6 +27,9 @@
     const lockModeBtn = root.querySelector("#composer_lock_mode_btn");
     const bgLockBtn = root.querySelector("#composer_bg_lock_btn");
     const restoreBgBtn = root.querySelector("#composer_restore_bg_btn");
+    const bgColorInput = root.querySelector("#composer_bg_color");
+    const bgColorApplyBtn = root.querySelector("#composer_bg_color_apply");
+    const bgColorRandomBtn = root.querySelector("#composer_bg_color_random");
     const mirrorBtn = root.querySelector("#composer_mirror_btn");
     const deleteBtn = root.querySelector("#composer_delete_btn");
     const layerUpBtn = root.querySelector("#composer_layer_up_btn");
@@ -187,10 +192,42 @@
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (state.useColorBackground && state.backgroundColor) {
+        ctx.save();
+        ctx.fillStyle = state.backgroundColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
       state.layers.forEach((layer, i) => {
         layer.selected = i === state.active;
         drawLayer(layer);
       });
+    }
+
+    function applyColorBackground(hexColor) {
+      const color = (hexColor || "").trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
+
+      const bgIndex = getBackgroundIndex();
+      if (bgIndex >= 0) {
+        state.layers.splice(bgIndex, 1);
+        if (state.active === bgIndex) {
+          state.active = Math.min(bgIndex, state.layers.length - 1);
+        } else if (state.active > bgIndex) {
+          state.active -= 1;
+        }
+      }
+
+      state.useColorBackground = true;
+      state.backgroundColor = color;
+      renderLayerList();
+      draw();
+      setStatus(`Background color set: ${color}`);
+    }
+
+    function randomHexColor() {
+      const n = Math.floor(Math.random() * 0xffffff);
+      return `#${n.toString(16).padStart(6, "0")}`;
     }
 
     function renderLayerList() {
@@ -527,6 +564,7 @@
         const img = await loadImageFromFile(f);
         canvas.width = img.width;
         canvas.height = img.height;
+        state.useColorBackground = false;
 
         const existingBgIndex = state.layers.findIndex((x) => x.isBackground);
         const bgLayer = makeLayerFromImage(img, f.name, true);
@@ -605,6 +643,20 @@
       });
     }
 
+    if (bgColorApplyBtn && bgColorInput) {
+      bgColorApplyBtn.addEventListener("click", () => {
+        applyColorBackground(bgColorInput.value || "#1e293b");
+      });
+    }
+
+    if (bgColorRandomBtn && bgColorInput) {
+      bgColorRandomBtn.addEventListener("click", () => {
+        const color = randomHexColor();
+        bgColorInput.value = color;
+        applyColorBackground(color);
+      });
+    }
+
     mirrorBtn.addEventListener("click", () => {
       if (state.active < 0) return;
       if (!canEditLayer(state.layers[state.active])) return;
@@ -679,6 +731,7 @@
       width: canvas.width,
       height: canvas.height,
       background: null,
+      background_color: state.useColorBackground ? state.backgroundColor : null,
       layers: state.layers.map((l) => ({
         name: l.name,
         src: l.src,

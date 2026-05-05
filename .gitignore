@@ -47,3 +47,4 @@ trace.json
 /local-llm/__pycache__
 /local-llm/.env
 .venv
+*.db
