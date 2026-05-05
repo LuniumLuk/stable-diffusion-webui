@@ -542,6 +542,11 @@ input[type="checkbox"].input-accordion-checkbox{
 
 .generate-box{
     position: relative;
+    min-height: 4.5em;
+}
+
+.generate-box.generate-box-compact{
+    min-height: 3em;
 }
 .gradio-button.generate-box-skip, .gradio-button.generate-box-interrupt, .gradio-button.generate-box-interrupting{
     position: absolute;
@@ -2252,3 +2257,81 @@ body.resizing .resize-handle {
     visibility: visible;
     width: auto;
 }
+
+/* =====================================================================
+   Job Queue tab & status
+   ===================================================================== */
+
+/* Queue Job button — smaller, tucked in the generate box */
+#txt2img_queue_btn,
+#img2img_queue_btn {
+    min-height: 2.4em !important;
+    min-width: 5em !important;
+    font-size: 0.85em;
+    flex: 0 0 auto;
+}
+
+/* Inline notice shown after clicking Queue Job */
+.jq-notice-bar { min-height: 0 !important; }
+.jq-notice {
+    font-size: 12px;
+    color: var(--body-text-color-subdued, #94a3b8);
+}
+.jq-notice code { font-size: 11px; }
+
+/* Stats row at top of queue tab */
+.jq-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+.jq-stat {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--block-border-color, #334155);
+    background: var(--block-background-fill, transparent);
+    font-weight: 600;
+}
+.jq-s-queued  { border-color: #f59e0b; color: #f59e0b; }
+.jq-s-running { border-color: #38bdf8; color: #38bdf8; }
+.jq-s-done    { border-color: #22c55e; color: #22c55e; }
+.jq-s-failed  { border-color: #ef4444; color: #ef4444; }
+
+.jq-empty {
+    padding: 32px;
+    text-align: center;
+    color: var(--body-text-color-subdued, #94a3b8);
+    font-size: 14px;
+    border: 1px dashed var(--block-border-color, #334155);
+    border-radius: 8px;
+}
+
+/* Job table */
+.jq-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.jq-table th {
+    text-align: left;
+    padding: 6px 10px;
+    background: var(--background-fill-secondary, #1e293b);
+    border-bottom: 2px solid var(--block-border-color, #334155);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.jq-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--block-border-color, #334155);
+    vertical-align: middle;
+}
+.jq-table tr:hover td { background: var(--background-fill-secondary, rgba(0,0,0,0.1)); }
+.jq-row.jq-s-running td { background: color-mix(in srgb, #38bdf8 6%, transparent); }
+.jq-row.jq-s-done    td { background: color-mix(in srgb, #22c55e 5%, transparent); }
+.jq-row.jq-s-failed  td { background: color-mix(in srgb, #ef4444 7%, transparent); }
+.jq-id   { font-family: monospace; font-size: 11px; white-space: nowrap; }
+.jq-lbl  { max-width: 36em; word-break: break-word; }
+.jq-error { color: #f87171; }
+

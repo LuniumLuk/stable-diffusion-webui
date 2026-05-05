@@ -141,6 +141,25 @@ function showSubmitInterruptingPlaceholder(tabname) {
     setSubmitButtonsVisibility(tabname, false, true, true);
 }
 
+function setGenerateButtonsShown(show) {
+    var txt2imgGenerate = gradioApp().getElementById('txt2img_generate');
+    var img2imgGenerate = gradioApp().getElementById('img2img_generate');
+
+    if (txt2imgGenerate) {
+        txt2imgGenerate.style.display = show ? '' : 'none';
+    }
+
+    if (img2imgGenerate) {
+        img2imgGenerate.style.display = show ? '' : 'none';
+    }
+}
+
+function setAllGenerationButtonsVisibility(show) {
+    setGenerateButtonsShown(show);
+    showSubmitButtons('txt2img', show);
+    showSubmitButtons('img2img', show);
+}
+
 function showRestoreProgressButton(tabname, show) {
     var button = gradioApp().getElementById(tabname + "_restore_progress");
     if (!button) return;
@@ -148,13 +167,13 @@ function showRestoreProgressButton(tabname, show) {
 }
 
 function submit() {
-    showSubmitButtons('txt2img', false);
+    setAllGenerationButtonsVisibility(false);
 
     var id = randomId();
     localSet("txt2img_task_id", id);
 
     requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
-        showSubmitButtons('txt2img', true);
+        setAllGenerationButtonsVisibility(true);
         localRemove("txt2img_task_id");
         showRestoreProgressButton('txt2img', false);
     });
@@ -175,13 +194,13 @@ function submit_txt2img_upscale() {
 }
 
 function submit_img2img() {
-    showSubmitButtons('img2img', false);
+    setAllGenerationButtonsVisibility(false);
 
     var id = randomId();
     localSet("img2img_task_id", id);
 
     requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
-        showSubmitButtons('img2img', true);
+        setAllGenerationButtonsVisibility(true);
         localRemove("img2img_task_id");
         showRestoreProgressButton('img2img', false);
     });
@@ -216,9 +235,10 @@ function restoreProgressTxt2img() {
     var id = localGet("txt2img_task_id");
 
     if (id) {
+        setAllGenerationButtonsVisibility(false);
         showSubmitInterruptingPlaceholder('txt2img');
         requestProgress(id, gradioApp().getElementById('txt2img_gallery_container'), gradioApp().getElementById('txt2img_gallery'), function() {
-            showSubmitButtons('txt2img', true);
+            setAllGenerationButtonsVisibility(true);
         }, null, 0);
     }
 
@@ -231,9 +251,10 @@ function restoreProgressImg2img() {
     var id = localGet("img2img_task_id");
 
     if (id) {
+        setAllGenerationButtonsVisibility(false);
         showSubmitInterruptingPlaceholder('img2img');
         requestProgress(id, gradioApp().getElementById('img2img_gallery_container'), gradioApp().getElementById('img2img_gallery'), function() {
-            showSubmitButtons('img2img', true);
+            setAllGenerationButtonsVisibility(true);
         }, null, 0);
     }
 

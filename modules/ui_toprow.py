@@ -20,6 +20,8 @@ class Toprow:
     interrupting = None
     skip = None
     submit = None
+    queue_btn = None
+    queue_status = None
 
     paste = None
     clear_prompt_button = None
@@ -131,6 +133,7 @@ class Toprow:
                 self.button_interrogate = ToolButton('📎', tooltip='Interrogate CLIP - use CLIP neural network to create a text describing the image, and put it into the prompt field', elem_id="interrogate")
                 self.button_deepbooru = ToolButton('📦', tooltip='Interrogate DeepBooru - use DeepBooru neural network to create a text describing the image, and put it into the prompt field', elem_id="deepbooru")
 
+            self.queue_btn = gr.Button('Queue', elem_id=f"{self.id_part}_queue_btn", variant='secondary', tooltip="Add current settings to job queue")
             self.restore_progress_button = ToolButton(value=restore_progress_symbol, elem_id=f"{self.id_part}_restore_progress", visible=False, tooltip="Restore progress")
 
             self.token_counter = gr.HTML(value="<span>0/75</span>", elem_id=f"{self.id_part}_token_counter", elem_classes=["token-counter"], visible=False)
@@ -144,6 +147,8 @@ class Toprow:
                 inputs=[self.prompt, self.negative_prompt],
                 outputs=[self.prompt, self.negative_prompt],
             )
+
+            self.queue_status = gr.HTML("", elem_id=f"{self.id_part}_queue_status", elem_classes=["jq-notice-bar"])
 
     def create_styles_ui(self):
         self.ui_styles = ui_prompt_styles.UiPromptStyles(self.id_part, self.prompt, self.negative_prompt)

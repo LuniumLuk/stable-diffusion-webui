@@ -252,7 +252,11 @@ def create_override_settings_dropdown(tabname, row):
 
 def create_ui():
     import modules.img2img
+    import modules.job_queue as job_queue
     import modules.txt2img
+
+    job_queue.register_callbacks()
+    job_queue.queue_manager.start()
 
     reload_javascript()
 
@@ -263,6 +267,14 @@ def create_ui():
 
     scripts.scripts_current = scripts.scripts_txt2img
     scripts.scripts_txt2img.initialize_scripts(is_img2img=False)
+
+    def guarded_txt2img(id_task: str, request: gr.Request, *args):
+        job_queue.ensure_manual_generation_allowed(id_task)
+        return modules.txt2img.txt2img(id_task, request, *args)
+
+    def guarded_img2img(id_task: str, request: gr.Request, *args):
+        job_queue.ensure_manual_generation_allowed(id_task)
+        return modules.img2img.img2img(id_task, request, *args)
 
     with gr.Blocks(analytics_enabled=False) as txt2img_interface:
         toprow = ui_toprow.Toprow(is_img2img=False, is_compact=shared.opts.compact_prompt_box)
@@ -411,7 +423,7 @@ def create_ui():
             ]
 
             txt2img_args = dict(
-                fn=wrap_gradio_gpu_call(modules.txt2img.txt2img, extra_outputs=[None, '', '']),
+                fn=wrap_gradio_gpu_call(guarded_txt2img, extra_outputs=[None, '', '']),
                 _js="submit",
                 inputs=txt2img_inputs,
                 outputs=txt2img_outputs,
@@ -420,6 +432,14 @@ def create_ui():
 
             toprow.prompt.submit(**txt2img_args)
             toprow.submit.click(**txt2img_args)
+
+            toprow.queue_btn.click(
+                fn=job_queue.add_to_queue_txt2img,
+                _js="queue_job_txt2img",
+                inputs=txt2img_inputs,
+                outputs=[toprow.queue_status],
+                show_progress=False,
+            )
 
             output_panel.button_upscale.click(
                 fn=wrap_gradio_gpu_call(modules.txt2img.txt2img_upscale, extra_outputs=[None, '', '']),
@@ -730,7 +750,7 @@ def create_ui():
             output_panel = create_output_panel("img2img", opts.outdir_img2img_samples, toprow)
 
             img2img_args = dict(
-                fn=wrap_gradio_gpu_call(modules.img2img.img2img, extra_outputs=[None, '', '']),
+                fn=wrap_gradio_gpu_call(guarded_img2img, extra_outputs=[None, '', '']),
                 _js="submit_img2img",
                 inputs=[
                     dummy_component,
@@ -797,6 +817,14 @@ def create_ui():
 
             toprow.prompt.submit(**img2img_args)
             toprow.submit.click(**img2img_args)
+
+            toprow.queue_btn.click(
+                fn=job_queue.add_to_queue_img2img,
+                _js="queue_job_img2img",
+                inputs=img2img_args["inputs"],
+                outputs=[toprow.queue_status],
+                show_progress=False,
+            )
 
             res_switch_btn.click(fn=None, _js="function(){switchWidthHeight('img2img')}", inputs=None, outputs=None, show_progress=False)
 
