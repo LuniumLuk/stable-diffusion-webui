@@ -47,13 +47,13 @@ python app.py
 You should see:
 ```
 Starting Local LLM Chat Server...
-Open http://localhost:5000 in your browser
+Open http://localhost:7820 in your browser
 ✓ Model loaded successfully
 ```
 
 ### 4. Open in Browser
 
-Navigate to: **http://localhost:5000**
+Navigate to: **http://localhost:7820**
 
 ## Usage
 

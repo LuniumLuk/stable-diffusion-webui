@@ -22,10 +22,10 @@ pip install -r requirements.txt -q
 
 echo.
 echo Starting Flask server...
-echo Opening http://localhost:5000 in browser
+echo Opening http://localhost:7820 in browser
 echo.
 timeout /t 2 /nobreak
 
-start http://localhost:5000
+start http://localhost:7820
 
 python app.py

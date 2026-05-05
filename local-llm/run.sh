@@ -23,16 +23,16 @@ pip install -r requirements.txt -q
 
 echo ""
 echo "Starting Flask server..."
-echo "Opening http://localhost:5000 in browser"
+echo "Opening http://localhost:7820 in browser"
 echo ""
 
 sleep 2
 
 # Try to open browser
 if command -v xdg-open &> /dev/null; then
-    xdg-open http://localhost:5000 &
+    xdg-open http://localhost:7820 &
 elif command -v open &> /dev/null; then
-    open http://localhost:5000 &
+    open http://localhost:7820 &
 fi
 
 python app.py
