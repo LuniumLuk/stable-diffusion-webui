@@ -1,11 +1,13 @@
 """Paged gallery with endorsements, dislikes, and cached thumbnails."""
 
 import base64
+import datetime
 import hashlib
 import html as _html
 import io
 import json
 import os
+import time
 
 import gradio as gr
 from PIL import Image
@@ -192,46 +194,124 @@ def _load_image_for_apply(path: str):
         return None
 
 
-def _fetch_mode_records(mode: str, query: str, page: int, page_size: int):
+def _date_filter_to_since_ts(date_filter: str):
+    value = (date_filter or "").strip().lower()
+    if value in ("", "all", "all time"):
+        return None
+
+    days_map = {
+        "1 day": 1,
+        "1days": 1,
+        "2 days": 2,
+        "2days": 2,
+        "1 week": 7,
+        "1week": 7,
+    }
+    days = days_map.get(value)
+    if not days:
+        return None
+    return time.time() - (days * 24 * 60 * 60)
+
+
+def _record_timestamp(record: dict):
+    file_mtime = record.get("file_mtime")
+    if file_mtime is not None:
+        try:
+            return float(file_mtime)
+        except Exception:
+            pass
+
+    for key in ("endorsed_at", "disliked_at"):
+        val = record.get(key)
+        if not val:
+            continue
+        try:
+            return datetime.datetime.fromisoformat(str(val)).timestamp()
+        except Exception:
+            continue
+
+    return None
+
+
+def _filter_rows_by_date(rows: list, since_ts):
+    if since_ts is None:
+        return rows
+
+    filtered = []
+    for row in rows:
+        ts = _record_timestamp(row)
+        if ts is None:
+            continue
+        if ts >= since_ts:
+            filtered.append(row)
+    return filtered
+
+
+def _call_db(fn_name: str, *args, **kwargs):
+    fn = getattr(endorsement_db, fn_name, None)
+    if not fn:
+        raise AttributeError(fn_name)
+
+    try:
+        return fn(*args, **kwargs)
+    except TypeError as e:
+        # Compatibility path for runtimes that still expose older DB function signatures.
+        if "unexpected keyword argument" not in str(e):
+            raise
+        kwargs_compat = dict(kwargs)
+        kwargs_compat.pop("since_ts", None)
+        return fn(*args, **kwargs_compat)
+
+
+def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_filter: str):
     page = max(1, int(page or 1))
     page_size = max(12, int(page_size or PAGE_SIZE_DEFAULT))
     offset = (page - 1) * page_size
+    since_ts = _date_filter_to_since_ts(date_filter)
 
     if mode == "⭐ Endorsed":
         if hasattr(endorsement_db, "count_endorsements") and hasattr(endorsement_db, "search_endorsements"):
-            total = endorsement_db.count_endorsements(query, exclude_disliked=True)
-            rows = endorsement_db.search_endorsements(query, limit=page_size, offset=offset, exclude_disliked=True)
+            total = _call_db("count_endorsements", query, exclude_disliked=True, since_ts=since_ts)
+            rows = _call_db(
+                "search_endorsements",
+                query,
+                limit=page_size,
+                offset=offset,
+                exclude_disliked=True,
+                since_ts=since_ts,
+            )
         else:
             # Backward-compatible fallback for older endorsement_db runtime.
             rows_all = endorsement_db.search(query)
             disliked_paths = endorsement_db.get_disliked_paths() if hasattr(endorsement_db, "get_disliked_paths") else set()
             filtered = [r for r in rows_all if r.get("image_path", "") not in disliked_paths]
+            filtered = _filter_rows_by_date(filtered, since_ts)
             total = len(filtered)
             rows = filtered[offset: offset + page_size]
     elif mode == "⬜ Unrated":
         if hasattr(endorsement_db, "count_unrated") and hasattr(endorsement_db, "search_unrated"):
-            total = endorsement_db.count_unrated(query)
-            rows = endorsement_db.search_unrated(query, limit=page_size, offset=offset)
+            total = _call_db("count_unrated", query, since_ts=since_ts)
+            rows = _call_db("search_unrated", query, limit=page_size, offset=offset, since_ts=since_ts)
         else:
             total = 0
             rows = []
     elif mode == "👎 Disliked":
         if hasattr(endorsement_db, "count_disliked") and hasattr(endorsement_db, "search_disliked"):
-            total = endorsement_db.count_disliked(query)
-            rows = endorsement_db.search_disliked(query, limit=page_size, offset=offset)
+            total = _call_db("count_disliked", query, since_ts=since_ts)
+            rows = _call_db("search_disliked", query, limit=page_size, offset=offset, since_ts=since_ts)
         else:
             total = 0
             rows = []
     else:
         # Preferred fast path with paged SQL + dislike exclusion.
         if hasattr(endorsement_db, "count_generated_filtered"):
-            total = endorsement_db.count_generated_filtered(query, exclude_disliked=True)
+            total = _call_db("count_generated_filtered", query, exclude_disliked=True, since_ts=since_ts)
         else:
             # Compatibility for runtimes where the helper is not present.
             if query.strip():
                 if hasattr(endorsement_db, "search_generated"):
                     try:
-                        total = len(endorsement_db.search_generated(query, limit=0, offset=0, exclude_disliked=True))
+                        total = len(_call_db("search_generated", query, limit=0, offset=0, exclude_disliked=True, since_ts=since_ts))
                     except TypeError:
                         total = len(endorsement_db.search_generated(query, limit=0))
                 else:
@@ -241,11 +321,19 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int):
 
         if hasattr(endorsement_db, "search_generated"):
             try:
-                rows = endorsement_db.search_generated(query, limit=page_size, offset=offset, exclude_disliked=True)
+                rows = _call_db(
+                    "search_generated",
+                    query,
+                    limit=page_size,
+                    offset=offset,
+                    exclude_disliked=True,
+                    since_ts=since_ts,
+                )
             except TypeError:
                 rows_all = endorsement_db.search_generated(query, limit=0) if query.strip() else endorsement_db.search_generated(limit=0)
                 disliked_paths = endorsement_db.get_disliked_paths() if hasattr(endorsement_db, "get_disliked_paths") else set()
                 filtered = [r for r in rows_all if r.get("path", "") not in disliked_paths]
+                filtered = _filter_rows_by_date(filtered, since_ts)
                 total = len(filtered)
                 rows = filtered[offset: offset + page_size]
         else:
@@ -254,22 +342,25 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int):
     return total, rows
 
 
-def render_gallery(mode: str, query: str, page: int, page_size: int):
-    total, rows = _fetch_mode_records(mode, query, page, page_size)
+def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter: str):
+    total, rows = _fetch_mode_records(mode, query, page, page_size, date_filter)
     pages = max(1, (total + int(page_size) - 1) // int(page_size))
     page = max(1, min(int(page), pages))
 
     if page != int(page or 1):
-        total, rows = _fetch_mode_records(mode, query, page, page_size)
+        total, rows = _fetch_mode_records(mode, query, page, page_size, date_filter)
+
+    # Detect if we're on the last page with content
+    is_last_page = (page >= pages) and total > 0
 
     if mode == "🖼 All Generated" and endorsement_db.count_generated() == 0:
         hint = (
             '<div class="endgal-sync-hint">No images indexed yet. Click <b>Sync All</b> first.</div>'
         )
-        return hint, f"0 items · page 1/1", 1
+        return hint, f"0 items · page 1/1", 1, is_last_page
 
     if not rows:
-        return '<div class="endgal-empty">No images found for this filter.</div>', f"0 items · page 1/1", 1
+        return '<div class="endgal-empty">No images found for this filter.</div>', f"0 items · page 1/1", 1, is_last_page
 
     cards = []
     for rec in rows:
@@ -279,29 +370,44 @@ def render_gallery(mode: str, query: str, page: int, page_size: int):
         cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did))
 
     header = f'<div class="endgal-count">{total} items</div>'
-    grid = '<div class="endgal-grid">' + "".join(cards) + "</div>"
+    grid = '<div class="endgal-grid" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
     page_info = f"{total} items · page {page}/{pages}"
-    return header + grid, page_info, page
+    return header + grid, page_info, page, is_last_page
 
 
-def _reset_to_first_page(mode, query, page_size):
-    html, info, page = render_gallery(mode, query, 1, int(page_size or PAGE_SIZE_DEFAULT))
+def _reset_to_first_page(mode, query, page_size, date_filter):
+    html, info, page, is_last = render_gallery(mode, query, 1, int(page_size or PAGE_SIZE_DEFAULT), date_filter)
     return html, info, info, page
 
 
-def _goto_prev_page(mode, query, page, page_size):
+def _goto_prev_page(mode, query, page, page_size, date_filter):
     new_page = max(1, int(page or 1) - 1)
-    html, info, page = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT))
+    html, info, page, is_last = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT), date_filter)
     return html, info, info, page
 
 
-def _goto_next_page(mode, query, page, page_size):
-    new_page = int(page or 1) + 1
-    html, info, page = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT))
+def _goto_next_page(mode, query, page, page_size, date_filter):
+    current_page = int(page or 1)
+    page_size_int = int(page_size or PAGE_SIZE_DEFAULT)
+    
+    # Get current page info to check if already at last page
+    total, rows = _fetch_mode_records(mode, query, current_page, page_size_int, date_filter)
+    pages = max(1, (total + page_size_int - 1) // page_size_int)
+    
+    # If already on last page, don't go further but signal end-of-gallery
+    if current_page >= pages:
+        html, info, page, is_last = render_gallery(mode, query, current_page, page_size_int, date_filter)
+        # Add end-of-gallery hint to info
+        hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
+        html_with_hint = html + hint_html
+        return html_with_hint, info, info, page
+    
+    new_page = current_page + 1
+    html, info, page, is_last = render_gallery(mode, query, new_page, page_size_int, date_filter)
     return html, info, info, page
 
 
-def handle_gallery_action(action_json: str, mode: str, query: str, page: int, page_size: int):
+def handle_gallery_action(action_json: str, mode: str, query: str, page: int, page_size: int, date_filter: str):
     try:
         data = json.loads(action_json) if action_json.strip() else {}
     except Exception:
@@ -357,7 +463,17 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
             if path:
                 endorsement_db.delete_dislike_by_path(path)
 
-    html, info, page = render_gallery(mode, query, page, page_size)
+    html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter)
+    
+    # If gallery became empty after action (e.g., endorsed last image and filter changed), show hint
+    if '<div class="endgal-empty">' in html:
+        hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
+        html = html + hint_html
+    # If still on last page with content, show hint
+    elif is_last:
+        hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
+        html = html + hint_html
+    
     return html, info, info, page
 
 
@@ -382,6 +498,13 @@ def on_ui_tabs():
                 value=str(PAGE_SIZE_DEFAULT),
                 label="Page Size",
                 elem_id="endgal_page_size",
+                scale=1,
+            )
+            date_filter = gr.Dropdown(
+                choices=["All time", "1 day", "2 days", "1 week"],
+                value="1 day",
+                label="Date",
+                elem_id="endgal_date_filter",
                 scale=1,
             )
             refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
@@ -437,63 +560,68 @@ def on_ui_tabs():
             show_progress=False,
         )
 
-        def do_sync(mode, query, pg, size):
+        def do_sync(mode, query, pg, size, date_filter):
             msg = sync_all_to_db()
-            html, info, page = render_gallery(mode, query, pg, int(size))
+            html, info, page, is_last = render_gallery(mode, query, pg, int(size), date_filter)
             return f'<div class="endgal-sync-result">{_html.escape(msg)}</div>', html, info, info, page
 
         refresh_btn.click(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size],
+            inputs=[mode_radio, search_box, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         mode_radio.change(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size],
+            inputs=[mode_radio, search_box, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         search_box.submit(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size],
+            inputs=[mode_radio, search_box, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         page_size.change(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size],
+            inputs=[mode_radio, search_box, page_size, date_filter],
+            outputs=[gallery_html, page_info, page_info_bottom, page_state],
+        )
+        date_filter.change(
+            fn=_reset_to_first_page,
+            inputs=[mode_radio, search_box, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 
         prev_btn.click(
             fn=_goto_prev_page,
-            inputs=[mode_radio, search_box, page_state, page_size],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         next_btn.click(
             fn=_goto_next_page,
-            inputs=[mode_radio, search_box, page_state, page_size],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 
         prev_btn_bottom.click(
             fn=_goto_prev_page,
-            inputs=[mode_radio, search_box, page_state, page_size],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         next_btn_bottom.click(
             fn=_goto_next_page,
-            inputs=[mode_radio, search_box, page_state, page_size],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 
         sync_btn.click(
             fn=do_sync,
-            inputs=[mode_radio, search_box, page_state, page_size],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
 
         action_btn.click(
             fn=handle_gallery_action,
-            inputs=[action_input, mode_radio, search_box, page_state, page_size],
+            inputs=[action_input, mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 

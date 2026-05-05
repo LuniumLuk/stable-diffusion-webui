@@ -1,10 +1,13 @@
 """SQLite persistence for generated images, endorsements, and dislikes."""
 
 import os
+import shutil
 import sqlite3
 from datetime import datetime
 
-_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "endorsements.db")
+_DB_ROOT = os.path.dirname(os.path.dirname(__file__))
+_DB_PATH = os.path.join(_DB_ROOT, "endorsements.db")
+_ENDORSED_ROOT = os.path.join(_DB_ROOT, "outputs", "endorsed")
 
 
 def _get_conn():
@@ -51,6 +54,11 @@ def _ensure_item_key_columns(conn):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN item_key TEXT")
 
 
+def _ensure_endorsement_origin_column(conn):
+    if not _column_exists(conn, "endorsements", "original_path"):
+        conn.execute("ALTER TABLE endorsements ADD COLUMN original_path TEXT")
+
+
 def _backfill_item_keys(conn):
     for table, path_col in (("endorsements", "image_path"), ("dislikes", "image_path"), ("generated_images", "path")):
         rows = conn.execute(
@@ -91,6 +99,7 @@ def init_db():
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 endorsed_at     TEXT    NOT NULL,
                 image_path      TEXT,
+                original_path   TEXT,
                 prompt          TEXT,
                 negative_prompt TEXT,
                 seed            TEXT,
@@ -150,6 +159,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_endorsements_path ON endorsements(image_path)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dislikes_path ON dislikes(image_path)")
         _ensure_item_key_columns(conn)
+        _ensure_endorsement_origin_column(conn)
         _backfill_item_keys(conn)
         _dedupe_table_by_item_key(conn, "generated_images", "file_mtime")
         _dedupe_table_by_item_key(conn, "endorsements", "endorsed_at")
@@ -179,9 +189,131 @@ def _build_keyword_where(query: str, fields: list[str]) -> tuple[str, list]:
     return " WHERE " + " AND ".join(clauses), params
 
 
+def _append_time_filter(where_sql: str, params: list, column: str, since_ts: float | None,
+                        numeric: bool = False) -> tuple[str, list]:
+    if since_ts is None:
+        return where_sql, params
+
+    try:
+        since_ts_val = float(since_ts)
+    except Exception:
+        return where_sql, params
+
+    compare_value = since_ts_val if numeric else datetime.fromtimestamp(since_ts_val).isoformat(timespec="seconds")
+    clause = f"{column} >= ?"
+    out_where = f"{where_sql} AND {clause}" if where_sql else f" WHERE {clause}"
+    return out_where, params + [compare_value]
+
+
+def _is_under(path: str, root: str) -> bool:
+    """Return True if path is inside root (case-insensitive on Windows)."""
+    if not path:
+        return False
+    try:
+        # os.path.normcase lowercases on Windows, ensuring case-insensitive comparison.
+        norm = os.path.normcase
+        return os.path.commonpath([norm(os.path.abspath(path)), norm(os.path.abspath(root))]) == norm(os.path.abspath(root))
+    except Exception:
+        return False
+
+
+def _unique_target_path(desired_path: str) -> str:
+    if not os.path.exists(desired_path):
+        return desired_path
+
+    base, ext = os.path.splitext(desired_path)
+    idx = 1
+    while True:
+        candidate = f"{base}_{idx}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        idx += 1
+
+
+def _move_into_endorsed(path: str, endorsed_at: datetime) -> tuple[str, str]:
+    """Copy image to endorsed folder, return (endorsed_path, original_path)."""
+    if not path:
+        return path, path
+
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        return abs_path, abs_path
+
+    if _is_under(abs_path, _ENDORSED_ROOT):
+        return abs_path, abs_path
+
+    day_folder = endorsed_at.strftime("%Y-%m-%d")
+    target_dir = os.path.join(_ENDORSED_ROOT, day_folder)
+    os.makedirs(target_dir, exist_ok=True)
+
+    target_path = _unique_target_path(os.path.join(target_dir, os.path.basename(abs_path)))
+    shutil.copy2(abs_path, target_path)  # Copy instead of move
+    return target_path, abs_path  # Return endorsed path and original path
+
+
+def _restore_from_endorsed(current_path: str, original_path: str) -> str:
+    """Delete the endorsed copy.  The original file is never touched."""
+    if not current_path:
+        return original_path or current_path
+
+    cur = os.path.abspath(current_path)
+
+    # Delete the file if it is inside the endorsed folder OR if we know
+    # it is a copy (original_path is set and differs from current_path).
+    is_copy = bool(
+        original_path
+        and os.path.normcase(os.path.abspath(original_path)) != os.path.normcase(cur)
+    )
+    if os.path.exists(cur) and (_is_under(cur, _ENDORSED_ROOT) or is_copy):
+        try:
+            os.remove(cur)
+        except Exception as exc:
+            print(f"[endorsed_gallery] warning: could not delete endorsed copy '{cur}': {exc}")
+
+    return original_path if original_path else current_path
+
+
+def _update_generated_path(conn, item_key: str, old_path: str, new_path: str):
+    if not new_path:
+        return
+
+    mtime = None
+    try:
+        if os.path.exists(new_path):
+            mtime = os.path.getmtime(new_path)
+    except Exception:
+        mtime = None
+
+    if item_key:
+        if mtime is None:
+            conn.execute("UPDATE generated_images SET path=? WHERE item_key=?", (new_path, item_key))
+        else:
+            conn.execute("UPDATE generated_images SET path=?, file_mtime=? WHERE item_key=?", (new_path, mtime, item_key))
+    elif old_path:
+        if mtime is None:
+            conn.execute("UPDATE generated_images SET path=? WHERE path=?", (new_path, old_path))
+        else:
+            conn.execute("UPDATE generated_images SET path=?, file_mtime=? WHERE path=?", (new_path, mtime, old_path))
+
+
+def _restore_endorsement_row(conn, row):
+    """Delete the endorsed copy when removing endorsement."""
+    current_path = row["image_path"] if "image_path" in row.keys() else ""
+    original_path = row["original_path"] if "original_path" in row.keys() else ""
+
+    # Delete the endorsed copy
+    _restore_from_endorsed(current_path, original_path)
+    
+    # No need to update paths in other tables since original path never changed
+
+
 def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
             cfg_scale, width, height, model_name, model_hash, infotext):
     item_key = _item_key_from_path(image_path)
+    endorsed_at = datetime.now()
+
+    endorsed_copy_path, original_path = _move_into_endorsed(image_path, endorsed_at)
+
     with _get_conn() as conn:
         if item_key:
             # Endorse/dislike are mutually exclusive for the same item.
@@ -190,16 +322,18 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
         else:
             conn.execute("DELETE FROM dislikes WHERE image_path=?", (image_path,))
             conn.execute("DELETE FROM endorsements WHERE image_path=?", (image_path,))
+
         conn.execute(
             """
             INSERT INTO endorsements
-                (endorsed_at, image_path, prompt, negative_prompt, seed, steps,
+                (endorsed_at, image_path, original_path, prompt, negative_prompt, seed, steps,
                  sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                datetime.now().isoformat(timespec="seconds"),
-                image_path,
+                endorsed_at.isoformat(timespec="seconds"),
+                endorsed_copy_path,
+                original_path,
                 prompt,
                 negative_prompt,
                 str(seed),
@@ -219,16 +353,32 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
 
 def delete_endorsement(eid: int):
     with _get_conn() as conn:
-        conn.execute("DELETE FROM endorsements WHERE id=?", (eid,))
+        row = conn.execute("SELECT * FROM endorsements WHERE id=?", (eid,)).fetchone()
+        if row:
+            _restore_endorsement_row(conn, row)
+            conn.execute("DELETE FROM endorsements WHERE id=?", (eid,))
         conn.commit()
 
 
 def delete_endorsement_by_path(path: str):
     item_key = _item_key_from_path(path)
     with _get_conn() as conn:
+        row = None
         if item_key:
-            conn.execute("DELETE FROM endorsements WHERE item_key=?", (item_key,))
+            row = conn.execute(
+                "SELECT * FROM endorsements WHERE item_key=? ORDER BY id DESC LIMIT 1",
+                (item_key,),
+            ).fetchone()
+            if row:
+                _restore_endorsement_row(conn, row)
+                conn.execute("DELETE FROM endorsements WHERE item_key=?", (item_key,))
         else:
+            row = conn.execute(
+                "SELECT * FROM endorsements WHERE image_path=? ORDER BY id DESC LIMIT 1",
+                (path,),
+            ).fetchone()
+            if row:
+                _restore_endorsement_row(conn, row)
             conn.execute("DELETE FROM endorsements WHERE image_path=?", (path,))
         conn.commit()
 
@@ -331,8 +481,9 @@ def get_disliked_id_by_path(path: str):
         return row[0] if row else None
 
 
-def count_endorsements(query: str = "", exclude_disliked: bool = True) -> int:
+def count_endorsements(query: str = "", exclude_disliked: bool = True, since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "endorsed_at", since_ts, numeric=False)
     with _get_conn() as conn:
         base_sql = "SELECT COUNT(*) FROM endorsements"
         if exclude_disliked:
@@ -352,8 +503,9 @@ def count_endorsements(query: str = "", exclude_disliked: bool = True) -> int:
 
 
 def search_endorsements(query: str = "", limit: int = 60, offset: int = 0,
-                        exclude_disliked: bool = True) -> list:
+                        exclude_disliked: bool = True, since_ts: float | None = None) -> list:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "endorsed_at", since_ts, numeric=False)
     sql = "SELECT * FROM endorsements"
     if exclude_disliked:
         if where_sql:
@@ -368,23 +520,27 @@ def search_endorsements(query: str = "", limit: int = 60, offset: int = 0,
         return [dict(r) for r in rows]
 
 
-def count_disliked(query: str = "") -> int:
+def count_disliked(query: str = "", since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "disliked_at", since_ts, numeric=False)
     with _get_conn() as conn:
         sql = "SELECT COUNT(*) FROM dislikes" + where_sql
         return conn.execute(sql, params).fetchone()[0]
 
 
-def search_disliked(query: str = "", limit: int = 60, offset: int = 0) -> list:
+def search_disliked(query: str = "", limit: int = 60, offset: int = 0,
+                    since_ts: float | None = None) -> list:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "disliked_at", since_ts, numeric=False)
     sql = "SELECT * FROM dislikes" + where_sql + " ORDER BY disliked_at DESC LIMIT ? OFFSET ?"
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
         return [dict(r) for r in rows]
 
 
-def count_unrated(query: str = "") -> int:
+def count_unrated(query: str = "", since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "file_mtime", since_ts, numeric=True)
     sql = "SELECT COUNT(*) FROM generated_images"
     rated_filter = " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '') AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
     if where_sql:
@@ -395,8 +551,10 @@ def count_unrated(query: str = "") -> int:
         return conn.execute(sql, params).fetchone()[0]
 
 
-def search_unrated(query: str = "", limit: int = 48, offset: int = 0) -> list:
+def search_unrated(query: str = "", limit: int = 48, offset: int = 0,
+                   since_ts: float | None = None) -> list:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "file_mtime", since_ts, numeric=True)
     sql = "SELECT * FROM generated_images"
     rated_filter = " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '') AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
     if where_sql:
@@ -451,8 +609,10 @@ def get_indexed_path_mtimes() -> dict:
         return {r[0]: r[1] for r in rows}
 
 
-def count_generated_filtered(query: str = "", exclude_disliked: bool = True) -> int:
+def count_generated_filtered(query: str = "", exclude_disliked: bool = True,
+                            since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "file_mtime", since_ts, numeric=True)
     with _get_conn() as conn:
         base_sql = "SELECT COUNT(*) FROM generated_images"
         if exclude_disliked:
@@ -472,8 +632,9 @@ def count_generated_filtered(query: str = "", exclude_disliked: bool = True) -> 
 
 
 def search_generated(query: str = "", limit: int = 60, offset: int = 0,
-                     exclude_disliked: bool = True) -> list:
+                     exclude_disliked: bool = True, since_ts: float | None = None) -> list:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "file_mtime", since_ts, numeric=True)
     sql = "SELECT * FROM generated_images"
     if exclude_disliked:
         if where_sql:

@@ -319,6 +319,21 @@
         if (previewImage) previewImage.classList.remove('dragging');
     }
 
+    function showEndHint(message) {
+        const app = gradioApp();
+        if (!app) return;
+
+        const host = app.querySelector('#endgal_sync_status') || app.querySelector('#endgal_html');
+        if (!host) return;
+
+        const safeMsg = String(message || 'All images are over.')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        host.innerHTML = `<div id="endgal_end_hint" class="endgal-sync-result">${safeMsg}</div>`;
+    }
+
     function applyTransform() {
         if (!previewImage) return;
         previewImage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
@@ -362,16 +377,28 @@
         const actionB64 = kind === 'like' ? item.endorseAction : item.dislikeAction;
         if (!actionB64) return;
 
-        // Advance first so preview stays in flow even when current card gets filtered out.
-        if (previewList.length > 1) {
+        const atLast = previewIndex >= previewList.length - 1;
+        if (!atLast && previewList.length > 1) {
             stepPreview(1);
+        } else {
+            hidePreview();
+            showEndHint('All images are over.');
         }
+
         executeAction(actionB64, { recordHistory: true, clearRedo: true });
     }
 
     function stepPreview(delta) {
         if (!previewImage || previewList.length === 0) return;
-        previewIndex = (previewIndex + delta + previewList.length) % previewList.length;
+
+        const nextIndex = previewIndex + delta;
+        if (nextIndex < 0 || nextIndex >= previewList.length) {
+            hidePreview();
+            showEndHint('All images are over.');
+            return;
+        }
+
+        previewIndex = nextIndex;
         previewImage.src = previewList[previewIndex].src;
         refreshPreviewActionButtons();
         resetTransform();
@@ -539,6 +566,45 @@
             overlay.classList.add('show');
         },
     };
+
+    /**
+     * Monitor gallery for end-of-gallery state and hide preview when detected
+     */
+    function checkAndHandleEndOfGallery() {
+        const app = gradioApp();
+        if (!app) return;
+
+        const endHint = app.querySelector('#endgal_end_hint');
+        if (endHint) {
+            // End of gallery hint is present - close preview and scroll hint into view
+            hidePreview();
+            setTimeout(() => {
+                endHint.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+        }
+    }
+
+    // Monitor gallery HTML updates for end-of-gallery state
+    function setupEndOfGalleryMonitor() {
+        const galleryContainer = gradioApp().querySelector('#endgal_html');
+        if (!galleryContainer) return;
+
+        const observer = new MutationObserver(() => {
+            checkAndHandleEndOfGallery();
+        });
+
+        observer.observe(galleryContainer, {
+            childList: true,
+            subtree: true,
+        });
+    }
+
+    // Start monitoring when document is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupEndOfGalleryMonitor);
+    } else {
+        setupEndOfGalleryMonitor();
+    }
 
     // ---------------------------------------------------------------------------
     // Auto-refresh gallery on tab focus
