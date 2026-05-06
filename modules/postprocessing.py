@@ -12,6 +12,7 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
     shared.state.begin(job="extras")
 
     outputs = []
+    captions_out: list[str] = []
 
     def get_images(extras_mode, image, image_folder, input_dir):
         if extras_mode == 1:
@@ -121,12 +122,22 @@ def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, 
                         with open(caption_filename, "w", encoding="utf8") as file:
                             file.write(caption)
 
+            if pp.caption:
+                captions_out.append(pp.caption)
+
             if extras_mode != 2 or show_extras_results:
                 outputs.append(pp.image)
 
     devices.torch_gc()
     shared.state.end()
-    return outputs, ui_common.plaintext_to_html(infotext), ''
+
+    caption_html = ""
+    if captions_out:
+        joined = "\n".join(captions_out)
+        escaped = joined.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        caption_html = f'<div style="margin-top:8px;padding:8px 10px;background:#1e293b;border:1px solid #334155;border-radius:6px;font-size:13px;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;">{escaped}</div>'
+
+    return outputs, ui_common.plaintext_to_html(infotext), caption_html
 
 
 def run_postprocessing_webui(id_task, *args, **kwargs):

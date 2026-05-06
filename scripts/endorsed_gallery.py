@@ -161,7 +161,7 @@ def _apply_removebg(path: str) -> tuple[bool, str]:
     return True, f"Removebg saved: {_html.escape(fullfn)}"
 
 
-def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None) -> str:
+def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False) -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
     seed = str(record.get("seed", ""))
@@ -196,9 +196,14 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     endorse_action_b64 = _b64(json.dumps(endorse_action))
     dislike_action_b64 = _b64(json.dumps(dislike_action))
 
+    item_key = endorsement_db._item_key_from_path(path)
     infotext = record.get("infotext", "")
     infotext_b64 = _b64(infotext)
     path_b64 = _b64(path)
+    archive_action = _b64(json.dumps({"type": "unarchive" if is_archived else "archive", "item_key": item_key, **_action_payload(record)}))
+    archive_label = "📤" if is_archived else "📦"
+    archive_class = "endgal-archive active" if is_archived else "endgal-archive"
+    archive_title = "unarchive" if is_archived else "archive (hide from Unrated)"
 
     tags = tags or []
     # Top 20 tags for display; full list encoded for preview
@@ -221,9 +226,11 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
 
     tags_section = (
+        f'<details class="endgal-details endgal-tags-details">'
+        f'<summary>Caption ({len(tags_display)})</summary>'
         f'<div class="endgal-tags">{tags_pills_html}</div>'
-        if tags_pills_html else
-        '<div class="endgal-tags endgal-tags-empty">No caption yet</div>'
+        f'</details>'
+        if tags_pills_html else ''
     )
 
     return f"""
@@ -245,6 +252,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">img2img</button>
         <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
     <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
+        <button class="{archive_class}" title="{archive_title}" onclick="endorsedGallery.action('{archive_action}')">{archive_label}</button>
         <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
   </div>
 </div>
@@ -362,7 +370,14 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
         else:
             total = 0
             rows = []
-    elif mode == "👎 Disliked":
+    elif mode == "� Archived":
+        if hasattr(endorsement_db, "count_archived") and hasattr(endorsement_db, "search_archived"):
+            total = _call_db("count_archived", query, since_ts=since_ts)
+            rows = _call_db("search_archived", query, limit=page_size, offset=offset, since_ts=since_ts)
+        else:
+            total = 0
+            rows = []
+    elif mode == "�👎 Disliked":
         if hasattr(endorsement_db, "count_disliked") and hasattr(endorsement_db, "search_disliked"):
             total = _call_db("count_disliked", query, since_ts=since_ts)
             rows = _call_db("search_disliked", query, limit=page_size, offset=offset, since_ts=since_ts)
@@ -429,12 +444,14 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     if not rows:
         return '<div class="endgal-empty">No images found for this filter.</div>', f"0 items · page 1/1", 1, is_last_page
 
-    # Batch-fetch tags for all cards on this page
+    # Batch-fetch tags and archived status for all cards on this page
     item_keys = [
         endorsement_db._item_key_from_path(r.get("path") or r.get("image_path", ""))
         for r in rows
     ]
-    tags_map = endorsement_db.get_tags_for_items([k for k in item_keys if k])
+    valid_keys = [k for k in item_keys if k]
+    tags_map = endorsement_db.get_tags_for_items(valid_keys)
+    archived_keys = endorsement_db.get_archived_item_keys(valid_keys) if hasattr(endorsement_db, "get_archived_item_keys") else set()
 
     cards = []
     for rec, item_key in zip(rows, item_keys):
@@ -442,7 +459,8 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
         eid = endorsement_db.get_endorsed_id_by_path(path)
         did = endorsement_db.get_disliked_id_by_path(path)
         tags = tags_map.get(item_key, [])
-        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags))
+        is_arch = item_key in archived_keys
+        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch))
 
     header = f'<div class="endgal-count">{total} items</div>'
     grid = '<div class="endgal-grid" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
@@ -541,6 +559,17 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
             path = data.get("path", "")
             if path:
                 endorsement_db.delete_dislike_by_path(path)
+    elif t == "archive":
+        item_key = data.get("item_key") or endorsement_db._item_key_from_path(data.get("path", ""))
+        if item_key:
+            endorsement_db.archive_item(item_key)
+    elif t == "unarchive":
+        item_key = data.get("item_key") or endorsement_db._item_key_from_path(data.get("path", ""))
+        if item_key:
+            endorsement_db.unarchive_item(item_key)
+    elif t == "archive_all_unrated":
+        count = endorsement_db.archive_all_unrated()
+        status_message = f'<div class="endgal-sync-result">Archived {count} unrated image(s).</div>'
     elif t == "removebg":
         ok, status_message = _apply_removebg(data.get("path", ""))
         if not ok:
@@ -658,7 +687,7 @@ def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_controls_row"):
             mode_radio = gr.Radio(
-                choices=["⭐ Endorsed", "🖼 All Generated", "⬜ Unrated", "👎 Disliked"],
+                choices=["⭐ Endorsed", "🖼 All Generated", "⬜ Unrated", "� Archived", "�👎 Disliked"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",
@@ -686,6 +715,7 @@ def on_ui_tabs():
             )
             refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
             sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm")
+            archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
 
         with gr.Row(elem_id="endgal_pager_row"):
             prev_btn = gr.Button("Prev", elem_id="endgal_prev_btn", size="sm")
@@ -742,6 +772,13 @@ def on_ui_tabs():
             html, info, page, is_last = render_gallery(mode, query, pg, int(size), date_filter)
             return f'<div class="endgal-sync-result">{_html.escape(msg)}</div>', html, info, info, page
 
+        def do_archive_unrated(mode, query, pg, size, date_filter):
+            action_json = json.dumps({"type": "archive_all_unrated"})
+            status, html, info, info2, page = handle_gallery_action(
+                action_json, mode, query, pg, int(size), date_filter
+            )
+            return status, html, info, info2, page
+
         refresh_btn.click(
             fn=_reset_to_first_page,
             inputs=[mode_radio, search_box, page_size, date_filter],
@@ -792,6 +829,12 @@ def on_ui_tabs():
 
         sync_btn.click(
             fn=do_sync,
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
+        )
+
+        archive_unrated_btn.click(
+            fn=do_archive_unrated,
             inputs=[mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )

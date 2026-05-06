@@ -1,3 +1,6 @@
 [submodule "repositories/rembg"]
 	path = repositories/rembg
 	url = https://github.com/danielgatis/rembg
+[submodule "kohya_ss"]
+	path = kohya_ss
+	url = https://github.com/bmaltais/kohya_ss.git

@@ -100,6 +100,10 @@ def calc_resolution_hires(enable, width, height, hr_scale, hr_resize_x, hr_resiz
     return f"from <span class='resolution'>{p.width}x{p.height}</span> to <span class='resolution'>{p.hr_resize_x or p.hr_upscale_to_x}x{p.hr_resize_y or p.hr_upscale_to_y}</span>"
 
 
+def apply_size_preset(width, height):
+    return gr.update(value=width), gr.update(value=height)
+
+
 def resize_from_to_html(width, height, scale_by):
     target_width = int(width * scale_by)
     target_height = int(height * scale_by)
@@ -301,6 +305,10 @@ def create_ui():
                             with gr.Column(elem_id="txt2img_column_size", scale=4):
                                 width = gr.Slider(minimum=64, maximum=2048, step=8, label="Width", value=512, elem_id="txt2img_width")
                                 height = gr.Slider(minimum=64, maximum=2048, step=8, label="Height", value=512, elem_id="txt2img_height")
+                                with FormRow(elem_id="txt2img_size_presets"):
+                                    txt2img_preset_2_3 = gr.Button("832×1216 (2:3)", elem_id="txt2img_preset_2_3")
+                                    txt2img_preset_1_1 = gr.Button("1024×1024 (1:1)", elem_id="txt2img_preset_1_1")
+                                    txt2img_preset_3_2 = gr.Button("1216×832 (3:2)", elem_id="txt2img_preset_3_2")
 
                             with gr.Column(elem_id="txt2img_dimensions_row", scale=1, elem_classes="dimensions-tools"):
                                 res_switch_btn = ToolButton(value=switch_values_symbol, elem_id="txt2img_res_switch_btn", tooltip="Switch width/height")
@@ -450,6 +458,9 @@ def create_ui():
             )
 
             res_switch_btn.click(fn=None, _js="function(){switchWidthHeight('txt2img')}", inputs=None, outputs=None, show_progress=False)
+            txt2img_preset_2_3.click(fn=lambda: apply_size_preset(832, 1216), inputs=None, outputs=[width, height], show_progress=False)
+            txt2img_preset_1_1.click(fn=lambda: apply_size_preset(1024, 1024), inputs=None, outputs=[width, height], show_progress=False)
+            txt2img_preset_3_2.click(fn=lambda: apply_size_preset(1216, 832), inputs=None, outputs=[width, height], show_progress=False)
 
             toprow.restore_progress_button.click(
                 fn=progress.restore_progress,
@@ -648,6 +659,10 @@ def create_ui():
                                             with gr.Column(elem_id="img2img_column_size", scale=4):
                                                 width = gr.Slider(minimum=64, maximum=2048, step=8, label="Width", value=512, elem_id="img2img_width")
                                                 height = gr.Slider(minimum=64, maximum=2048, step=8, label="Height", value=512, elem_id="img2img_height")
+                                                with FormRow(elem_id="img2img_size_presets"):
+                                                    img2img_preset_2_3 = gr.Button("832×1216 (2:3)", elem_id="img2img_preset_2_3")
+                                                    img2img_preset_1_1 = gr.Button("1024×1024 (1:1)", elem_id="img2img_preset_1_1")
+                                                    img2img_preset_3_2 = gr.Button("1216×832 (3:2)", elem_id="img2img_preset_3_2")
                                             with gr.Column(elem_id="img2img_dimensions_row", scale=1, elem_classes="dimensions-tools"):
                                                 res_switch_btn = ToolButton(value=switch_values_symbol, elem_id="img2img_res_switch_btn", tooltip="Switch width/height")
                                                 detect_image_size_btn = ToolButton(value=detect_image_size_symbol, elem_id="img2img_detect_image_size_btn", tooltip="Auto detect size from img2img")
@@ -827,6 +842,9 @@ def create_ui():
             )
 
             res_switch_btn.click(fn=None, _js="function(){switchWidthHeight('img2img')}", inputs=None, outputs=None, show_progress=False)
+            img2img_preset_2_3.click(fn=lambda: apply_size_preset(832, 1216), inputs=None, outputs=[width, height], show_progress=False)
+            img2img_preset_1_1.click(fn=lambda: apply_size_preset(1024, 1024), inputs=None, outputs=[width, height], show_progress=False)
+            img2img_preset_3_2.click(fn=lambda: apply_size_preset(1216, 832), inputs=None, outputs=[width, height], show_progress=False)
 
             detect_image_size_btn.click(
                 fn=lambda w, h, _: (w or gr.update(), h or gr.update()),

@@ -176,7 +176,21 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_endorsements_item_key ON endorsements(item_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dislikes_item_key ON dislikes(item_key)")
         _ensure_image_tags_table(conn)
+        _ensure_archived_table(conn)
         conn.commit()
+
+
+def _ensure_archived_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS archived (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_key    TEXT    NOT NULL UNIQUE,
+            archived_at TEXT    NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_item_key ON archived(item_key)")
 
 
 def _ensure_image_tags_table(conn):
@@ -813,12 +827,12 @@ def search_disliked(query: str = "", limit: int = 60, offset: int = 0,
 def count_unrated(query: str = "", since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
     where_sql, params = _append_time_filter(where_sql, params, "file_mtime", since_ts, numeric=True)
-    sql = "SELECT COUNT(*) FROM generated_images"
-    rated_filter = " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '') AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
-    if where_sql:
-        sql += where_sql + rated_filter
-    else:
-        sql += " WHERE item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '') AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
+    rated_filter = (
+        " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')"
+    )
+    sql = "SELECT COUNT(*) FROM generated_images" + (where_sql if where_sql else " WHERE 1=1") + rated_filter
     with _get_conn() as conn:
         return conn.execute(sql, params).fetchone()[0]
 
@@ -827,13 +841,100 @@ def search_unrated(query: str = "", limit: int = 48, offset: int = 0,
                    since_ts: float | None = None) -> list:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
     where_sql, params = _append_time_filter(where_sql, params, "file_mtime", since_ts, numeric=True)
-    sql = "SELECT * FROM generated_images"
-    rated_filter = " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '') AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
-    if where_sql:
-        sql += where_sql + rated_filter
-    else:
-        sql += " WHERE item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '') AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
-    sql += " ORDER BY file_mtime DESC LIMIT ? OFFSET ?"
+    rated_filter = (
+        " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')"
+    )
+    sql = ("SELECT * FROM generated_images"
+           + (where_sql if where_sql else " WHERE 1=1")
+           + rated_filter
+           + " ORDER BY file_mtime DESC LIMIT ? OFFSET ?")
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
+        return [dict(r) for r in rows]
+
+
+def is_archived(item_key: str) -> bool:
+    if not item_key:
+        return False
+    with _get_conn() as conn:
+        row = conn.execute("SELECT id FROM archived WHERE item_key=?", (item_key,)).fetchone()
+    return row is not None
+
+
+def archive_item(item_key: str) -> None:
+    if not item_key:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO archived (item_key, archived_at) VALUES (?,?)",
+            (item_key, now),
+        )
+        conn.commit()
+
+
+def unarchive_item(item_key: str) -> None:
+    if not item_key:
+        return
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM archived WHERE item_key=?", (item_key,))
+        conn.commit()
+
+
+def archive_all_unrated() -> int:
+    """Archive all generated images not yet endorsed, disliked, or archived. Returns count added."""
+    now = datetime.now().isoformat(timespec="seconds")
+    sql = """
+        INSERT OR IGNORE INTO archived (item_key, archived_at)
+        SELECT item_key, ?
+        FROM generated_images
+        WHERE item_key IS NOT NULL AND item_key != ''
+          AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')
+          AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')
+          AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(sql, (now,))
+        conn.commit()
+        return cur.rowcount
+
+
+def get_archived_item_keys(item_keys: list[str]) -> set:
+    """Return subset of item_keys that are archived."""
+    if not item_keys:
+        return set()
+    placeholders = ",".join(["?"] * len(item_keys))
+    with _get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT item_key FROM archived WHERE item_key IN ({placeholders})",
+            item_keys,
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def count_archived(query: str = "", since_ts: float | None = None) -> int:
+    where_sql, params = _build_keyword_where(query, ["g.prompt", "g.negative_prompt", "g.model_name", "g.sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "g.file_mtime", since_ts, numeric=True)
+    base = """
+        SELECT COUNT(*)
+        FROM archived a
+        JOIN generated_images g ON g.item_key = a.item_key
+    """
+    with _get_conn() as conn:
+        return conn.execute(base + where_sql, params).fetchone()[0]
+
+
+def search_archived(query: str = "", limit: int = 48, offset: int = 0,
+                    since_ts: float | None = None) -> list:
+    where_sql, params = _build_keyword_where(query, ["g.prompt", "g.negative_prompt", "g.model_name", "g.sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "g.file_mtime", since_ts, numeric=True)
+    sql = (
+        "SELECT g.* FROM archived a JOIN generated_images g ON g.item_key = a.item_key"
+        + where_sql
+        + " ORDER BY a.archived_at DESC LIMIT ? OFFSET ?"
+    )
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
         return [dict(r) for r in rows]

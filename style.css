@@ -1870,6 +1870,19 @@ body.resizing .resize-handle {
 .endgal-dislike:hover { transform: scale(1.12); }
 .endgal-dislike.active { color: #ef4444; }
 
+.endgal-archive {
+    font-size: 18px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 6px;
+    line-height: 1;
+    color: #94a3b8;
+    transition: transform 0.1s;
+}
+.endgal-archive:hover { transform: scale(1.12); color: #f59e0b; }
+.endgal-archive.active { color: #f59e0b; }
+
 .endgal-btn-copy,
 .endgal-btn-send2img {
     font-size: 12px;
