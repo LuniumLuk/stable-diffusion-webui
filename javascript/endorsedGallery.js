@@ -181,6 +181,7 @@
             '<button id="endgal_preview_prev" class="endgal-preview-nav" aria-label="Previous image">‹</button>',
             '<img id="endgal_preview_image" alt="preview" />',
             '<button id="endgal_preview_next" class="endgal-preview-nav" aria-label="Next image">›</button>',
+            '<div id="endgal_preview_tags"></div>',
             '<div id="endgal_preview_actions">',
             '  <button id="endgal_preview_like" class="endgal-preview-action" title="toggle endorse">☆</button>',
             '  <button id="endgal_preview_dislike" class="endgal-preview-action" title="toggle dislike">⬇</button>',
@@ -355,6 +356,10 @@
                 dislikeAction: el.dataset.dislikeAction || '',
                 endorseLabel: el.dataset.endorseLabel || '☆',
                 dislikeLabel: el.dataset.dislikeLabel || '⬇',
+                tags: (() => {
+                    try { return JSON.parse(atob(el.dataset.tags || '')); }
+                    catch (e) { return []; }
+                })(),
             }))
             .filter(item => Boolean(item.src));
     }
@@ -369,6 +374,20 @@
             previewDislikeBtn.textContent = item ? (item.dislikeLabel || '⬇') : '⬇';
             previewDislikeBtn.disabled = !(item && item.dislikeAction);
         }
+    }
+
+    function refreshPreviewTags() {
+        const tagsEl = previewOverlay && previewOverlay.querySelector('#endgal_preview_tags');
+        if (!tagsEl) return;
+        const item = previewList[previewIndex] || null;
+        const tags = (item && item.tags) || [];
+        if (!tags.length) {
+            tagsEl.innerHTML = '<span class="endgal-preview-tags-empty">No caption</span>';
+            return;
+        }
+        tagsEl.innerHTML = tags
+            .map(t => `<span class="endgal-tag-pill endgal-tag-pill-preview">${t.replace(/_/g, ' ')}</span>`)
+            .join('');
     }
 
     function triggerPreviewAction(kind) {
@@ -401,6 +420,7 @@
         previewIndex = nextIndex;
         previewImage.src = previewList[previewIndex].src;
         refreshPreviewActionButtons();
+        refreshPreviewTags();
         resetTransform();
     }
 
@@ -562,6 +582,7 @@
             if (!previewImage) return;
             previewImage.src = previewList[previewIndex].src;
             refreshPreviewActionButtons();
+            refreshPreviewTags();
             resetTransform();
             overlay.classList.add('show');
         },

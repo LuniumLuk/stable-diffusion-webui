@@ -1984,6 +1984,180 @@ body.resizing .resize-handle {
     cursor: default;
 }
 
+/* ---- Keyword Insights panel ---- */
+.endgal-insights-desc {
+    font-size: 12px;
+    color: var(--body-text-color-subdued, #94a3b8);
+    margin-bottom: 8px;
+}
+.endgal-insights-status {
+    font-size: 11px;
+    color: var(--body-text-color-subdued, #94a3b8);
+    padding: 4px 0 8px;
+}
+.endgal-insights-progress {
+    padding: 8px 0 12px;
+}
+.endgal-progress-label {
+    font-size: 12px;
+    color: #7dd3fc;
+    margin-bottom: 6px;
+}
+.endgal-progress-bar-wrap {
+    height: 6px;
+    background: #1e293b;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #334155;
+}
+.endgal-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    border-radius: 4px;
+    transition: width 0.15s ease;
+}
+
+/* ---- Card tag pills ---- */
+.endgal-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    padding: 4px 0 2px;
+}
+.endgal-tags-empty {
+    font-size: 10px;
+    color: var(--body-text-color-subdued, #64748b);
+    font-style: italic;
+}
+.endgal-tag-pill {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #1e3a5f;
+    color: #93c5fd;
+    border: 1px solid #2563eb44;
+    white-space: nowrap;
+    cursor: default;
+    line-height: 1.5;
+}
+
+/* ---- Preview overlay tags ---- */
+#endgal_preview_tags {
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(92vw, 900px);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+    z-index: 1201;
+    padding: 6px 12px;
+    background: rgba(2, 6, 23, 0.72);
+    border-radius: 8px;
+    border: 1px solid #334155;
+    max-height: 120px;
+    overflow-y: auto;
+}
+.endgal-tag-pill-preview {
+    font-size: 11px;
+    padding: 2px 7px;
+    background: #1e3a5f;
+    color: #93c5fd;
+    border: 1px solid #2563eb55;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.endgal-preview-tags-empty {
+    font-size: 11px;
+    color: #64748b;
+    font-style: italic;
+}
+.endgal-insights-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--body-text-color-subdued, #94a3b8);
+    font-size: 13px;
+    border: 1px dashed #334155;
+    border-radius: 8px;
+}
+.endgal-insights-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 8px;
+}
+@media (max-width: 700px) {
+    .endgal-insights-grid { grid-template-columns: 1fr; }
+}
+.endgal-insights-col {
+    border: 1px solid var(--block-border-color, #334155);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.endgal-insights-header {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 12px;
+}
+.endgal-add-header {
+    background: #052e16;
+    color: #86efac;
+    border-bottom: 1px solid #166534;
+}
+.endgal-remove-header {
+    background: #450a0a;
+    color: #fca5a5;
+    border-bottom: 1px solid #991b1b;
+}
+.endgal-insights-hint {
+    font-size: 11px;
+    color: var(--body-text-color-subdued, #94a3b8);
+    padding: 4px 12px 6px;
+    border-bottom: 1px solid var(--block-border-color, #334155);
+}
+.endgal-tag-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.endgal-tag-table thead th {
+    text-align: left;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--body-text-color-subdued, #94a3b8);
+    border-bottom: 1px solid var(--block-border-color, #334155);
+    background: var(--block-background-fill, #1e293b);
+}
+.endgal-tag-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+}
+.endgal-tag-table tbody tr:hover {
+    background: rgba(56, 189, 248, 0.08);
+}
+.endgal-tag-name {
+    padding: 4px 10px;
+    color: var(--body-text-color, #e2e8f0);
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.endgal-tag-counts {
+    padding: 4px 10px;
+    color: #7dd3fc;
+    white-space: nowrap;
+    font-size: 11px;
+}
+.endgal-tag-score {
+    padding: 4px 10px;
+    color: var(--body-text-color-subdued, #94a3b8);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
 
 .extra-network-tree .tree-list-content[data-expanded]+.tree-list--subgroup {
     height: auto;

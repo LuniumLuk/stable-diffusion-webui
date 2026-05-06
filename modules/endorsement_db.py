@@ -175,7 +175,271 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_item_key ON generated_images(item_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_endorsements_item_key ON endorsements(item_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dislikes_item_key ON dislikes(item_key)")
+        _ensure_image_tags_table(conn)
         conn.commit()
+
+
+def _ensure_image_tags_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS image_tags (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_key    TEXT    NOT NULL,
+            tag         TEXT    NOT NULL,
+            score       REAL    NOT NULL DEFAULT 0,
+            label       TEXT    NOT NULL,
+            tagged_at   TEXT    NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_image_tags_item_label ON image_tags(item_key, label)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_image_tags_tag_label  ON image_tags(tag, label)")
+
+
+def save_image_tags(item_key: str, tags_dict: dict, label: str) -> None:
+    """Save deepbooru tags for an image. Replaces any existing tags for the same item+label."""
+    if not item_key or not tags_dict:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM image_tags WHERE item_key=? AND label=?", (item_key, label))
+        conn.executemany(
+            "INSERT INTO image_tags (item_key, tag, score, label, tagged_at) VALUES (?,?,?,?,?)",
+            [(item_key, tag, float(score), label, now) for tag, score in tags_dict.items()],
+        )
+        conn.commit()
+
+
+def get_tag_analysis(min_appearances: int = 1) -> dict:
+    """
+    Aggregate deepbooru tag statistics across endorsed and disliked images.
+
+    Returns a dict with keys:
+      'add'    – tags appearing more in endorsed images (sorted by net desc)
+      'remove' – tags appearing more in disliked images (sorted by |net| desc)
+      'neutral'– tags with equal counts
+    Each entry: {tag, endorse_count, dislike_count, net, endorse_avg, dislike_avg}
+    """
+    sql = """
+        SELECT
+            tag,
+            SUM(CASE WHEN label='endorse' THEN 1 ELSE 0 END) AS endorse_count,
+            SUM(CASE WHEN label='dislike' THEN 1 ELSE 0 END) AS dislike_count,
+            AVG(CASE WHEN label='endorse' THEN score ELSE NULL END) AS endorse_avg,
+            AVG(CASE WHEN label='dislike' THEN score ELSE NULL END) AS dislike_avg,
+            COUNT(*) AS total
+        FROM image_tags
+        GROUP BY tag
+        HAVING total >= ?
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(sql, (min_appearances,)).fetchall()
+
+    add_list, remove_list, neutral_list = [], [], []
+    for row in rows:
+        e = row["endorse_count"] or 0
+        d = row["dislike_count"] or 0
+        entry = {
+            "tag": row["tag"],
+            "endorse_count": e,
+            "dislike_count": d,
+            "net": e - d,
+            "endorse_avg": round(row["endorse_avg"] or 0.0, 3),
+            "dislike_avg": round(row["dislike_avg"] or 0.0, 3),
+        }
+        if entry["net"] > 0:
+            add_list.append(entry)
+        elif entry["net"] < 0:
+            remove_list.append(entry)
+        else:
+            neutral_list.append(entry)
+
+    add_list.sort(key=lambda x: -x["net"])
+    remove_list.sort(key=lambda x: x["net"])  # Most negative first
+    return {"add": add_list, "remove": remove_list, "neutral": neutral_list}
+
+
+def get_all_endorsed_items(query: str = "", since_ts=None) -> list[tuple[str, str]]:
+    """Return all (image_path, item_key) from endorsements matching query + date filter."""
+    where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "endorsed_at", since_ts, numeric=False)
+    sql = "SELECT image_path, item_key FROM endorsements" + where_sql + " ORDER BY endorsed_at DESC"
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [(r[0], r[1]) for r in rows if r[0] and r[1]]
+
+
+def get_all_disliked_items(query: str = "", since_ts=None) -> list[tuple[str, str]]:
+    """Return all (image_path, item_key) from dislikes matching query + date filter."""
+    where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "disliked_at", since_ts, numeric=False)
+    sql = "SELECT image_path, item_key FROM dislikes" + where_sql + " ORDER BY disliked_at DESC"
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [(r[0], r[1]) for r in rows if r[0] and r[1]]
+
+
+def get_untagged_images() -> list[tuple[str, str]]:
+    """Return list of (image_path, label) for endorsed/disliked images with no image_tags entry."""
+    sql = """
+        SELECT e.image_path, 'endorse' AS label, e.item_key
+        FROM endorsements e
+        WHERE e.item_key IS NOT NULL AND e.item_key != ''
+          AND e.item_key NOT IN (
+              SELECT DISTINCT item_key FROM image_tags WHERE label='endorse'
+          )
+        UNION ALL
+        SELECT d.image_path, 'dislike' AS label, d.item_key
+        FROM dislikes d
+        WHERE d.item_key IS NOT NULL AND d.item_key != ''
+          AND d.item_key NOT IN (
+              SELECT DISTINCT item_key FROM image_tags WHERE label='dislike'
+          )
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [(row[0], row[1]) for row in rows if row[0]]
+
+
+def get_untagged_filtered(
+    endorse_keys: set,
+    dislike_keys: set,
+) -> list[tuple[str, str, str]]:
+    """Return (image_path, label, item_key) for items in the given key sets that have no tags yet."""
+    if not endorse_keys and not dislike_keys:
+        return []
+
+    results = []
+    with _get_conn() as conn:
+        if endorse_keys:
+            already = {
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT item_key FROM image_tags WHERE label='endorse'"
+                ).fetchall()
+            }
+            for path, key in _lookup_paths_for_keys(conn, "endorsements", "image_path", endorse_keys):
+                if key not in already:
+                    results.append((path, "endorse", key))
+
+        if dislike_keys:
+            already = {
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT item_key FROM image_tags WHERE label='dislike'"
+                ).fetchall()
+            }
+            for path, key in _lookup_paths_for_keys(conn, "dislikes", "image_path", dislike_keys):
+                if key not in already:
+                    results.append((path, "dislike", key))
+
+    return results
+
+
+def _lookup_paths_for_keys(conn, table: str, path_col: str, keys: set) -> list[tuple[str, str]]:
+    """Fetch (path, item_key) rows from table for the given item_key set."""
+    if not keys:
+        return []
+    placeholders = ",".join(["?"] * len(keys))
+    rows = conn.execute(
+        f"SELECT {path_col}, item_key FROM {table} WHERE item_key IN ({placeholders})",
+        list(keys),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows if r[0]]
+
+
+def get_tags_for_items(item_keys: list[str]) -> dict[str, list[str]]:
+    """Return {item_key: [tag, ...]} sorted by score desc, for display in cards/preview.
+    Only the highest-confidence label's tags are returned per item (endorse wins over dislike).
+    """
+    if not item_keys:
+        return {}
+    placeholders = ",".join(["?"] * len(item_keys))
+    sql = f"""
+        SELECT item_key, tag, score, label
+        FROM image_tags
+        WHERE item_key IN ({placeholders})
+        ORDER BY item_key, score DESC
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(sql, item_keys).fetchall()
+
+    # Collect tags per item; prefer 'endorse' label tags if both exist
+    result: dict[str, dict[str, list[str]]] = {}
+    for row in rows:
+        key = row[0]
+        tag = row[1]
+        label = row[3]
+        result.setdefault(key, {"endorse": [], "dislike": []})
+        result[key][label].append(tag)
+
+    out: dict[str, list[str]] = {}
+    for key, by_label in result.items():
+        tags = by_label["endorse"] if by_label["endorse"] else by_label["dislike"]
+        out[key] = tags
+    return out
+
+
+def get_tag_analysis_filtered(
+    endorse_keys: set,
+    dislike_keys: set,
+    min_appearances: int = 1,
+) -> dict:
+    """Like get_tag_analysis() but restricted to the given item_key sets per label."""
+    if not endorse_keys and not dislike_keys:
+        return {"add": [], "remove": [], "neutral": []}
+
+    conditions = []
+    params: list = []
+    if endorse_keys:
+        ph = ",".join(["?"] * len(endorse_keys))
+        conditions.append(f"(label='endorse' AND item_key IN ({ph}))")
+        params.extend(list(endorse_keys))
+    if dislike_keys:
+        ph = ",".join(["?"] * len(dislike_keys))
+        conditions.append(f"(label='dislike' AND item_key IN ({ph}))")
+        params.extend(list(dislike_keys))
+
+    where = " WHERE (" + " OR ".join(conditions) + ")"
+
+    sql = f"""
+        SELECT
+            tag,
+            SUM(CASE WHEN label='endorse' THEN 1 ELSE 0 END) AS endorse_count,
+            SUM(CASE WHEN label='dislike' THEN 1 ELSE 0 END) AS dislike_count,
+            AVG(CASE WHEN label='endorse' THEN score ELSE NULL END) AS endorse_avg,
+            AVG(CASE WHEN label='dislike' THEN score ELSE NULL END) AS dislike_avg,
+            COUNT(*) AS total
+        FROM image_tags
+        {where}
+        GROUP BY tag
+        HAVING total >= ?
+    """
+    params.append(min_appearances)
+
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    add_list, remove_list, neutral_list = [], [], []
+    for row in rows:
+        e = row["endorse_count"] or 0
+        d = row["dislike_count"] or 0
+        entry = {
+            "tag": row["tag"],
+            "endorse_count": e,
+            "dislike_count": d,
+            "net": e - d,
+            "endorse_avg": round(row["endorse_avg"] or 0.0, 3),
+            "dislike_avg": round(row["dislike_avg"] or 0.0, 3),
+        }
+        if entry["net"] > 0:
+            add_list.append(entry)
+        elif entry["net"] < 0:
+            remove_list.append(entry)
+        else:
+            neutral_list.append(entry)
+
+    add_list.sort(key=lambda x: -x["net"])
+    remove_list.sort(key=lambda x: x["net"])
+    return {"add": add_list, "remove": remove_list, "neutral": neutral_list}
 
 
 def _build_keyword_where(query: str, fields: list[str]) -> tuple[str, list]:

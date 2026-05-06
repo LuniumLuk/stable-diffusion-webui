@@ -94,5 +94,30 @@ class DeepDanbooru:
 
         return ", ".join(res)
 
+    def tag_raw(self, pil_image):
+        """Return {tag: score} dict for all predicted tags above threshold.
+        Tags are raw underscore-form (no space/escape formatting). Excludes rating: tags.
+        """
+        self.start()
+        threshold = shared.opts.interrogate_deepbooru_score_threshold
+
+        pic = images.resize_image(2, pil_image.convert("RGB"), 512, 512)
+        a = np.expand_dims(np.array(pic, dtype=np.float32), 0) / 255
+
+        with torch.no_grad(), devices.autocast():
+            x = torch.from_numpy(a).to(devices.device, devices.dtype)
+            y = self.model(x)[0].detach().cpu().numpy()
+
+        result = {}
+        for tag, probability in zip(self.model.tags, y):
+            if probability < threshold:
+                continue
+            if tag.startswith("rating:"):
+                continue
+            result[tag] = float(probability)
+
+        self.stop()
+        return result
+
 
 model = DeepDanbooru()

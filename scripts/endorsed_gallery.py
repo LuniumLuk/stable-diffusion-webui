@@ -13,6 +13,7 @@ import gradio as gr
 from PIL import Image
 
 from modules import endorsement_db
+from modules import gallery_tagger
 from modules import infotext_utils
 from modules import images
 from modules import rembg_utils
@@ -160,7 +161,7 @@ def _apply_removebg(path: str) -> tuple[bool, str]:
     return True, f"Removebg saved: {_html.escape(fullfn)}"
 
 
-def _card_html(record: dict, endorsed_id=None, disliked_id=None) -> str:
+def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None) -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
     seed = str(record.get("seed", ""))
@@ -199,6 +200,15 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None) -> str:
     infotext_b64 = _b64(infotext)
     path_b64 = _b64(path)
 
+    tags = tags or []
+    # Top 20 tags for display; full list encoded for preview
+    tags_display = tags[:20]
+    tags_full_b64 = _b64(json.dumps(tags))
+    tags_pills_html = "".join(
+        f'<span class="endgal-tag-pill">{_html.escape(t.replace("_", " "))}</span>'
+        for t in tags_display
+    )
+
     thumb_html = (
         f'<img src="{thumb}" alt="generated image" loading="lazy" '
         f'data-orig="{orig_url}" '
@@ -206,8 +216,15 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None) -> str:
         f'data-dislike-action="{dislike_action_b64}" '
         f'data-endorse-label="{endorse_label}" '
         f'data-dislike-label="{dislike_label}" '
+        f'data-tags="{tags_full_b64}" '
         f'onclick="endorsedGallery.previewImage(this.dataset.orig || this.src)" />'
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
+
+    tags_section = (
+        f'<div class="endgal-tags">{tags_pills_html}</div>'
+        if tags_pills_html else
+        '<div class="endgal-tags endgal-tags-empty">No caption yet</div>'
+    )
 
     return f"""
 <div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
@@ -216,6 +233,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None) -> str:
     <div class="endgal-prompt">{_html.escape(prompt[:220])}</div>
     <div class="endgal-meta">seed { _html.escape(seed) } · { _html.escape(sampler) } · { _html.escape(model) }</div>
     <div class="endgal-date">{_html.escape(date)}</div>
+    {tags_section}
     <details class="endgal-details">
       <summary>Params</summary>
       <pre class="endgal-infotext">{_html.escape(infotext)}</pre>
@@ -411,12 +429,20 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     if not rows:
         return '<div class="endgal-empty">No images found for this filter.</div>', f"0 items · page 1/1", 1, is_last_page
 
+    # Batch-fetch tags for all cards on this page
+    item_keys = [
+        endorsement_db._item_key_from_path(r.get("path") or r.get("image_path", ""))
+        for r in rows
+    ]
+    tags_map = endorsement_db.get_tags_for_items([k for k in item_keys if k])
+
     cards = []
-    for rec in rows:
+    for rec, item_key in zip(rows, item_keys):
         path = rec.get("path") or rec.get("image_path", "")
         eid = endorsement_db.get_endorsed_id_by_path(path)
         did = endorsement_db.get_disliked_id_by_path(path)
-        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did))
+        tags = tags_map.get(item_key, [])
+        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags))
 
     header = f'<div class="endgal-count">{total} items</div>'
     grid = '<div class="endgal-grid" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
@@ -465,8 +491,9 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
     t = data.get("type", "")
     status_message = ""
     if t == "endorse":
+        _endorse_path = data.get("path", "")
         endorsement_db.endorse(
-            data.get("path", ""),
+            _endorse_path,
             data.get("prompt", ""),
             data.get("negative_prompt", ""),
             str(data.get("seed", "")),
@@ -479,6 +506,7 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
             data.get("model_hash", ""),
             data.get("infotext", ""),
         )
+        gallery_tagger.queue_tag(_endorse_path, "endorse")
     elif t == "remove_endorse":
         eid = int(data.get("id", 0) or 0)
         if eid > 0:
@@ -504,6 +532,7 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
             data.get("infotext", ""),
         )
         endorsement_db.delete_endorsement_by_path(path)
+        gallery_tagger.queue_tag(path, "dislike")
     elif t == "remove_dislike":
         did = int(data.get("id", 0) or 0)
         if did > 0:
@@ -531,6 +560,98 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         html = html + hint_html
     
     return status_message, html, info, info, page
+
+
+def get_keyword_insights_html(mode: str = "", query: str = "", date_filter: str = ""):
+    """Generator: yields progress HTML while tagging, then yields the final analysis."""
+    since_ts = _date_filter_to_since_ts(date_filter)
+
+    # Always use both endorsed and disliked items matching the filter for comparison
+    endorse_items = endorsement_db.get_all_endorsed_items(query, since_ts)
+    dislike_items = endorsement_db.get_all_disliked_items(query, since_ts)
+
+    filter_desc_parts = []
+    if query.strip():
+        filter_desc_parts.append(f"search: \"{_html.escape(query.strip())}\"")
+    if date_filter and date_filter.lower() not in ("", "all time", "all"):
+        filter_desc_parts.append(_html.escape(date_filter))
+    filter_desc = " · ".join(filter_desc_parts) if filter_desc_parts else "all time"
+    scope_line = f"{len(endorse_items)} endorsed, {len(dislike_items)} disliked in filter ({filter_desc})"
+
+    # Stream progress while tagging un-captioned images
+    tagged = 0
+    skipped = 0
+    for done, total, tagged, skipped in gallery_tagger.iter_tag_untagged_filtered(endorse_items, dislike_items):
+        if total == 0:
+            break
+        bar_pct = int(done / total * 100)
+        yield (
+            f'<div class="endgal-insights-status">{scope_line}</div>'
+            f'<div class="endgal-insights-progress">'
+            f'  <div class="endgal-progress-label">Captioning images: {done}/{total}'
+            f'  ({tagged} tagged, {skipped} skipped)</div>'
+            f'  <div class="endgal-progress-bar-wrap">'
+            f'    <div class="endgal-progress-bar" style="width:{bar_pct}%"></div>'
+            f'  </div>'
+            f'</div>'
+        )
+
+    # Build final status line
+    status_parts = [scope_line]
+    if tagged:
+        status_parts.append(f"{tagged} newly captioned")
+    if skipped:
+        status_parts.append(f"{skipped} skipped (file missing)")
+    status_html = f'<div class="endgal-insights-status">{" · ".join(status_parts)}</div>'
+
+    endorse_keys = {k for _, k in endorse_items if k}
+    dislike_keys = {k for _, k in dislike_items if k}
+    analysis = endorsement_db.get_tag_analysis_filtered(endorse_keys, dislike_keys, min_appearances=1)
+    add_tags = analysis["add"][:50]
+    remove_tags = analysis["remove"][:50]
+
+    if not add_tags and not remove_tags:
+        if not endorse_items and not dislike_items:
+            yield status_html + '<div class="endgal-insights-empty">No endorsed or disliked images match this filter.</div>'
+            return
+        yield status_html + '<div class="endgal-insights-empty">Not enough tag data yet — try endorsing or disliking more images.</div>'
+        return
+
+    def tag_rows(entries):
+        rows = []
+        for entry in entries:
+            tag = entry["tag"].replace("_", " ")
+            e = entry["endorse_count"]
+            d = entry["dislike_count"]
+            avg = entry["endorse_avg"] if e else entry["dislike_avg"]
+            rows.append(
+                f'<tr>'
+                f'<td class="endgal-tag-name">{_html.escape(tag)}</td>'
+                f'<td class="endgal-tag-counts">+{e}&nbsp;/&nbsp;-{d}</td>'
+                f'<td class="endgal-tag-score">{avg:.2f}</td>'
+                f'</tr>'
+            )
+        return "\n".join(rows)
+
+    table_head = '<thead><tr><th>Tag</th><th>+liked / -disliked</th><th>Conf.</th></tr></thead>'
+
+    add_section = (
+        f'<div class="endgal-insights-col">'
+        f'<div class="endgal-insights-header endgal-add-header">\u2705 Add to prompt ({len(add_tags)})</div>'
+        f'<div class="endgal-insights-hint">More common in endorsed images</div>'
+        f'<table class="endgal-tag-table">{table_head}<tbody>{tag_rows(add_tags)}</tbody></table>'
+        f'</div>'
+    ) if add_tags else ''
+
+    remove_section = (
+        f'<div class="endgal-insights-col">'
+        f'<div class="endgal-insights-header endgal-remove-header">\u274c Remove from prompt ({len(remove_tags)})</div>'
+        f'<div class="endgal-insights-hint">More common in disliked images</div>'
+        f'<table class="endgal-tag-table">{table_head}<tbody>{tag_rows(remove_tags)}</tbody></table>'
+        f'</div>'
+    ) if remove_tags else ''
+
+    yield status_html + f'<div class="endgal-insights-grid">{add_section}{remove_section}</div>'
 
 
 def on_ui_tabs():
@@ -680,6 +801,25 @@ def on_ui_tabs():
             inputs=[action_input, mode_radio, search_box, page_state, page_size, date_filter],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
+
+        with gr.Accordion("🔍 Keyword Insights", open=False, elem_id="endgal_insights_accordion"):
+            gr.HTML(
+                value='<div class="endgal-insights-desc">'
+                      'DeepDanbooru tags collected when you endorse/dislike images. '
+                      'Identifies which keywords correlate with quality vs unwanted outputs.</div>'
+            )
+            insights_refresh_btn = gr.Button(
+                "Refresh Insights", size="sm", elem_id="endgal_insights_refresh_btn"
+            )
+            insights_html = gr.HTML(
+                value='<div class="endgal-insights-empty">Click Refresh Insights to analyse your endorsements.</div>',
+                elem_id="endgal_insights_html",
+            )
+            insights_refresh_btn.click(
+                fn=get_keyword_insights_html,
+                inputs=[mode_radio, search_box, date_filter],
+                outputs=[insights_html],
+            )
 
     return [(gallery_ui, "Gallery", "endorsed_gallery")]
 

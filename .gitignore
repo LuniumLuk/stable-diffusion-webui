@@ -48,3 +48,4 @@ trace.json
 /local-llm/.env
 .venv
 *.db
+/data
