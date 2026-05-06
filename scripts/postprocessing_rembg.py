@@ -1,24 +1,12 @@
 from PIL import Image
 
-from modules import errors, scripts_postprocessing, ui_components
+from modules import errors, rembg_utils, scripts_postprocessing, ui_components
 import gradio as gr
-
-try:
-    from rembg import new_session, remove
-except Exception as import_error:
-    new_session = None
-    remove = None
-    rembg_import_error = import_error
-else:
-    rembg_import_error = None
 
 
 class ScriptPostprocessingRembg(scripts_postprocessing.ScriptPostprocessing):
     name = "Remove Background (rembg)"
     order = 2500
-
-    def __init__(self):
-        self._sessions = {}
 
     def ui(self):
         with ui_components.InputAccordion(False, label=self.name) as enable:
@@ -45,7 +33,7 @@ class ScriptPostprocessingRembg(scripts_postprocessing.ScriptPostprocessing):
                     elem_id="extras_rembg_only_mask",
                 )
 
-            if rembg_import_error is not None:
+            if rembg_utils.rembg_import_error is not None:
                 gr.Markdown("rembg is not available in the current environment. Install it in .venv to enable this feature.")
 
         return {
@@ -56,45 +44,26 @@ class ScriptPostprocessingRembg(scripts_postprocessing.ScriptPostprocessing):
             "rembg_only_mask": rembg_only_mask,
         }
 
-    def _get_session(self, model_name):
-        session = self._sessions.get(model_name)
-        if session is None:
-            session = new_session(model_name)
-            self._sessions[model_name] = session
-        return session
-
     def process(self, pp: scripts_postprocessing.PostprocessedImage, enable, rembg_model, rembg_alpha_matting, rembg_post_process_mask, rembg_only_mask):
         if not enable:
             return
 
-        if remove is None or new_session is None:
-            errors.report(f"rembg is unavailable: {rembg_import_error}")
+        if rembg_utils.rembg_import_error is not None:
+            errors.report(f"rembg is unavailable: {rembg_utils.rembg_import_error}")
             pp.info["rembg"] = "unavailable"
             return
 
-        try:
-            source = pp.image.convert("RGB")
-            session = self._get_session(rembg_model)
-            result = remove(
-                source,
-                session=session,
-                alpha_matting=rembg_alpha_matting,
-                post_process_mask=rembg_post_process_mask,
-                only_mask=rembg_only_mask,
-            )
+        result_image, result_info = rembg_utils.remove_background_image(
+            pp.image,
+            model_name=rembg_model,
+            alpha_matting=rembg_alpha_matting,
+            post_process_mask=rembg_post_process_mask,
+            only_mask=rembg_only_mask,
+        )
+        if result_image is None:
+            pp.info.update(result_info)
+            return
 
-            if isinstance(result, Image.Image):
-                if rembg_only_mask:
-                    pp.image = result.convert("L")
-                else:
-                    pp.image = result.convert("RGBA")
-            else:
-                pp.image = Image.fromarray(result)
-
-            pp.nametags.append("rembg")
-            pp.info["rembg model"] = rembg_model
-            pp.info["rembg alpha matting"] = bool(rembg_alpha_matting)
-            pp.info["rembg post-process mask"] = bool(rembg_post_process_mask)
-            pp.info["rembg only mask"] = bool(rembg_only_mask)
-        except Exception:
-            errors.report("rembg postprocessing failed", exc_info=True)
+        pp.image = result_image
+        pp.nametags.append("rembg")
+        pp.info.update(result_info)

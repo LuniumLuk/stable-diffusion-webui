@@ -46,6 +46,7 @@ function queue_job_img2img() {
 
         var taskId = host.getAttribute('data-running-task-id') || '';
         var jobType = host.getAttribute('data-running-job-type') || '';
+        var imageCount = Number(host.getAttribute('data-running-image-count') || '0');
 
         if (!taskId || !jobType) {
             return null;
@@ -54,6 +55,7 @@ function queue_job_img2img() {
         return {
             taskId: taskId,
             jobType: jobType,
+            imageCount: Math.max(1, imageCount || 1),
         };
     }
 
@@ -69,10 +71,21 @@ function queue_job_img2img() {
             return;
         }
 
-        activeProgressTrackers[taskId] = true;
+        var imageCount = arguments.length > 2 ? arguments[2] : 1;
+        activeProgressTrackers[taskId] = {
+            jobType: jobType,
+            imageCount: Math.max(1, Number(imageCount) || 1),
+            startedNotified: false,
+        };
         lastQueueActivityAt = Date.now();
 
+        if (typeof notifyGenerationEvent === 'function') {
+            notifyGenerationEvent(jobType, imageCount, 'start', 'queue');
+            activeProgressTrackers[taskId].startedNotified = true;
+        }
+
         requestProgress(taskId, container, gallery, function () {
+            var trackerMeta = activeProgressTrackers[taskId] || { jobType: jobType, imageCount: imageCount };
             delete activeProgressTrackers[taskId];
             lastQueueActivityAt = Date.now();
 
@@ -80,6 +93,10 @@ function queue_job_img2img() {
             var restoreButton = gradioApp().getElementById(tabName + '_restore_progress');
             if (restoreButton) {
                 restoreButton.click();
+            }
+
+            if (typeof notifyGenerationEvent === 'function') {
+                notifyGenerationEvent(trackerMeta.jobType, trackerMeta.imageCount, 'finish', 'queue');
             }
         }, null, 0);
     }
@@ -111,7 +128,7 @@ function queue_job_img2img() {
                 setInterruptSkipForAllTabs(true);
                 queueControlsForcedVisible = true;
                 if (runningTask) {
-                    startQueueProgressTracking(runningTask.taskId, runningTask.jobType);
+                    startQueueProgressTracking(runningTask.taskId, runningTask.jobType, runningTask.imageCount);
                 }
             } else if (queueControlsForcedVisible) {
                 setInterruptSkipForAllTabs(false);

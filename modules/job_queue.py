@@ -16,6 +16,7 @@ class QueueJob:
         self.id = uuid.uuid4().hex[:8]
         self.job_type = job_type
         self.args = args
+        self.image_count = _job_image_count(job_type, args)
         self.status = "queued"
         self.label = label
         self.task_id = ""
@@ -32,6 +33,7 @@ class JobQueueManager:
         self._jobs: list[QueueJob] = []
         self._lock = threading.Lock()
         self._started = False
+        self._paused = False
 
     def start(self):
         if self._started:
@@ -65,6 +67,41 @@ class JobQueueManager:
         with self._lock:
             self._jobs = [j for j in self._jobs if j.status != "queued"]
 
+    def pause(self):
+        with self._lock:
+            self._paused = True
+
+    def resume(self):
+        with self._lock:
+            self._paused = False
+
+    def is_paused(self) -> bool:
+        with self._lock:
+            return self._paused
+
+    def move_job(self, job_id: str, direction: str) -> bool:
+        if direction not in {"up", "down"}:
+            return False
+
+        with self._lock:
+            idx = next((i for i, job in enumerate(self._jobs) if job.id == job_id), None)
+            if idx is None:
+                return False
+
+            job = self._jobs[idx]
+            if job.status != "queued":
+                return False
+
+            step = -1 if direction == "up" else 1
+            swap_idx = idx + step
+            while 0 <= swap_idx < len(self._jobs):
+                if self._jobs[swap_idx].status == "queued":
+                    self._jobs[idx], self._jobs[swap_idx] = self._jobs[swap_idx], self._jobs[idx]
+                    return True
+                swap_idx += step
+
+        return False
+
     def has_running_job(self) -> bool:
         with self._lock:
             return any(j.status == "running" for j in self._jobs)
@@ -87,6 +124,9 @@ class JobQueueManager:
     def _dispatch_loop(self):
         while True:
             time.sleep(0.5)
+
+            if self.is_paused():
+                continue
 
             # Never let queued jobs preempt a currently-running manual generate job.
             if self._non_queue_generation_active():
@@ -149,6 +189,27 @@ class JobQueueManager:
 queue_manager = JobQueueManager()
 
 
+def _safe_int(value, default=1):
+    try:
+        return max(1, int(value or default))
+    except Exception:
+        return default
+
+
+def _job_image_count(job_type: str, args: tuple) -> int:
+    if job_type == "txt2img":
+        if len(args) > 4:
+            return _safe_int(args[3]) * _safe_int(args[4])
+        return 1
+
+    if job_type == "img2img":
+        if len(args) > 15:
+            return _safe_int(args[14]) * _safe_int(args[15])
+        return 1
+
+    return 1
+
+
 def is_queue_task_id(id_task: str | None) -> bool:
     return bool(id_task and id_task.startswith("task(queue-"))
 
@@ -187,6 +248,9 @@ def _fmt_time(ts):
 
 def render_queue_html() -> str:
     jobs = queue_manager.get_snapshot()
+    is_paused = queue_manager.is_paused()
+    queue_state_class = "jq-s-paused" if is_paused else "jq-s-done"
+    queue_state_label = "Paused" if is_paused else "Active"
     counts = {"queued": 0, "running": 0, "done": 0, "failed": 0}
     for j in jobs:
         counts[j.status] = counts.get(j.status, 0) + 1
@@ -194,10 +258,12 @@ def render_queue_html() -> str:
     running_job = next((j for j in jobs if j.status == "running"), None)
     running_task_id = html.escape(running_job.task_id if running_job else "")
     running_type = html.escape(running_job.job_type if running_job else "")
+    running_image_count = int(running_job.image_count) if running_job else 0
 
     stats = (
-        f'<div id="jq-state" data-running-task-id="{running_task_id}" data-running-job-type="{running_type}"></div>'
+        f'<div id="jq-state" data-running-task-id="{running_task_id}" data-running-job-type="{running_type}" data-running-image-count="{running_image_count}"></div>'
         '<div class="jq-stats">'
+        f'<span class="jq-stat {queue_state_class}">Queue: {queue_state_label}</span>'
         f'<span class="jq-stat jq-s-queued">Queued: {counts["queued"]}</span>'
         f'<span class="jq-stat jq-s-running">Running: {counts["running"]}</span>'
         f'<span class="jq-stat jq-s-done">Done: {counts["done"]}</span>'
@@ -221,6 +287,7 @@ def render_queue_html() -> str:
             f'<td>{icon} {j.status}</td>'
             f'<td>{_fmt_time(j.created_at)}</td>'
             f'<td>{_fmt_time(j.finished_at) or "-"}</td>'
+            f'<td class="jq-actions">{_row_action_buttons(j)}</td>'
             "</tr>"
         )
 
@@ -228,12 +295,53 @@ def render_queue_html() -> str:
         '<table class="jq-table">'
         "<thead><tr>"
         "<th>ID</th><th>Type</th><th>Prompt</th><th>Status</th>"
-        "<th>Created</th><th>Finished</th>"
+        "<th>Created</th><th>Finished</th><th>Actions</th>"
         "</tr></thead>"
         f'<tbody>{"".join(rows)}</tbody>'
         "</table>"
     )
     return stats + table
+
+
+def _row_action_buttons(job: QueueJob) -> str:
+    job_id = html.escape(job.id)
+    if job.status == "queued":
+        return (
+            f'<button class="jq-row-btn" onclick="queueTabAction(\'move_up\', \'{job_id}\')">Up</button>'
+            f'<button class="jq-row-btn" onclick="queueTabAction(\'move_down\', \'{job_id}\')">Down</button>'
+            f'<button class="jq-row-btn jq-row-btn-danger" onclick="queueTabAction(\'remove\', \'{job_id}\')">Remove</button>'
+        )
+
+    if job.status in {"done", "failed"}:
+        return f'<button class="jq-row-btn jq-row-btn-danger" onclick="queueTabAction(\'remove\', \'{job_id}\')">Remove</button>'
+
+    return '<span class="jq-row-muted">Running</span>'
+
+
+def handle_queue_action(action_json: str):
+    import json
+
+    try:
+        payload = json.loads(action_json or "{}")
+    except Exception:
+        payload = {}
+
+    action = (payload.get("action") or "").strip().lower()
+    job_id = (payload.get("job_id") or "").strip()
+
+    if action == "remove" and job_id:
+        queue_manager.remove_job(job_id)
+        message = f"Removed job {job_id} if it was removable."
+    elif action == "move_up" and job_id:
+        moved = queue_manager.move_job(job_id, "up")
+        message = f"Moved job {job_id} up." if moved else f"Could not move job {job_id} up."
+    elif action == "move_down" and job_id:
+        moved = queue_manager.move_job(job_id, "down")
+        message = f"Moved job {job_id} down." if moved else f"Could not move job {job_id} down."
+    else:
+        message = "No queue action performed."
+
+    return render_queue_html(), f'<span style="color:var(--body-text-color-subdued,#94a3b8)">{html.escape(message)}</span>'
 
 
 def on_ui_tabs():
@@ -247,10 +355,14 @@ def on_ui_tabs():
 
         with gr.Row():
             refresh_btn = gr.Button("Refresh", elem_id="jq_refresh_btn", scale=1)
+            pause_btn = gr.Button("Pause Queue", elem_id="jq_pause_btn", scale=1)
+            resume_btn = gr.Button("Resume Queue", elem_id="jq_resume_btn", scale=1)
             clear_done_btn = gr.Button("Clear Completed/Failed", scale=1)
             clear_queued_btn = gr.Button("Clear All Queued", scale=1)
 
         queue_html_out = gr.HTML(value=render_queue_html, elem_id="jq_queue_html")
+        action_input = gr.Textbox(value="", visible=False, elem_id="jq_action_input")
+        action_btn = gr.Button("", visible=False, elem_id="jq_action_btn")
 
         with gr.Row():
             remove_id_input = gr.Textbox(
@@ -274,6 +386,14 @@ def on_ui_tabs():
             queue_manager.clear_queued()
             return render_queue_html()
 
+        def do_pause():
+            queue_manager.pause()
+            return render_queue_html(), '<span style="color:var(--body-text-color-subdued,#94a3b8)">Queue paused. Current running job continues.</span>'
+
+        def do_resume():
+            queue_manager.resume()
+            return render_queue_html(), '<span style="color:var(--body-text-color-subdued,#94a3b8)">Queue resumed.</span>'
+
         def do_remove(job_id: str):
             job_id = job_id.strip()
             if not job_id:
@@ -282,10 +402,13 @@ def on_ui_tabs():
             queue_manager.remove_job(job_id)
             return render_queue_html(), '<span style="color:var(--success-text-color,green)">Removed (if it existed and was not running).</span>'
 
-        refresh_btn.click(fn=do_refresh, inputs=[], outputs=[queue_html_out])
+        refresh_btn.click(fn=do_refresh, inputs=[], outputs=[queue_html_out], show_progress="hidden")
+        pause_btn.click(fn=do_pause, inputs=[], outputs=[queue_html_out, remove_status])
+        resume_btn.click(fn=do_resume, inputs=[], outputs=[queue_html_out, remove_status])
         clear_done_btn.click(fn=do_clear_done, inputs=[], outputs=[queue_html_out])
         clear_queued_btn.click(fn=do_clear_queued, inputs=[], outputs=[queue_html_out])
         remove_btn.click(fn=do_remove, inputs=[remove_id_input], outputs=[queue_html_out, remove_status])
+        action_btn.click(fn=handle_queue_action, inputs=[action_input], outputs=[queue_html_out, remove_status], show_progress="hidden")
 
     return [(queue_ui, "Queue", "job_queue_tab")]
 

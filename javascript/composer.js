@@ -14,12 +14,26 @@
       startLayer: null,
       startDist: 0,
       startAngle: 0,
+      tool: "move",
+      drawColor: "#ff3366",
+      brushSize: 18,
+      linePreview: null,
+      cropSelection: null,
+      cropPreview: null,
+      brushLastPoint: null,
+      viewportX: 0,
+      viewportY: 0,
+      startClientX: 0,
+      startClientY: 0,
+      startViewportX: 0,
+      startViewportY: 0,
       useColorBackground: false,
       backgroundColor: "#1e293b",
     };
 
     const canvas = root.querySelector("#composer_canvas");
     const ctx = canvas.getContext("2d");
+    const canvasWrap = root.querySelector("#composer_canvas_wrap");
     const bgUploadWrap = document.getElementById("composer_bg_upload");
     const charsUploadWrap = document.getElementById("composer_chars_upload");
     const layerList = root.querySelector("#composer_layers");
@@ -34,7 +48,25 @@
     const deleteBtn = root.querySelector("#composer_delete_btn");
     const layerUpBtn = root.querySelector("#composer_layer_up_btn");
     const layerDownBtn = root.querySelector("#composer_layer_down_btn");
+    const toolMoveBtn = root.querySelector("#composer_tool_move_btn");
+    const toolBrushBtn = root.querySelector("#composer_tool_brush_btn");
+    const toolLineBtn = root.querySelector("#composer_tool_line_btn");
+    const toolPickerBtn = root.querySelector("#composer_tool_picker_btn");
+    const toolCropBtn = root.querySelector("#composer_tool_crop_btn");
+    const drawColorInput = root.querySelector("#composer_draw_color");
+    const brushSizeInput = root.querySelector("#composer_brush_size");
+    const brushSizeValue = root.querySelector("#composer_brush_size_value");
+    const cropApplyBtn = root.querySelector("#composer_crop_apply_btn");
+    const cropCancelBtn = root.querySelector("#composer_crop_cancel_btn");
     const statusText = root.querySelector("#composer_status_text");
+
+    const toolButtons = {
+      move: toolMoveBtn,
+      brush: toolBrushBtn,
+      line: toolLineBtn,
+      picker: toolPickerBtn,
+      crop: toolCropBtn,
+    };
 
     function updateLockModeUi() {
       if (!lockModeBtn) return;
@@ -54,6 +86,30 @@
 
     function setStatus(text) {
       statusText.textContent = text;
+    }
+
+    function updateToolUi() {
+      Object.entries(toolButtons).forEach(([name, btn]) => {
+        if (btn) {
+          btn.classList.toggle("active", state.tool === name);
+        }
+      });
+
+      if (brushSizeValue) {
+        brushSizeValue.textContent = `${state.brushSize} px`;
+      }
+    }
+
+    function setTool(toolName) {
+      state.tool = toolName;
+      if (toolName !== "crop") {
+        state.cropPreview = null;
+      }
+      if (toolName !== "line") {
+        state.linePreview = null;
+      }
+      updateToolUi();
+      draw();
     }
 
     function getBackgroundIndex() {
@@ -106,6 +162,17 @@
       return px * (canvas.width / rect.width);
     }
 
+    function applyCanvasViewport() {
+      canvas.style.transform = `translate(${state.viewportX}px, ${state.viewportY}px)`;
+    }
+
+    function getLayerSize(layer) {
+      return {
+        w: layer.img.width * layer.scale,
+        h: layer.img.height * layer.scale,
+      };
+    }
+
     function clearUploadWidget(uploadWrap) {
       if (!uploadWrap) return;
 
@@ -155,12 +222,12 @@
       
       canvas.style.width = cssW + "px";
       canvas.style.height = cssH + "px";
+      applyCanvasViewport();
     }
 
     function drawLayer(layer) {
       const img = layer.img;
-      const w = img.width * layer.scale;
-      const h = img.height * layer.scale;
+      const { w, h } = getLayerSize(layer);
       const lineWidth = Math.max(1, uiPxToCanvas(2));
       const handleSize = Math.max(8, uiPxToCanvas(12));
       const rotateDistance = Math.max(12, uiPxToCanvas(24));
@@ -190,7 +257,54 @@
       }
     }
 
-    function draw() {
+    function drawCropOverlay(selection) {
+      if (!selection || state.active < 0) return;
+
+      const layer = state.layers[state.active];
+      if (!layer || selection.layerId !== layer.id) return;
+
+      const startDisplay = imageLocalToDisplayLocal(layer, selection.start);
+      const endDisplay = imageLocalToDisplayLocal(layer, selection.end);
+      const x = Math.min(startDisplay.x, endDisplay.x);
+      const y = Math.min(startDisplay.y, endDisplay.y);
+      const w = Math.abs(endDisplay.x - startDisplay.x);
+      const h = Math.abs(endDisplay.y - startDisplay.y);
+
+      ctx.save();
+      ctx.translate(layer.x, layer.y);
+      ctx.rotate(layer.rot);
+      ctx.strokeStyle = "#f59e0b";
+      ctx.fillStyle = "rgba(245, 158, 11, 0.14)";
+      ctx.lineWidth = Math.max(1, uiPxToCanvas(2));
+      ctx.setLineDash([uiPxToCanvas(8), uiPxToCanvas(6)]);
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    }
+
+    function drawLineOverlay(preview) {
+      if (!preview || state.active < 0) return;
+
+      const layer = state.layers[state.active];
+      if (!layer || preview.layerId !== layer.id) return;
+
+      const startDisplay = imageLocalToDisplayLocal(layer, preview.start);
+      const endDisplay = imageLocalToDisplayLocal(layer, preview.end);
+
+      ctx.save();
+      ctx.translate(layer.x, layer.y);
+      ctx.rotate(layer.rot);
+      ctx.strokeStyle = state.drawColor;
+      ctx.lineWidth = Math.max(1, uiPxToCanvas(state.brushSize));
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(startDisplay.x, startDisplay.y);
+      ctx.lineTo(endDisplay.x, endDisplay.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function renderBaseCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (state.useColorBackground && state.backgroundColor) {
         ctx.save();
@@ -202,6 +316,12 @@
         layer.selected = i === state.active;
         drawLayer(layer);
       });
+    }
+
+    function draw() {
+      renderBaseCanvas();
+      drawLineOverlay(state.linePreview);
+      drawCropOverlay(state.cropPreview || state.cropSelection);
     }
 
     function applyColorBackground(hexColor) {
@@ -235,7 +355,11 @@
       state.layers.forEach((layer, i) => {
         const item = document.createElement("div");
         item.className = "composer-layer-item" + (i === state.active ? " active" : "");
-        const label = layer.isBackground ? `BG. ${layer.name}` : `${i + 1}. ${layer.name}`;
+        const label = layer.isBackground
+          ? `BG. ${layer.name}`
+          : layer.isPaintOverlay
+            ? `Top Paint Layer`
+            : `${i + 1}. ${layer.name}`;
         item.textContent = label;
         item.onclick = () => {
           state.active = i;
@@ -320,10 +444,71 @@
       };
     }
 
+    function getActiveLayer() {
+      return state.active >= 0 ? state.layers[state.active] : null;
+    }
+
+    function syncPaintOverlaySize(layer) {
+      const nextCanvas = document.createElement("canvas");
+      nextCanvas.width = Math.max(1, canvas.width);
+      nextCanvas.height = Math.max(1, canvas.height);
+      nextCanvas.getContext("2d").drawImage(layer.img, 0, 0, nextCanvas.width, nextCanvas.height);
+      layer.img = nextCanvas;
+      layer.src = nextCanvas.toDataURL("image/png");
+      layer.x = canvas.width / 2;
+      layer.y = canvas.height / 2;
+      layer.scale = 1;
+      layer.rot = 0;
+      layer.mirror = false;
+      layer.opacity = 1;
+    }
+
+    function ensurePaintOverlayLayer() {
+      let overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+      let overlay = overlayIndex >= 0 ? state.layers[overlayIndex] : null;
+
+      if (!overlay) {
+        const overlayCanvas = document.createElement("canvas");
+        overlayCanvas.width = Math.max(1, canvas.width);
+        overlayCanvas.height = Math.max(1, canvas.height);
+        overlay = makeLayerFromImage(overlayCanvas, "Top Paint Layer", false);
+        overlay.isPaintOverlay = true;
+        overlay.x = canvas.width / 2;
+        overlay.y = canvas.height / 2;
+        overlay.scale = 1;
+        overlay.rot = 0;
+        overlay.mirror = false;
+        state.layers.push(overlay);
+        overlayIndex = state.layers.length - 1;
+      }
+
+      if (overlay.img.width !== canvas.width || overlay.img.height !== canvas.height) {
+        syncPaintOverlaySize(overlay);
+      }
+
+      if (overlayIndex !== state.layers.length - 1) {
+        state.layers.splice(overlayIndex, 1);
+        state.layers.push(overlay);
+        if (state.active === overlayIndex) {
+          state.active = state.layers.length - 1;
+        } else if (state.active > overlayIndex) {
+          state.active -= 1;
+        }
+      }
+
+      return state.layers[state.layers.length - 1];
+    }
+
     function addAssetToLayers(asset) {
       const layer = makeLayerFromImage(asset.img, asset.name, false);
-      state.layers.push(layer);
-      state.active = state.layers.length - 1;
+      const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+      if (overlayIndex >= 0) {
+        state.layers.splice(overlayIndex, 0, layer);
+        state.active = overlayIndex;
+      } else {
+        state.layers.push(layer);
+        state.active = state.layers.length - 1;
+      }
       renderLayerList();
       draw();
       setStatus(`Added to layers: ${asset.name}`);
@@ -356,14 +541,194 @@
       };
     }
 
-    function toLocal(layer, px, py) {
+    function toDisplayLocal(layer, px, py) {
       const dx = px - layer.x;
       const dy = py - layer.y;
       const c = Math.cos(-layer.rot);
       const s = Math.sin(-layer.rot);
-      const lx = dx * c - dy * s;
-      const ly = dx * s + dy * c;
-      return { x: layer.mirror ? -lx : lx, y: ly };
+      return {
+        x: dx * c - dy * s,
+        y: dx * s + dy * c,
+      };
+    }
+
+    function displayLocalToImageLocal(layer, point) {
+      return {
+        x: layer.mirror ? -point.x : point.x,
+        y: point.y,
+      };
+    }
+
+    function imageLocalToDisplayLocal(layer, point) {
+      return {
+        x: layer.mirror ? -point.x : point.x,
+        y: point.y,
+      };
+    }
+
+    function toImageLocal(layer, px, py) {
+      return displayLocalToImageLocal(layer, toDisplayLocal(layer, px, py));
+    }
+
+    function localToImagePixel(layer, imageLocalPoint) {
+      const { w, h } = getLayerSize(layer);
+      const x = ((imageLocalPoint.x + w / 2) / Math.max(1, w)) * layer.img.width;
+      const y = ((imageLocalPoint.y + h / 2) / Math.max(1, h)) * layer.img.height;
+      return {
+        x: Math.max(0, Math.min(layer.img.width, x)),
+        y: Math.max(0, Math.min(layer.img.height, y)),
+      };
+    }
+
+    function getDisplayBoundsHit(layer, px, py) {
+      const { w, h } = getLayerSize(layer);
+      const local = toDisplayLocal(layer, px, py);
+      return Math.abs(local.x) <= w / 2 && Math.abs(local.y) <= h / 2;
+    }
+
+    function getTopEditableLayerAt(px, py) {
+      if (state.lockEditBackground) {
+        const bgIndex = getBackgroundIndex();
+        if (bgIndex < 0) return null;
+        const bgLayer = state.layers[bgIndex];
+        if (!canEditLayer(bgLayer) || !getDisplayBoundsHit(bgLayer, px, py)) return null;
+        return { index: bgIndex, layer: bgLayer };
+      }
+
+      if (state.lockToSelected && state.active >= 0) {
+        const selectedLayer = state.layers[state.active];
+        if (!canEditLayer(selectedLayer) || !getDisplayBoundsHit(selectedLayer, px, py)) return null;
+        return { index: state.active, layer: selectedLayer };
+      }
+
+      for (let i = state.layers.length - 1; i >= 0; i--) {
+        const layer = state.layers[i];
+        if (!canEditLayer(layer)) continue;
+        if (getDisplayBoundsHit(layer, px, py)) {
+          return { index: i, layer };
+        }
+      }
+
+      return null;
+    }
+
+    function getPaintOverlayPoint(px, py) {
+      const overlay = ensurePaintOverlayLayer();
+      return {
+        layer: overlay,
+        point: toImageLocal(overlay, px, py),
+      };
+    }
+
+    function ensureEditableLayerCanvas(layer) {
+      if (!layer) return null;
+      if (layer.img instanceof HTMLCanvasElement) {
+        return layer.img;
+      }
+
+      const editable = document.createElement("canvas");
+      editable.width = Math.max(1, layer.img.width);
+      editable.height = Math.max(1, layer.img.height);
+      const editCtx = editable.getContext("2d");
+      editCtx.drawImage(layer.img, 0, 0);
+      layer.img = editable;
+      layer.src = editable.toDataURL("image/png");
+      return editable;
+    }
+
+    function updateLayerImageSource(layer, canvasEl) {
+      layer.img = canvasEl;
+      layer.src = canvasEl.toDataURL("image/png");
+    }
+
+    function strokeOnLayer(layer, startLocal, endLocal) {
+      const editCanvas = ensureEditableLayerCanvas(layer);
+      if (!editCanvas) return;
+
+      const editCtx = editCanvas.getContext("2d");
+      const startPx = localToImagePixel(layer, startLocal);
+      const endPx = localToImagePixel(layer, endLocal);
+      editCtx.save();
+      editCtx.strokeStyle = state.drawColor;
+      editCtx.lineCap = "round";
+      editCtx.lineJoin = "round";
+      editCtx.lineWidth = Math.max(1, state.brushSize / Math.max(0.05, layer.scale));
+      editCtx.beginPath();
+      editCtx.moveTo(startPx.x, startPx.y);
+      editCtx.lineTo(endPx.x, endPx.y);
+      editCtx.stroke();
+      editCtx.restore();
+      updateLayerImageSource(layer, editCanvas);
+    }
+
+    function sampleCanvasColor(px, py) {
+      renderBaseCanvas();
+      const data = ctx.getImageData(Math.round(px), Math.round(py), 1, 1).data;
+      draw();
+      return `#${[data[0], data[1], data[2]].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+    }
+
+    function rotateLocalToWorld(layer, point) {
+      const c = Math.cos(layer.rot);
+      const s = Math.sin(layer.rot);
+      return {
+        x: point.x * c - point.y * s,
+        y: point.x * s + point.y * c,
+      };
+    }
+
+    function normalizeCropSelection(selection) {
+      if (!selection) return null;
+
+      return {
+        x1: Math.min(selection.start.x, selection.end.x),
+        y1: Math.min(selection.start.y, selection.end.y),
+        x2: Math.max(selection.start.x, selection.end.x),
+        y2: Math.max(selection.start.y, selection.end.y),
+      };
+    }
+
+    function applyCropSelection() {
+      const selection = state.cropSelection;
+      const layer = getActiveLayer();
+      if (!selection || !layer || selection.layerId !== layer.id) {
+        setStatus("No crop selection to apply.");
+        return;
+      }
+
+      const normalized = normalizeCropSelection(selection);
+      const startPx = localToImagePixel(layer, { x: normalized.x1, y: normalized.y1 });
+      const endPx = localToImagePixel(layer, { x: normalized.x2, y: normalized.y2 });
+      const cropX = Math.max(0, Math.floor(Math.min(startPx.x, endPx.x)));
+      const cropY = Math.max(0, Math.floor(Math.min(startPx.y, endPx.y)));
+      const cropW = Math.max(1, Math.ceil(Math.abs(endPx.x - startPx.x)));
+      const cropH = Math.max(1, Math.ceil(Math.abs(endPx.y - startPx.y)));
+
+      if (cropW < 2 || cropH < 2) {
+        setStatus("Crop area is too small.");
+        return;
+      }
+
+      const sourceCanvas = ensureEditableLayerCanvas(layer);
+      const cropped = document.createElement("canvas");
+      cropped.width = cropW;
+      cropped.height = cropH;
+      cropped.getContext("2d").drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+      const cropCenterImage = {
+        x: (normalized.x1 + normalized.x2) / 2,
+        y: (normalized.y1 + normalized.y2) / 2,
+      };
+      const cropCenterDisplay = imageLocalToDisplayLocal(layer, cropCenterImage);
+      const worldShift = rotateLocalToWorld(layer, cropCenterDisplay);
+
+      layer.x += worldShift.x;
+      layer.y += worldShift.y;
+      updateLayerImageSource(layer, cropped);
+      state.cropSelection = null;
+      state.cropPreview = null;
+      draw();
+      setStatus(`Cropped layer: ${layer.name}`);
     }
 
     function hitTest(px, py) {
@@ -375,9 +740,8 @@
         const bgIndex = getBackgroundIndex();
         if (bgIndex < 0) return null;
         const layer = state.layers[bgIndex];
-        const w = layer.img.width * layer.scale;
-        const h = layer.img.height * layer.scale;
-        const local = toLocal(layer, px, py);
+        const { w, h } = getLayerSize(layer);
+        const local = toDisplayLocal(layer, px, py);
 
         const resizeX = w / 2;
         const resizeY = h / 2;
@@ -399,9 +763,8 @@
       if (state.lockToSelected && state.active >= 0) {
         const layer = state.layers[state.active];
         if (!canEditLayer(layer)) return null;
-        const w = layer.img.width * layer.scale;
-        const h = layer.img.height * layer.scale;
-        const local = toLocal(layer, px, py);
+        const { w, h } = getLayerSize(layer);
+        const local = toDisplayLocal(layer, px, py);
 
         const resizeX = w / 2;
         const resizeY = h / 2;
@@ -423,9 +786,8 @@
       for (let i = state.layers.length - 1; i >= 0; i--) {
         const layer = state.layers[i];
         if (!canEditLayer(layer)) continue;
-        const w = layer.img.width * layer.scale;
-        const h = layer.img.height * layer.scale;
-        const local = toLocal(layer, px, py);
+        const { w, h } = getLayerSize(layer);
+        const local = toDisplayLocal(layer, px, py);
 
         const resizeX = w / 2;
         const resizeY = h / 2;
@@ -446,7 +808,102 @@
     }
 
     canvas.addEventListener("pointerdown", (evt) => {
+      if (evt.button === 2) {
+        evt.preventDefault();
+        state.dragMode = "pan_canvas";
+        state.startClientX = evt.clientX;
+        state.startClientY = evt.clientY;
+        state.startViewportX = state.viewportX;
+        state.startViewportY = state.viewportY;
+        if (canvasWrap) {
+          canvasWrap.classList.add("panning");
+        }
+        canvas.setPointerCapture(evt.pointerId);
+        return;
+      }
+
       const p = getMousePos(evt);
+
+      if (state.tool === "picker") {
+        const color = sampleCanvasColor(p.x, p.y);
+        state.drawColor = color;
+        if (drawColorInput) {
+          drawColorInput.value = color;
+        }
+        updateToolUi();
+        setStatus(`Picked color ${color}`);
+        return;
+      }
+
+      if (state.tool === "brush" || state.tool === "line" || state.tool === "crop") {
+        if (state.tool === "brush" || state.tool === "line") {
+          const paintTarget = getPaintOverlayPoint(p.x, p.y);
+          const layer = paintTarget.layer;
+          const imageLocal = paintTarget.point;
+          state.active = state.layers.indexOf(layer);
+          renderLayerList();
+
+          if (state.tool === "brush") {
+            state.dragMode = "brush";
+            state.brushLastPoint = imageLocal;
+            strokeOnLayer(layer, imageLocal, imageLocal);
+            draw();
+          } else {
+            state.dragMode = "line";
+            state.linePreview = {
+              layerId: layer.id,
+              start: imageLocal,
+              end: imageLocal,
+            };
+            draw();
+          }
+
+          canvas.setPointerCapture(evt.pointerId);
+          return;
+        }
+
+        const layerHit = getTopEditableLayerAt(p.x, p.y);
+        if (!layerHit) {
+          if (!state.lockToSelected) {
+            state.active = -1;
+            renderLayerList();
+            draw();
+          }
+          return;
+        }
+
+        state.active = layerHit.index;
+        renderLayerList();
+        const layer = layerHit.layer;
+        const imageLocal = toImageLocal(layer, p.x, p.y);
+
+        if (state.tool === "brush") {
+          state.dragMode = "brush";
+          state.brushLastPoint = imageLocal;
+          strokeOnLayer(layer, imageLocal, imageLocal);
+          draw();
+        } else if (state.tool === "line") {
+          state.dragMode = "line";
+          state.linePreview = {
+            layerId: layer.id,
+            start: imageLocal,
+            end: imageLocal,
+          };
+          draw();
+        } else if (state.tool === "crop") {
+          state.dragMode = "crop";
+          state.cropPreview = {
+            layerId: layer.id,
+            start: imageLocal,
+            end: imageLocal,
+          };
+          draw();
+        }
+
+        canvas.setPointerCapture(evt.pointerId);
+        return;
+      }
+
       const hit = hitTest(p.x, p.y);
       if (!hit) {
         if (!state.lockToSelected) {
@@ -477,13 +934,36 @@
     });
 
     canvas.addEventListener("pointermove", (evt) => {
+      if (state.dragMode === "pan_canvas") {
+        state.viewportX = state.startViewportX + (evt.clientX - state.startClientX);
+        state.viewportY = state.startViewportY + (evt.clientY - state.startClientY);
+        applyCanvasViewport();
+        return;
+      }
+
       if (!state.dragMode || state.active < 0) return;
 
       const p = getMousePos(evt);
       const layer = state.layers[state.active];
       if (!layer) return;
 
-      if (state.dragMode === "move") {
+      if (state.dragMode === "brush") {
+        const imageLocal = toImageLocal(layer, p.x, p.y);
+        strokeOnLayer(layer, state.brushLastPoint || imageLocal, imageLocal);
+        state.brushLastPoint = imageLocal;
+      } else if (state.dragMode === "line") {
+        state.linePreview = {
+          layerId: layer.id,
+          start: state.linePreview ? state.linePreview.start : toImageLocal(layer, state.startX, state.startY),
+          end: toImageLocal(layer, p.x, p.y),
+        };
+      } else if (state.dragMode === "crop") {
+        state.cropPreview = {
+          layerId: layer.id,
+          start: state.cropPreview ? state.cropPreview.start : toImageLocal(layer, state.startX, state.startY),
+          end: toImageLocal(layer, p.x, p.y),
+        };
+      } else if (state.dragMode === "move") {
         layer.x = state.startLayer.x + (p.x - state.startX);
         layer.y = state.startLayer.y + (p.y - state.startY);
       } else if (state.dragMode === "resize") {
@@ -499,11 +979,38 @@
     });
 
     canvas.addEventListener("pointerup", () => {
+      const layer = getActiveLayer();
+      if (state.dragMode === "pan_canvas") {
+        if (canvasWrap) {
+          canvasWrap.classList.remove("panning");
+        }
+      } else if (state.dragMode === "line" && layer && state.linePreview && state.linePreview.layerId === layer.id) {
+        strokeOnLayer(layer, state.linePreview.start, state.linePreview.end);
+        state.linePreview = null;
+      } else if (state.dragMode === "crop" && state.cropPreview) {
+        state.cropSelection = state.cropPreview;
+        state.cropPreview = null;
+        setStatus("Crop selection ready. Click Apply Crop to commit.");
+      }
+
       state.dragMode = null;
+      state.brushLastPoint = null;
+      draw();
     });
 
     canvas.addEventListener("pointercancel", () => {
+      if (canvasWrap) {
+        canvasWrap.classList.remove("panning");
+      }
       state.dragMode = null;
+      state.brushLastPoint = null;
+      state.linePreview = null;
+      state.cropPreview = null;
+      draw();
+    });
+
+    canvas.addEventListener("contextmenu", (evt) => {
+      evt.preventDefault();
     });
 
     window.addEventListener("keydown", (evt) => {
@@ -574,6 +1081,11 @@
         } else {
           state.layers.unshift(bgLayer);
           state.active = 0;
+        }
+
+        const overlay = state.layers.find((x) => x.isPaintOverlay);
+        if (overlay) {
+          syncPaintOverlaySize(overlay);
         }
 
         fitCanvasToParent();
@@ -649,6 +1161,41 @@
       });
     }
 
+    Object.entries(toolButtons).forEach(([toolName, btn]) => {
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        setTool(toolName);
+      });
+    });
+
+    if (drawColorInput) {
+      drawColorInput.addEventListener("input", () => {
+        state.drawColor = drawColorInput.value || "#ff3366";
+      });
+    }
+
+    if (brushSizeInput) {
+      brushSizeInput.addEventListener("input", () => {
+        state.brushSize = Math.max(1, Number(brushSizeInput.value) || 18);
+        updateToolUi();
+      });
+    }
+
+    if (cropApplyBtn) {
+      cropApplyBtn.addEventListener("click", () => {
+        applyCropSelection();
+      });
+    }
+
+    if (cropCancelBtn) {
+      cropCancelBtn.addEventListener("click", () => {
+        state.cropSelection = null;
+        state.cropPreview = null;
+        draw();
+        setStatus("Crop selection cleared.");
+      });
+    }
+
     if (bgColorRandomBtn && bgColorInput) {
       bgColorRandomBtn.addEventListener("click", () => {
         const color = randomHexColor();
@@ -699,6 +1246,7 @@
     bindUploadInputs();
     updateLockModeUi();
     updateBgLockUi();
+    updateToolUi();
     renderAssetList();
     state.bindUploadInputs = bindUploadInputs;
     root.__composer_state = state;

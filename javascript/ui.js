@@ -166,8 +166,43 @@ function showRestoreProgressButton(tabname, show) {
     button.style.setProperty('display', show ? 'flex' : 'none', 'important');
 }
 
+function generationImageCount(tabname, argsLike) {
+    var args = Array.from(argsLike || []);
+
+    if (tabname === 'txt2img') {
+        return Math.max(1, Number(args[4]) || 1) * Math.max(1, Number(args[5]) || 1);
+    }
+
+    if (tabname === 'img2img') {
+        return Math.max(1, Number(args[15]) || 1) * Math.max(1, Number(args[16]) || 1);
+    }
+
+    return 1;
+}
+
+function notifyGenerationEvent(tabname, imageCount, phase, source) {
+    if (!window.webuiBanner || typeof window.webuiBanner.show !== 'function') {
+        return;
+    }
+
+    var typeLabel = tabname === 'img2img' ? 'img2img' : 'txt2img';
+    var count = Math.max(1, Number(imageCount) || 1);
+    var sourceLabel = source === 'queue' ? 'Queued ' : '';
+    var message = phase === 'finish'
+        ? sourceLabel + typeLabel + ' finished: ' + count + ' image' + (count === 1 ? '' : 's')
+        : sourceLabel + typeLabel + ' started: ' + count + ' image' + (count === 1 ? '' : 's');
+
+    window.webuiBanner.show(message, {
+        key: 'job-' + typeLabel + '-' + phase + '-' + source,
+        kind: phase === 'finish' ? 'success' : 'info',
+        duration: phase === 'finish' ? 4200 : 3200,
+    });
+}
+
 function submit() {
     setAllGenerationButtonsVisibility(false);
+    var txt2imgImageCount = generationImageCount('txt2img', arguments);
+    notifyGenerationEvent('txt2img', txt2imgImageCount, 'start', 'manual');
 
     var id = randomId();
     localSet("txt2img_task_id", id);
@@ -176,6 +211,7 @@ function submit() {
         setAllGenerationButtonsVisibility(true);
         localRemove("txt2img_task_id");
         showRestoreProgressButton('txt2img', false);
+        notifyGenerationEvent('txt2img', txt2imgImageCount, 'finish', 'manual');
     });
 
     var res = create_submit_args(arguments);
@@ -195,6 +231,8 @@ function submit_txt2img_upscale() {
 
 function submit_img2img() {
     setAllGenerationButtonsVisibility(false);
+    var img2imgImageCount = generationImageCount('img2img', arguments);
+    notifyGenerationEvent('img2img', img2imgImageCount, 'start', 'manual');
 
     var id = randomId();
     localSet("img2img_task_id", id);
@@ -203,6 +241,7 @@ function submit_img2img() {
         setAllGenerationButtonsVisibility(true);
         localRemove("img2img_task_id");
         showRestoreProgressButton('img2img', false);
+        notifyGenerationEvent('img2img', img2imgImageCount, 'finish', 'manual');
     });
 
     var res = create_submit_args(arguments);

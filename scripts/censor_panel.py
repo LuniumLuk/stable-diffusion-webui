@@ -35,6 +35,25 @@ CENSOR_HTML = """
     width: 100%;
 }
 
+#censor_overwrite_width_btn {
+    width: 100%;
+}
+
+#censor_line_shape {
+    width: 100%;
+    min-height: 2.4em;
+    padding: 0.45em 0.7em;
+    border-radius: 8px;
+    border: 1px solid var(--block-border-color);
+    background: var(--input-background-fill, var(--background-fill-primary, #ffffff));
+    color: var(--body-text-color, #111827);
+}
+
+#censor_line_shape option {
+    background: var(--input-background-fill, var(--background-fill-primary, #ffffff));
+    color: var(--body-text-color, #111827);
+}
+
 #censor_line_width_value {
     font-size: 12px;
     color: var(--body-text-color-subdued, #94a3b8);
@@ -124,7 +143,14 @@ CENSOR_HTML = """
         <label for="censor_line_width">Line thickness</label>
         <input id="censor_line_width" type="range" min="1" max="96" step="1" value="18" />
         <div id="censor_line_width_value">18 px</div>
-        <div id="censor_hint">Two clicks draw one black line segment. Ctrl+Z undo, Ctrl+Y redo.</div>
+        <button id="censor_overwrite_width_btn" type="button">Overwrite Existing Line Width</button>
+        <label for="censor_line_shape">Line ending shape</label>
+        <select id="censor_line_shape">
+            <option value="round" selected>Round</option>
+            <option value="square">Rectangle</option>
+            <option value="butt">Flat</option>
+        </select>
+        <div id="censor_hint">Two left clicks draw one black line segment. Right mouse drag moves the image. Ctrl+Z undo, Ctrl+Y redo.</div>
         <div id="censor_save_panel">
             <button id="censor_save_btn" type="button">Save to outputs/censored</button>
             <div id="censor_save_status">Ready.</div>

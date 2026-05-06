@@ -14,6 +14,8 @@ from PIL import Image
 
 from modules import endorsement_db
 from modules import infotext_utils
+from modules import images
+from modules import rembg_utils
 from modules import script_callbacks
 from modules import shared
 
@@ -112,6 +114,52 @@ def _action_payload(record: dict) -> dict:
     }
 
 
+def _apply_removebg(path: str) -> tuple[bool, str]:
+    source_path = os.path.abspath(path or "")
+    if not source_path or not os.path.exists(source_path):
+        return False, "Removebg failed: source image not found."
+
+    try:
+        with Image.open(source_path) as img:
+            source_image = img.convert("RGBA")
+            parameters, existing_pnginfo = images.read_info_from_image(img)
+    except Exception as exc:
+        return False, f"Removebg failed: could not open image ({exc})."
+
+    if parameters:
+        existing_pnginfo["parameters"] = parameters
+
+    result_image, result_info = rembg_utils.remove_background_image(source_image)
+    if result_image is None:
+        err = result_info.get("error") or result_info.get("rembg") or "unknown error"
+        return False, f"Removebg failed: {err}."
+
+    infotext = ", ".join([
+        k if k == v else f'{k}: {infotext_utils.quote(v)}'
+        for k, v in result_info.items() if v is not None
+    ])
+    target_path = rembg_utils.build_removebg_target_path(source_path, ext=".png")
+    target_dir = os.path.dirname(target_path)
+    basename = os.path.splitext(os.path.basename(target_path))[0]
+
+    fullfn, _ = images.save_image(
+        result_image,
+        path=target_dir,
+        basename='',
+        extension='png',
+        info=infotext,
+        short_filename=True,
+        no_prompt=True,
+        grid=False,
+        pnginfo_section_name="removebg",
+        existing_info=existing_pnginfo,
+        forced_filename=basename,
+        suffix='',
+    )
+
+    return True, f"Removebg saved: {_html.escape(fullfn)}"
+
+
 def _card_html(record: dict, endorsed_id=None, disliked_id=None) -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
@@ -177,6 +225,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None) -> str:
         <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
     <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">txt2img</button>
     <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">img2img</button>
+        <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
     <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
         <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
   </div>
@@ -414,6 +463,7 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         data = {}
 
     t = data.get("type", "")
+    status_message = ""
     if t == "endorse":
         endorsement_db.endorse(
             data.get("path", ""),
@@ -462,6 +512,12 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
             path = data.get("path", "")
             if path:
                 endorsement_db.delete_dislike_by_path(path)
+    elif t == "removebg":
+        ok, status_message = _apply_removebg(data.get("path", ""))
+        if not ok:
+            status_message = f'<div class="endgal-sync-result">{_html.escape(status_message)}</div>'
+        else:
+            status_message = f'<div class="endgal-sync-result">{status_message}</div>'
 
     html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter)
     
@@ -474,7 +530,7 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
         html = html + hint_html
     
-    return html, info, info, page
+    return status_message, html, info, info, page
 
 
 def on_ui_tabs():
@@ -622,7 +678,7 @@ def on_ui_tabs():
         action_btn.click(
             fn=handle_gallery_action,
             inputs=[action_input, mode_radio, search_box, page_state, page_size, date_filter],
-            outputs=[gallery_html, page_info, page_info_bottom, page_state],
+            outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
 
     return [(gallery_ui, "Gallery", "endorsed_gallery")]
@@ -634,6 +690,8 @@ def on_image_saved(params):
         if not path or not path.lower().endswith(".png"):
             return
         if endorsement_db.is_grid_image_path(path):
+            return
+        if endorsement_db.is_removebg_attachment_path(path):
             return
         mtime = os.path.getmtime(path)
         infotext = ""

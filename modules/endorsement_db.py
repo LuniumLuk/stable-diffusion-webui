@@ -8,6 +8,7 @@ from datetime import datetime
 _DB_ROOT = os.path.dirname(os.path.dirname(__file__))
 _DB_PATH = os.path.join(_DB_ROOT, "endorsements.db")
 _ENDORSED_ROOT = os.path.join(_DB_ROOT, "outputs", "endorsed")
+_REMOVEBG_ROOT = os.path.join(_DB_ROOT, "outputs", "removebg")
 
 
 def _get_conn():
@@ -41,6 +42,13 @@ def is_grid_image_path(path: str) -> bool:
         or stem.endswith("-grid")
         or stem == "grid"
     )
+
+
+def is_removebg_attachment_path(path: str) -> bool:
+    if not path:
+        return False
+
+    return _is_under(path, _REMOVEBG_ROOT)
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
@@ -571,6 +579,9 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
                 seed: str, steps: int, sampler: str, cfg_scale: float,
                 width: int, height: int, model_name: str, model_hash: str,
                 infotext: str):
+    if is_removebg_attachment_path(path):
+        return
+
     item_key = _item_key_from_path(path)
     with _get_conn() as conn:
         if item_key:
@@ -668,6 +679,8 @@ def sync_output_dirs(output_dirs: list, progress_cb=None) -> dict:
                 if f.lower().endswith(".png"):
                     full = os.path.join(root, f)
                     if is_grid_image_path(full):
+                        continue
+                    if is_removebg_attachment_path(full):
                         continue
                     try:
                         all_pngs.append((os.path.getmtime(full), full))

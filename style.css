@@ -142,6 +142,60 @@ div.gradio-html.min{
     text-decoration: none;
 }
 
+#global_banner_host {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10020;
+    display: grid;
+    gap: 8px;
+    width: min(760px, calc(100vw - 24px));
+    pointer-events: none;
+}
+
+.global-banner {
+    pointer-events: none;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--block-border-color);
+    background: rgba(15, 23, 42, 0.94);
+    color: #e2e8f0;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+    font-size: 13px;
+    line-height: 1.4;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    backdrop-filter: blur(8px);
+}
+
+.global-banner.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.global-banner.hide {
+    opacity: 0;
+    transform: translateY(-10px);
+}
+
+.global-banner-info {
+    border-color: #38bdf8;
+}
+
+.global-banner-success {
+    border-color: #22c55e;
+}
+
+.global-banner-warning {
+    border-color: #f59e0b;
+}
+
+.global-banner-error {
+    border-color: #ef4444;
+}
+
 a{
     font-weight: bold;
     cursor: pointer;
@@ -2334,4 +2388,29 @@ body.resizing .resize-handle {
 .jq-id   { font-family: monospace; font-size: 11px; white-space: nowrap; }
 .jq-lbl  { max-width: 36em; word-break: break-word; }
 .jq-error { color: #f87171; }
+.jq-actions { white-space: nowrap; }
+.jq-row-btn {
+    margin-right: 6px;
+    min-width: 58px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--block-border-color, #334155);
+    background: var(--button-secondary-background-fill, transparent);
+    color: var(--button-secondary-text-color, var(--body-text-color));
+    cursor: pointer;
+}
+.jq-row-btn:hover {
+    background: var(--button-secondary-background-fill-hover, rgba(255,255,255,0.06));
+}
+.jq-row-btn-danger {
+    border-color: #ef4444;
+}
+.jq-row-muted {
+    color: var(--body-text-color-subdued, #94a3b8);
+    font-size: 12px;
+}
+.jq-s-paused {
+    border-color: #f59e0b;
+    color: #f59e0b;
+}
 

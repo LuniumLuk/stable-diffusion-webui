@@ -26,7 +26,8 @@ COMPOSER_HTML = """
 #composer_upload_row #composer_bg_upload .label-wrap,
 #composer_upload_row #composer_chars_upload .label-wrap { margin-bottom: 4px; }
 #composer_left h4 { margin: 0 0 8px 0; font-size: 14px; }
-#composer_canvas_wrap { border: 1px solid var(--block-border-color); border-radius: 8px; padding: 8px; background: #0f172a; }
+#composer_canvas_wrap { border: 1px solid var(--block-border-color); border-radius: 8px; padding: 8px; background: #0f172a; overflow: hidden; cursor: grab; }
+#composer_canvas_wrap.panning { cursor: grabbing; }
 #composer_canvas { width: 100%; height: 70vh; min-height: 420px; display: block; background:
 linear-gradient(45deg,#1e293b 25%,transparent 25%),
 linear-gradient(-45deg,#1e293b 25%,transparent 25%),
@@ -39,6 +40,36 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
 .composer-layer-item.active { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8 inset; }
 #composer_actions { display: flex; gap: 8px; flex-wrap: wrap; }
 #composer_actions button.active { border-color: #22d3ee; box-shadow: 0 0 0 1px #22d3ee inset; }
+#composer_toolbox {
+        margin-top: 10px;
+        display: grid;
+        gap: 8px;
+}
+.composer-tool-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+}
+.composer-tool-row button.active {
+        border-color: #f59e0b;
+        box-shadow: 0 0 0 1px #f59e0b inset;
+}
+#composer_draw_color {
+        width: 42px;
+        height: 30px;
+        padding: 0;
+        border: 1px solid #4b5563;
+        border-radius: 6px;
+        background: transparent;
+}
+#composer_brush_size {
+        width: 130px;
+}
+.composer-tool-label {
+        color: #cbd5e1;
+        font-size: 12px;
+}
 #composer_bg_color_row {
         margin-top: 8px;
         display: flex;
@@ -93,12 +124,32 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                 <button id="composer_layer_down_btn" type="button" title="Move layer down (toward back)">&#9660; Down</button>
                                 <button id="composer_bg_lock_btn" type="button" class="active" title="Background is locked by default. Enable this to edit only the background layer.">Lock Edit Background: OFF</button>
             </div>
+                        <div id="composer_toolbox">
+                                <div class="composer-tool-row">
+                                        <button id="composer_tool_move_btn" type="button" class="active" title="Move, resize, and rotate layers">Move</button>
+                                        <button id="composer_tool_brush_btn" type="button" title="Paint on a full-canvas overlay layer at the top of the stack">Brush</button>
+                                        <button id="composer_tool_line_btn" type="button" title="Draw a straight line on a full-canvas overlay layer at the top of the stack">Line</button>
+                                        <button id="composer_tool_picker_btn" type="button" title="Pick a color from the canvas">Pick Color</button>
+                                        <button id="composer_tool_crop_btn" type="button" title="Drag a crop region on the selected layer">Crop</button>
+                                </div>
+                                <div class="composer-tool-row">
+                                        <span class="composer-tool-label">Color</span>
+                                        <input id="composer_draw_color" type="color" value="#ff3366" title="Brush and line color" />
+                                        <span class="composer-tool-label">Size</span>
+                                        <input id="composer_brush_size" type="range" min="1" max="96" step="1" value="18" title="Brush/line size" />
+                                        <span id="composer_brush_size_value" class="composer-tool-label">18 px</span>
+                                </div>
+                                <div class="composer-tool-row">
+                                        <button id="composer_crop_apply_btn" type="button" title="Apply the current crop selection to the selected layer">Apply Crop</button>
+                                        <button id="composer_crop_cancel_btn" type="button" title="Cancel the current crop selection">Cancel Crop</button>
+                                </div>
+                        </div>
                         <div id="composer_bg_color_row">
                                 <input id="composer_bg_color" type="color" value="#1e293b" title="Pure color background" />
                                 <button id="composer_bg_color_apply" type="button" title="Use selected color as background">Use Color BG</button>
                                 <button id="composer_bg_color_random" type="button" title="Random background color">Random</button>
                         </div>
-                        <div id="composer_status_text">Tip: Background is locked by default. Enable background edit lock to edit only background. Selected-lock mode supports WASD move and +/- scale.</div>
+                        <div id="composer_status_text">Tip: Background is locked by default. Enable background edit lock to edit only background. Selected-lock mode supports WASD move and +/- scale. Brush and line draw on a full-canvas top overlay. Right mouse drag pans the canvas view.</div>
                 </div>
                 <div class="composer-box">
                         <h4>Staged Character Images</h4>
@@ -168,6 +219,8 @@ def compose_from_payload(payload_json):
                 layer_img = layer_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
                 rot = float(layer.get("rot_deg", 0.0))
+                if layer.get("mirror", False):
+                        rot = -rot
                 if abs(rot) > 0.001:
                         layer_img = layer_img.rotate(rot, resample=Image.Resampling.BICUBIC, expand=True)
 

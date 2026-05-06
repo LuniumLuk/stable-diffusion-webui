@@ -2,19 +2,31 @@
   function setupCensorPanel(root) {
     if (!root || root.dataset.censorReady === "1") return;
 
+    const storageKeyWidth = "censor:last-line-width";
+    const storageKeyShape = "censor:last-line-shape";
+
     const canvas = root.querySelector("#censor_canvas");
     const wrap = root.querySelector("#censor_canvas_wrap");
     const dropHint = root.querySelector("#censor_drop_hint");
     const widthSlider = root.querySelector("#censor_line_width");
     const widthValue = root.querySelector("#censor_line_width_value");
+    const overwriteWidthBtn = root.querySelector("#censor_overwrite_width_btn");
+    const shapeSelect = root.querySelector("#censor_line_shape");
     const saveBtn = root.querySelector("#censor_save_btn");
     const saveStatus = root.querySelector("#censor_save_status");
-    if (!canvas || !wrap || !dropHint || !widthSlider || !widthValue || !saveBtn || !saveStatus) return;
+    if (!canvas || !wrap || !dropHint || !widthSlider || !widthValue || !overwriteWidthBtn || !shapeSelect || !saveBtn || !saveStatus) return;
 
     const ctx = canvas.getContext("2d");
+    const storedWidth = Number(window.localStorage?.getItem(storageKeyWidth) || widthSlider.value || 18);
+    const storedShape = (window.localStorage?.getItem(storageKeyShape) || shapeSelect.value || "round");
+    widthSlider.value = String(Math.max(1, Math.min(96, storedWidth || 18)));
+    if (["round", "square", "butt"].includes(storedShape)) {
+      shapeSelect.value = storedShape;
+    }
     const state = {
       hasImage: false,
       lineWidth: Number(widthSlider.value) || 18,
+      lineShape: shapeSelect.value || "round",
       pendingStart: null,
       segments: [],
       redoSegments: [],
@@ -27,7 +39,6 @@
       dragOriginX: 0,
       dragOriginY: 0,
       isPanning: false,
-      suppressNextClick: false,
       displayW: canvas.clientWidth,
       displayH: canvas.clientHeight,
     };
@@ -37,6 +48,12 @@
 
     function updateLineWidthUI() {
       widthValue.textContent = `${state.lineWidth} px`;
+    }
+
+    function persistSettings() {
+      if (!window.localStorage) return;
+      window.localStorage.setItem(storageKeyWidth, String(state.lineWidth));
+      window.localStorage.setItem(storageKeyShape, state.lineShape);
     }
 
     function setStatus(text) {
@@ -67,8 +84,8 @@
       ctx.save();
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = seg.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      ctx.lineCap = seg.shape || "round";
+      ctx.lineJoin = seg.shape === "round" ? "round" : "miter";
       ctx.beginPath();
       ctx.moveTo(seg.x1, seg.y1);
       ctx.lineTo(seg.x2, seg.y2);
@@ -88,8 +105,8 @@
         targetCtx.save();
         targetCtx.strokeStyle = "#000000";
         targetCtx.lineWidth = seg.width;
-        targetCtx.lineCap = "round";
-        targetCtx.lineJoin = "round";
+        targetCtx.lineCap = seg.shape || "round";
+        targetCtx.lineJoin = seg.shape === "round" ? "round" : "miter";
         targetCtx.beginPath();
         targetCtx.moveTo(seg.x1, seg.y1);
         targetCtx.lineTo(seg.x2, seg.y2);
@@ -108,22 +125,62 @@
       ctx.save();
       ctx.setTransform(state.scale, 0, 0, state.scale, state.panX, state.panY);
       drawScene(ctx);
+      ctx.restore();
 
       if (state.pendingStart) {
-        ctx.fillStyle = "#111111";
-        ctx.beginPath();
-        ctx.arc(state.pendingStart.x, state.pendingStart.y, Math.max(2, state.lineWidth * 0.18), 0, Math.PI * 2);
-        ctx.fill();
+        drawPendingStartIndicator();
       }
+    }
+
+    function getInverseIndicatorColor() {
+      if (!state.pendingStart) {
+        return "#ffffff";
+      }
+
+      const screenX = Math.round(state.pendingStart.x * state.scale + state.panX);
+      const screenY = Math.round(state.pendingStart.y * state.scale + state.panY);
+      const sampleX = Math.max(0, Math.min(canvas.width - 1, screenX));
+      const sampleY = Math.max(0, Math.min(canvas.height - 1, screenY));
+      const data = ctx.getImageData(sampleX, sampleY, 1, 1).data;
+      const inv = [255 - data[0], 255 - data[1], 255 - data[2]];
+      return `rgb(${inv[0]}, ${inv[1]}, ${inv[2]})`;
+    }
+
+    function drawPendingStartIndicator() {
+      if (!state.pendingStart) return;
+
+      const screenX = state.pendingStart.x * state.scale + state.panX;
+      const screenY = state.pendingStart.y * state.scale + state.panY;
+      const crossSize = Math.max(10, state.lineWidth * 0.65);
+      const gap = Math.max(3, state.lineWidth * 0.16);
+      const color = getInverseIndicatorColor();
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(2, state.lineWidth * 0.14);
+      ctx.lineCap = "round";
+
+      ctx.beginPath();
+      ctx.moveTo(screenX - crossSize, screenY);
+      ctx.lineTo(screenX - gap, screenY);
+      ctx.moveTo(screenX + gap, screenY);
+      ctx.lineTo(screenX + crossSize, screenY);
+      ctx.moveTo(screenX, screenY - crossSize);
+      ctx.lineTo(screenX, screenY - gap);
+      ctx.moveTo(screenX, screenY + gap);
+      ctx.lineTo(screenX, screenY + crossSize);
+      ctx.stroke();
+
+      ctx.strokeStyle = color === "rgb(0, 0, 0)" ? "#ffffff" : "#000000";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, Math.max(2, gap), 0, Math.PI * 2);
+      ctx.stroke();
       ctx.restore();
     }
 
     function handleCanvasClick(evt) {
       if (!state.hasImage) return;
-      if (state.suppressNextClick) {
-        state.suppressNextClick = false;
-        return;
-      }
       evt.preventDefault();
 
       const p = getCanvasPoint(evt);
@@ -139,6 +196,7 @@
         x2: p.x,
         y2: p.y,
         width: state.lineWidth,
+        shape: state.lineShape,
       });
       state.pendingStart = null;
       state.redoSegments = [];
@@ -157,6 +215,20 @@
       state.segments.push(state.redoSegments.pop());
       state.pendingStart = null;
       redraw();
+    }
+
+    function overwriteExistingLineWidth() {
+      if (state.segments.length === 0) {
+        setStatus("No existing lines to overwrite.");
+        return;
+      }
+
+      state.segments.forEach((seg) => {
+        seg.width = state.lineWidth;
+      });
+      state.redoSegments = [];
+      redraw();
+      setStatus(`Updated ${state.segments.length} line(s) to ${state.lineWidth} px.`);
     }
 
     function loadImageFromSrc(src) {
@@ -242,7 +314,7 @@
 
     function onPanStart(evt) {
       if (!state.hasImage) return;
-      if (evt.button !== 0 && evt.button !== 1) return;
+      if (evt.button !== 2) return;
       evt.preventDefault();
       state.isPanning = true;
       state.dragStartX = evt.clientX;
@@ -257,9 +329,6 @@
       evt.preventDefault();
       const dx = evt.clientX - state.dragStartX;
       const dy = evt.clientY - state.dragStartY;
-      if (Math.abs(dx) + Math.abs(dy) > 3) {
-        state.suppressNextClick = true;
-      }
       state.panX = state.dragOriginX + dx * (canvas.width / canvas.clientWidth);
       state.panY = state.dragOriginY + dy * (canvas.height / canvas.clientHeight);
       redraw();
@@ -274,10 +343,22 @@
     widthSlider.addEventListener("input", () => {
       state.lineWidth = Math.max(1, Number(widthSlider.value) || 1);
       updateLineWidthUI();
+      persistSettings();
       redraw();
     });
 
+    shapeSelect.addEventListener("change", () => {
+      state.lineShape = shapeSelect.value || "round";
+      persistSettings();
+      redraw();
+    });
+
+    overwriteWidthBtn.addEventListener("click", () => {
+      overwriteExistingLineWidth();
+    });
+
     canvas.addEventListener("click", handleCanvasClick);
+    canvas.addEventListener("contextmenu", (evt) => evt.preventDefault());
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("mousedown", onPanStart);
     document.addEventListener("mousemove", onPanMove);
