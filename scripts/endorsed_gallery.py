@@ -98,6 +98,105 @@ def sync_all_to_db() -> str:
     )
 
 
+def _get_composed_dir() -> str:
+    return os.path.join(_ROOT_DIR, "outputs", "composition")
+
+
+def _fetch_composed_records(query: str, page: int, page_size: int):
+    """Return (rows, total) for the Composed mode by scanning outputs/composition/*.png."""
+    comp_dir = _get_composed_dir()
+    if not os.path.isdir(comp_dir):
+        return [], 0
+
+    files = sorted(
+        [f for f in os.listdir(comp_dir) if f.lower().endswith(".png")],
+        key=lambda f: os.path.getmtime(os.path.join(comp_dir, f)),
+        reverse=True,
+    )
+
+    q = (query or "").strip().lower()
+    if q:
+        files = [f for f in files if q in f.lower()]
+
+    total = len(files)
+    offset = (page - 1) * page_size
+    page_files = files[offset: offset + page_size]
+
+    rows = []
+    for fname in page_files:
+        fpath = os.path.join(comp_dir, fname)
+        try:
+            mtime = os.path.getmtime(fpath)
+        except OSError:
+            mtime = 0.0
+        config_path = os.path.splitext(fpath)[0] + ".composerstate.json"
+        rows.append({
+            "path": fpath,
+            "file_mtime": mtime,
+            "prompt": "",
+            "seed": "",
+            "sampler": "",
+            "model_name": "",
+            "has_composer_config": os.path.exists(config_path),
+            "config_path": config_path if os.path.exists(config_path) else "",
+        })
+
+    return rows, total
+
+
+def _composed_card_html(record: dict) -> str:
+    import datetime as _dt
+    path = record.get("path", "")
+    fname = os.path.basename(path)
+    mtime = record.get("file_mtime")
+    date = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else ""
+    thumb = _get_thumb(path) if path else ""
+    orig_url = f'/file={path.replace(chr(92), "/")}' if path else ""
+    path_b64 = _b64(path)
+    config_path = record.get("config_path", "")
+    config_path_b64 = _b64(config_path)
+    has_config = bool(config_path)
+
+    thumb_html = (
+        f'<img src="{thumb}" alt="composed image" loading="lazy" '
+        f'data-orig="{orig_url}" '
+        f'onclick="endorsedGallery.previewImage(this.dataset.orig || this.src)" />'
+    ) if thumb else '<div class="endgal-nothumb">No preview</div>'
+
+    config_badge = (
+        '<span class="endgal-config-badge" title="Full composer state available — load to restore all layers">⚙</span>'
+        if has_config else ""
+    )
+
+    composer_btn_attrs = (
+        f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'{config_path_b64}\')"'
+        if has_config
+        else 'disabled title="No composer config available for this image"'
+    )
+    composer_btn_class = "endgal-btn-send2img endgal-btn-composer" + ("" if has_config else " endgal-btn-disabled")
+
+    return f"""
+<div class="endgal-card endgal-composed-card">
+  <div class="endgal-thumb">{thumb_html}</div>
+  <div class="endgal-body">
+    <div class="endgal-prompt">{_html.escape(fname)}{config_badge}</div>
+    <div class="endgal-date">{_html.escape(date)}</div>
+  </div>
+  <div class="endgal-actions">
+    <button class="{composer_btn_class}"
+      title="{'Send to Composer and restore full state' if has_config else 'No composer config available for this image'}"
+      {composer_btn_attrs}>&#8594; Composer</button>
+    <button class="endgal-btn-send2img"
+      title="send to img2img"
+      onclick="endorsedGallery.sendTo('', 'img2img', '{path_b64}')">img2img</button>
+    <button class="endgal-btn-send2img"
+      title="send to extras"
+      onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
+  </div>
+</div>
+"""
+
+
 def _action_payload(record: dict) -> dict:
     return {
         "path": record.get("path") or record.get("image_path", ""),
@@ -363,6 +462,8 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
             filtered = _filter_rows_by_date(filtered, since_ts)
             total = len(filtered)
             rows = filtered[offset: offset + page_size]
+    elif mode == "🎨 Composed":
+        rows, total = _fetch_composed_records(query, page, page_size)
     elif mode == "⬜ Unrated":
         if hasattr(endorsement_db, "count_unrated") and hasattr(endorsement_db, "search_unrated"):
             total = _call_db("count_unrated", query, since_ts=since_ts)
@@ -370,14 +471,14 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
         else:
             total = 0
             rows = []
-    elif mode == "� Archived":
+    elif mode == "📦 Archived":
         if hasattr(endorsement_db, "count_archived") and hasattr(endorsement_db, "search_archived"):
             total = _call_db("count_archived", query, since_ts=since_ts)
             rows = _call_db("search_archived", query, limit=page_size, offset=offset, since_ts=since_ts)
         else:
             total = 0
             rows = []
-    elif mode == "�👎 Disliked":
+    elif mode == "👎 Disliked":
         if hasattr(endorsement_db, "count_disliked") and hasattr(endorsement_db, "search_disliked"):
             total = _call_db("count_disliked", query, since_ts=since_ts)
             rows = _call_db("search_disliked", query, limit=page_size, offset=offset, since_ts=since_ts)
@@ -443,6 +544,14 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
 
     if not rows:
         return '<div class="endgal-empty">No images found for this filter.</div>', f"0 items · page 1/1", 1, is_last_page
+
+    # Composed mode: use a simplified card that skips DB lookups and shows a "→ Composer" button.
+    if mode == "🎨 Composed":
+        cards = [_composed_card_html(rec) for rec in rows]
+        header = f'<div class="endgal-count">{total} composed image(s)</div>'
+        grid = '<div class="endgal-grid endgal-composed-grid">' + "".join(cards) + "</div>"
+        page_info = f"{total} items · page {page}/{pages}"
+        return header + grid, page_info, page, is_last_page
 
     # Batch-fetch tags and archived status for all cards on this page
     item_keys = [
@@ -687,7 +796,7 @@ def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_controls_row"):
             mode_radio = gr.Radio(
-                choices=["⭐ Endorsed", "🖼 All Generated", "⬜ Unrated", "� Archived", "�👎 Disliked"],
+                choices=["⭐ Endorsed", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",

@@ -2171,6 +2171,42 @@ body.resizing .resize-handle {
     white-space: nowrap;
 }
 
+/* ---- Composed gallery cards ---- */
+.endgal-composed-card {
+    border-color: #334155;
+}
+.endgal-composed-card:hover {
+    border-color: #a78bfa;
+    box-shadow: 0 0 0 2px #a78bfa22;
+}
+.endgal-btn-composer {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+    border-color: #818cf8;
+    color: #c7d2fe;
+    font-weight: 600;
+}
+.endgal-btn-composer:hover {
+    background: linear-gradient(135deg, #2e27a0 0%, #4338ca 100%);
+    border-color: #a5b4fc;
+    color: #e0e7ff;
+}
+.endgal-btn-disabled,
+.endgal-btn-disabled:hover {
+    background: #2a2a2a !important;
+    border-color: #444 !important;
+    color: #666 !important;
+    cursor: not-allowed !important;
+    opacity: 0.5;
+}
+.endgal-config-badge {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 13px;
+    color: #a78bfa;
+    vertical-align: middle;
+    cursor: default;
+}
+
 
 .extra-network-tree .tree-list-content[data-expanded]+.tree-list--subgroup {
     height: auto;

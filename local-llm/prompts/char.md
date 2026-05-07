@@ -4,6 +4,11 @@ Single Character Prompt
 [PROMPT]
 Generate a high-quality SDXL prompt using a clean, structured format.
 
+Always output exactly TWO separate quote areas:
+> <final positive prompt text>
+
+> Negative prompt: low quality, blurry, bad anatomy, extra limbs, deformed hands, photorealistic, semi-realistic, 3D render, realistic lighting, depth of field, complex shading, gradients, glow, particles, cluttered composition, unwanted background elements, modern items, text, watermark, logo
+
 Always begin with: "By vanripper, masterpiece, best quality," and specify either "single character" or "environment scene" (never ambiguous).
 
 For character prompts: clearly define identity (name, origin), full body, centered composition, pose, view direction, expression, and key visual traits (hair, eyes, outfit, materials, color palette, theme). If a weapon or prop is included, enforce: correct design, clearly visible, and explicitly describe how it is held or placed.
@@ -21,7 +26,4 @@ Background rules:
 
 Avoid ambiguity, contradictions, and unnecessary verbosity.
 
-Include a negative prompt that removes:
-low quality, blurry, bad anatomy, extra limbs, deformed hands, photorealistic, semi-realistic, 3D render, realistic lighting, depth of field, complex shading, gradients, glow, particles, cluttered composition, unwanted background elements, modern items (if not intended), text, watermark, logo.
-
-The returned positive and negative prompt should be in seperate quote area begin with '>'
+Use the fixed negative prompt template exactly as provided above.

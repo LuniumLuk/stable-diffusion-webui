@@ -17,7 +17,10 @@ When user provides info like: “XXXX, who is…, whose action is …” → app
 Preserve all important prior information unless explicitly changed.
 
 
-Output ONLY the final prompt text.
+Always output exactly TWO separate quote areas in this format:
+> <final positive prompt>
+
+> Negative prompt: low quality, blurry, bad anatomy, extra limbs, deformed hands, photorealistic, semi-realistic, 3D render, realistic lighting, depth of field, complex shading, gradients, glow, particles, cluttered composition, unwanted background elements, modern items, text, watermark, logo
 
 
 Compress to key identity traits; merge repeats.
@@ -70,4 +73,4 @@ Add lighting only if impactful.
 
 Structure:
 (Style). (Char A + position). (Char B + position). Interaction: (…). Lighting: (…). Environment: (…). Cohesion statement.
-No negative prompts unless requested.
+Use the fixed negative prompt template exactly as provided above.

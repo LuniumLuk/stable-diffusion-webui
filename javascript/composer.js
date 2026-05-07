@@ -71,16 +71,16 @@
     function updateLockModeUi() {
       if (!lockModeBtn) return;
       lockModeBtn.textContent = state.lockToSelected
-        ? "Lock Edit To Selected: ON"
-        : "Lock Edit To Selected: OFF";
+        ? "Lock to Selected: ON"
+        : "Lock to Selected: OFF";
       lockModeBtn.classList.toggle("active", state.lockToSelected);
     }
 
     function updateBgLockUi() {
       if (!bgLockBtn) return;
       bgLockBtn.textContent = state.lockEditBackground
-        ? "Lock Edit Background: ON"
-        : "Lock Edit Background: OFF";
+        ? "Edit BG Only: ON"
+        : "Edit BG Only: OFF";
       bgLockBtn.classList.toggle("active", state.lockEditBackground);
     }
 
@@ -199,6 +199,88 @@
         reader.readAsDataURL(file);
       });
     }
+
+    function loadImageFromDataUrl(src) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = src;
+      });
+    }
+
+    async function restoreFromConfigJson(configJson) {
+      let payload;
+      try {
+        payload = JSON.parse(configJson);
+      } catch (e) {
+        setStatus("Failed to parse config file.");
+        return;
+      }
+
+      if (payload.width && payload.height) {
+        canvas.width = payload.width;
+        canvas.height = payload.height;
+      }
+
+      if (payload.background_color) {
+        state.useColorBackground = true;
+        state.backgroundColor = payload.background_color;
+        const bgColorInput = root.querySelector("#composer_bg_color");
+        if (bgColorInput) bgColorInput.value = payload.background_color;
+      } else {
+        state.useColorBackground = false;
+      }
+
+      const layers = [];
+      for (const ld of payload.layers || []) {
+        if (!ld.src) continue;
+        const img = await loadImageFromDataUrl(ld.src);
+        if (!img) continue;
+        layers.push({
+          id: crypto.randomUUID(),
+          name: ld.name || "Layer",
+          src: ld.src,
+          img,
+          x: ld.x,
+          y: ld.y,
+          scale: ld.scale,
+          rot: ((ld.rot_deg || 0) * Math.PI) / 180,
+          mirror: ld.mirror || false,
+          opacity: ld.opacity !== undefined ? ld.opacity : 1,
+          isBackground: ld.is_background || false,
+          isPaintOverlay: ld.is_paint_overlay || false,
+        });
+      }
+
+      state.layers = layers;
+      state.active = layers.length > 0 ? 0 : -1;
+
+      // Restore foreground layers (non-background, non-overlay) back into the staged assets panel.
+      state.assets = [];
+      state.assetKeys = new Set();
+      for (const layer of layers) {
+        if (layer.isBackground || layer.isPaintOverlay) continue;
+        const key = `restored::${layer.name}`;
+        if (state.assetKeys.has(key)) continue;
+        state.assets.push({
+          id: crypto.randomUUID(),
+          key,
+          name: layer.name,
+          img: layer.img,
+          src: layer.src,
+        });
+        state.assetKeys.add(key);
+      }
+
+      renderLayerList();
+      renderAssetList();
+      fitCanvasToParent();
+      draw();
+      setStatus(`Config loaded: ${layers.length} layer(s), ${state.assets.length} asset(s) restored.`);
+    }
+
+    state.restoreFromConfigJson = restoreFromConfigJson;
 
     function fitCanvasToParent() {
       const wrap = root.querySelector("#composer_canvas_wrap");
@@ -1249,6 +1331,27 @@
     updateToolUi();
     renderAssetList();
     state.bindUploadInputs = bindUploadInputs;
+
+    // Load Config button: open hidden file input
+    const loadConfigBtn = document.getElementById("composer_load_config_btn");
+    const configFileInput = document.getElementById("composer_config_file_input");
+    if (loadConfigBtn && configFileInput) {
+      loadConfigBtn.addEventListener("click", () => {
+        configFileInput.value = "";
+        configFileInput.click();
+      });
+      configFileInput.addEventListener("change", async () => {
+        const file = configFileInput.files && configFileInput.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          await restoreFromConfigJson(text);
+        } catch (e) {
+          setStatus("Error loading config file: " + e.message);
+        }
+      });
+    }
+
     root.__composer_state = state;
     fitCanvasToParent();
     draw();
@@ -1296,8 +1399,134 @@
     return [JSON.stringify(payload)];
   };
 
+  /**
+   * Load a composed image (and optionally its .composerstate.json) into the
+   * Composer from the Gallery tab.
+   * @param {string} imagePath  Absolute filesystem path to the PNG.
+   * @param {string} configPath Absolute filesystem path to the .composerstate.json,
+   *                            or empty string if none exists.
+   */
+  window.composer_load_from_gallery = async function (imagePath, configPath) {
+    window.composer_ensure_init();
+    const root = document.getElementById("composer_root");
+    if (!root || !root.__composer_state) return;
+    const state = root.__composer_state;
+    const canvas = root.querySelector("#composer_canvas");
+
+    function toFileUrl(absPath) {
+      return `/file=${encodeURIComponent(String(absPath).replace(/\\/g, "/"))}`;
+    }
+
+    // If a config sidecar exists, restore full state from it.
+    if (configPath) {
+      try {
+        const resp = await fetch(toFileUrl(configPath));
+        if (resp.ok) {
+          const configJson = await resp.text();
+          await state.restoreFromConfigJson(configJson);
+          return;
+        }
+      } catch (e) {
+        console.warn("[composer] Failed to load config sidecar:", e);
+      }
+    }
+
+    // Fallback: load the image as a background layer via a minimal config.
+    try {
+      const resp = await fetch(toFileUrl(imagePath));
+      if (!resp.ok) throw new Error("fetch failed: " + resp.status);
+      const blob = await resp.blob();
+      const src = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      const fname = String(imagePath).split(/[\\/]/).pop() || "Gallery Image";
+      const minimalPayload = JSON.stringify({
+        width: canvas.width,
+        height: canvas.height,
+        background_color: null,
+        layers: [{ name: fname, src, x: canvas.width / 2, y: canvas.height / 2,
+                   scale: 1, rot_deg: 0, mirror: false, opacity: 1, is_background: true }],
+      });
+      await state.restoreFromConfigJson(minimalPayload);
+    } catch (e) {
+      console.warn("[composer] Failed to load gallery image:", e);
+    }
+  };
+
+  function bindCaptionClickToCopy() {
+    const captionWrap = document.getElementById("composer_caption_output");
+    if (!captionWrap) return;
+
+    const captionArea = captionWrap.querySelector("textarea");
+    if (!captionArea || captionArea.dataset.copyOnClickBound === "1") return;
+
+    captionArea.dataset.copyOnClickBound = "1";
+    captionArea.title = "Click to copy caption";
+    captionArea.style.cursor = "copy";
+
+    const getCopyText = (raw) => {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+
+      const marker = "Paste the above into a LLM";
+      const markerIdx = text.indexOf(marker);
+      if (markerIdx >= 0) {
+        return text.slice(0, markerIdx).trimEnd();
+      }
+
+      return text;
+    };
+
+    captionArea.addEventListener("click", async () => {
+      const text = getCopyText(captionArea.value);
+      if (!text) return;
+
+      const root = document.getElementById("composer_root");
+      const statusEl = root ? root.querySelector("#composer_status_text") : null;
+
+      try {
+        await navigator.clipboard.writeText(text);
+        if (statusEl) {
+          statusEl.textContent = "Caption copied to clipboard.";
+        }
+      } catch (_err) {
+        if (typeof document.execCommand === "function") {
+          let tmp = null;
+          try {
+            tmp = document.createElement("textarea");
+            tmp.value = text;
+            tmp.setAttribute("readonly", "");
+            tmp.style.position = "fixed";
+            tmp.style.top = "-9999px";
+            document.body.appendChild(tmp);
+            tmp.focus();
+            tmp.select();
+            document.execCommand("copy");
+            if (statusEl) {
+              statusEl.textContent = "Caption copied to clipboard.";
+            }
+          } catch (_ignored) {
+            if (statusEl) {
+              statusEl.textContent = "Copy failed. Select text and copy manually.";
+            }
+          } finally {
+            if (tmp && tmp.parentNode) {
+              tmp.parentNode.removeChild(tmp);
+            }
+          }
+        } else if (statusEl) {
+          statusEl.textContent = "Copy failed. Select text and copy manually.";
+        }
+      }
+    });
+  }
+
   const observer = new MutationObserver(() => {
     window.composer_ensure_init();
+    bindCaptionClickToCopy();
     const root = document.getElementById("composer_root");
     if (root && root.__composer_state && typeof root.__composer_state.bindUploadInputs === "function") {
       root.__composer_state.bindUploadInputs();
@@ -1306,6 +1535,7 @@
 
   const startObserve = () => {
     window.composer_ensure_init();
+    bindCaptionClickToCopy();
     observer.observe(document.body, { childList: true, subtree: true });
   };
 

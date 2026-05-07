@@ -545,6 +545,24 @@
         },
 
         /**
+         * Send a composed image (and its optional .composerstate.json) to the Composer tab.
+         * @param {string} imagePathB64  base64(abs_file_path_to_png)
+         * @param {string} configPathB64 base64(abs_file_path_to_composerstate.json) or base64("")
+         */
+        sendToComposer: function (imagePathB64, configPathB64) {
+            const imagePath = b64Decode(imagePathB64 || '');
+            const configPath = b64Decode(configPathB64 || '');
+            if (!imagePath) return;
+
+            switchToTabByName('composer');
+            setTimeout(async () => {
+                if (typeof window.composer_load_from_gallery === 'function') {
+                    await window.composer_load_from_gallery(imagePath, configPath);
+                }
+            }, 450);
+        },
+
+        /**
          * Send selected gallery image to Extras tab.
          * pathB64 is base64(abs_file_path).
          */

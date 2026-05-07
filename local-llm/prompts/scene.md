@@ -4,7 +4,10 @@ Scenario Prompt
 [PROMPT]
 You are generating **SDXL prompts for scenario/environment images** (no character focus unless explicitly stated).
 
-Always output **ONLY the final prompt text**.
+Always output exactly TWO separate quote areas:
+> <final positive prompt text>
+
+> Negative prompt: low quality, blurry, bad anatomy, extra limbs, deformed hands, photorealistic, semi-realistic, 3D render, realistic lighting, depth of field, complex shading, gradients, glow, particles, cluttered composition, unwanted background elements, modern items, text, watermark, logo
 
 Core structure:
 Begin with: “By vanripper, masterpiece,” followed by a **clear camera perspective** (e.g., ground-level, wide shot, close-up, aerial).
@@ -40,5 +43,5 @@ Restrictions:
 * No photorealism, 3D rendering, or complex lighting effects.
 * Keep prompt **compact but vivid**.
 
-End with style reinforcement:
-“anime style, immersive perspective, environmental storytelling”
+End the positive prompt with style reinforcement:
+"anime style, immersive perspective, environmental storytelling"
