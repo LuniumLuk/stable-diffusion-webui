@@ -18,6 +18,7 @@
     let previewIndex = -1;
     let previewLikeBtn = null;
     let previewDislikeBtn = null;
+    let previewDownloadBtn = null;
     let actionUndoStack = [];
     let actionRedoStack = [];
     let zoomScale = 1;
@@ -267,6 +268,7 @@
             '<div id="endgal_preview_actions">',
             '  <button id="endgal_preview_like" class="endgal-preview-action" title="toggle endorse">☆</button>',
             '  <button id="endgal_preview_dislike" class="endgal-preview-action" title="toggle dislike">⬇</button>',
+            '  <a id="endgal_preview_download" class="endgal-preview-action endgal-preview-download" title="Download original image" download>&#8681; Download</a>',
             '</div>'
         ].join('');
 
@@ -282,6 +284,7 @@
         previewImage = previewOverlay.querySelector('#endgal_preview_image');
         previewLikeBtn = previewOverlay.querySelector('#endgal_preview_like');
         previewDislikeBtn = previewOverlay.querySelector('#endgal_preview_dislike');
+        previewDownloadBtn = previewOverlay.querySelector('#endgal_preview_download');
 
         if (prevBtn) {
             prevBtn.addEventListener('click', (e) => {
@@ -436,7 +439,8 @@
         const imgs = Array.from(gradioApp().querySelectorAll('#endgal_html .endgal-thumb img'));
         previewList = imgs
             .map(el => ({
-                src: el.dataset.orig || el.getAttribute('src'),
+                src: el.dataset.preview || el.dataset.orig || el.getAttribute('src'),
+                origUrl: el.dataset.orig || '',
                 infotextB64: el.dataset.infotext || '',
                 endorseAction: el.dataset.endorseAction || '',
                 dislikeAction: el.dataset.dislikeAction || '',
@@ -459,6 +463,18 @@
         if (previewDislikeBtn) {
             previewDislikeBtn.textContent = item ? (item.dislikeLabel || '⬇') : '⬇';
             previewDislikeBtn.disabled = !(item && item.dislikeAction);
+        }
+        if (previewDownloadBtn) {
+            const origUrl = item && item.origUrl ? item.origUrl : (item ? item.src : '');
+            if (origUrl) {
+                previewDownloadBtn.href = origUrl;
+                // Extract filename from /file=path/to/file.png
+                const decoded = decodeURIComponent(origUrl.replace(/^\/file=/, ''));
+                previewDownloadBtn.download = decoded.split('/').pop().split('\\').pop() || 'image';
+                previewDownloadBtn.style.display = '';
+            } else {
+                previewDownloadBtn.style.display = 'none';
+            }
         }
     }
 

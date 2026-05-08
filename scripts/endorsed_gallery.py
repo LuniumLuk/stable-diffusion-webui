@@ -27,6 +27,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
 
 THUMB_PX = 192
+PREVIEW_PX = 1024
 PAGE_SIZE_DEFAULT = 48
 THUMB_SIZE_PRESETS = {
     "Small": 140,
@@ -36,15 +37,22 @@ THUMB_SIZE_PRESETS = {
 
 _thumb_cache: dict = {}
 _THUMB_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_thumbs")
+_PREVIEW_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_previews")
 
 
 def _ensure_thumb_cache_dir():
     os.makedirs(_THUMB_CACHE_DIR, exist_ok=True)
+    os.makedirs(_PREVIEW_CACHE_DIR, exist_ok=True)
 
 
 def _thumb_file(path: str, mtime: float) -> str:
     key = hashlib.sha1(f"{path}|{mtime:.6f}".encode("utf-8", errors="ignore")).hexdigest()
     return os.path.join(_THUMB_CACHE_DIR, f"{key}.webp")
+
+
+def _preview_file(path: str, mtime: float) -> str:
+    key = hashlib.sha1(f"{path}|{mtime:.6f}|preview".encode("utf-8", errors="ignore")).hexdigest()
+    return os.path.join(_PREVIEW_CACHE_DIR, f"{key}.webp")
 
 
 def _get_thumb(path: str) -> str:
@@ -65,6 +73,33 @@ def _get_thumb(path: str) -> str:
 
         url = _file_url(thumb_path)
         _thumb_cache[cache_key] = url
+        return url
+    except Exception:
+        return ""
+
+
+_preview_cache: dict = {}
+
+
+def _get_preview_thumb(path: str) -> str:
+    """Return a URL to a ≤1024px WebP version of the image, cached on disk."""
+    try:
+        mtime = os.path.getmtime(path)
+        cache_key = (path, mtime)
+        cached = _preview_cache.get(cache_key)
+        if cached:
+            return cached
+
+        _ensure_thumb_cache_dir()
+        preview_path = _preview_file(path, mtime)
+
+        if not os.path.exists(preview_path):
+            img = Image.open(path)
+            img.thumbnail((PREVIEW_PX, PREVIEW_PX))
+            img.save(preview_path, format="WEBP", quality=88, method=4)
+
+        url = _file_url(preview_path)
+        _preview_cache[cache_key] = url
         return url
     except Exception:
         return ""
@@ -165,6 +200,7 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
     mtime = record.get("file_mtime")
     date = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else ""
     thumb = _get_thumb(path) if path else ""
+    preview_url = _get_preview_thumb(path) if path else ""
     orig_url = _file_url(path)
     path_b64 = _b64(path)
     config_path = record.get("config_path", "")
@@ -174,7 +210,8 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
     thumb_html = (
         f'<img src="{thumb}" alt="composed image" loading="lazy" '
         f'data-orig="{orig_url}" '
-        f'onclick="endorsedGallery.previewImage(this.dataset.orig || this.src)" />'
+        f'data-preview="{preview_url}" '
+        f'onclick="endorsedGallery.previewImage(this.dataset.preview || this.dataset.orig || this.src)" />'
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
 
     config_badge = (
@@ -398,6 +435,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         date = datetime.datetime.fromtimestamp(record["file_mtime"]).strftime("%Y-%m-%d %H:%M")
 
     thumb = _get_thumb(path) if path else ""
+    preview_url = _get_preview_thumb(path) if path else ""
     orig_url = _file_url(path)
     resolution_label = _resolution_label(record)
     hires_marker = _hires_marker_label(record)
@@ -464,13 +502,14 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     thumb_html = (
         f'<img src="{thumb}" alt="generated image" loading="lazy" '
         f'data-orig="{orig_url}" '
+        f'data-preview="{preview_url}" '
         f'data-infotext="{infotext_b64}" '
         f'data-endorse-action="{endorse_action_b64}" '
         f'data-dislike-action="{dislike_action_b64}" '
         f'data-endorse-label="{endorse_label}" '
         f'data-dislike-label="{dislike_label}" '
         f'data-tags="{tags_full_b64}" '
-        f'onclick="endorsedGallery.previewImage(this.dataset.orig || this.src)" />'
+        f'onclick="endorsedGallery.previewImage(this.dataset.preview || this.dataset.orig || this.src)" />'
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
     thumb_html = thumb_html + thumb_badges
 

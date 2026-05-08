@@ -48,8 +48,135 @@ function formatTime(secs) {
 
 var originalAppTitle = undefined;
 
+// ---------------------------------------------------------------------------
+// Global server-status bar — polls /internal/global-status, works for every
+// client and survives page refreshes because state lives in the server.
+// ---------------------------------------------------------------------------
+var globalGpuProgress = {
+    root: null,
+    fill: null,
+    label: null,
+    pollerHandle: null,
+};
+
+function requestGet(url, handler, errorHandler) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                try {
+                    var js = JSON.parse(xhr.responseText);
+                    handler(js);
+                } catch (error) {
+                    console.error(error);
+                    errorHandler();
+                }
+            } else {
+                errorHandler();
+            }
+        }
+    };
+    xhr.send();
+}
+
+function ensureGlobalGpuProgressBar() {
+    if (globalGpuProgress.root && document.body.contains(globalGpuProgress.root)) {
+        return;
+    }
+
+    var root = document.getElementById('global_gpu_progress');
+    if (!root) {
+        root = document.createElement('div');
+        root.id = 'global_gpu_progress';
+        root.className = 'global-gpu-progress';
+        root.setAttribute('aria-live', 'polite');
+        root.style.display = 'none';
+
+        var fill = document.createElement('div');
+        fill.className = 'global-gpu-progress-fill';
+
+        var label = document.createElement('div');
+        label.className = 'global-gpu-progress-label';
+        label.textContent = '';
+
+        root.appendChild(fill);
+        root.appendChild(label);
+        document.body.appendChild(root);
+    }
+
+    globalGpuProgress.root = root;
+    globalGpuProgress.fill = root.querySelector('.global-gpu-progress-fill');
+    globalGpuProgress.label = root.querySelector('.global-gpu-progress-label');
+}
+
+function renderGlobalStatusResponse(res) {
+    ensureGlobalGpuProgressBar();
+    if (!res || (!res.active && !res.queued_count)) {
+        globalGpuProgress.root.style.display = 'none';
+        globalGpuProgress.fill.style.width = '0%';
+        globalGpuProgress.fill.textContent = '';
+        globalGpuProgress.label.textContent = '';
+        return;
+    }
+
+    var pct = Math.max(0, Math.min(100, (res.progress || 0) * 100.0));
+    globalGpuProgress.root.style.display = 'block';
+    globalGpuProgress.fill.style.width = pct.toFixed(2) + '%';
+    globalGpuProgress.fill.textContent = pct > 0 ? (pct.toFixed(0) + '%') : '';
+
+    // Build label: "Step 14/20  Image 2/4  ETA 8s  |  VRAM 6.2/16.0 GiB (39%)"
+    var parts = [];
+    if (res.active) {
+        if (res.total_steps > 0) {
+            parts.push('Step ' + res.step + '/' + res.total_steps);
+        }
+        if (res.job_count > 1) {
+            parts.push('Image ' + (res.job_no + 1) + '/' + res.job_count);
+        }
+        if (res.textinfo) {
+            parts.push(res.textinfo);
+        }
+        if (res.eta !== null && res.eta !== undefined && res.eta > 0) {
+            parts.push('ETA ' + formatTime(res.eta));
+        }
+    } else if (res.queued_count > 0) {
+        parts.push('Queued: ' + res.queued_count);
+    }
+
+    if (res.vram_total_gb > 0) {
+        var vramPct = Math.round((res.vram_used_gb / res.vram_total_gb) * 100);
+        parts.push('VRAM ' + res.vram_used_gb.toFixed(1) + '/' + res.vram_total_gb.toFixed(1) + ' GiB (' + vramPct + '%)');
+    }
+
+    globalGpuProgress.label.textContent = parts.join('  |  ');
+}
+
+function startGlobalStatusPoller() {
+    if (globalGpuProgress.pollerHandle) return;
+    ensureGlobalGpuProgressBar();
+
+    function poll() {
+        requestGet('./internal/global-status', function(res) {
+            renderGlobalStatusResponse(res);
+        }, function() {
+            // On error keep bar hidden, retry next tick
+            renderGlobalStatusResponse(null);
+        });
+    }
+
+    poll(); // immediate first fetch so bar appears on load if generation is running
+    globalGpuProgress.pollerHandle = setInterval(poll, 600);
+}
+
+// Legacy stubs — requestProgress still calls these; they are now no-ops because
+// the global bar is driven by the server poller, not by per-task callbacks.
+function updateGlobalGpuProgress() {}
+function clearGlobalGpuProgress() {}
+
 onUiLoaded(function() {
     originalAppTitle = document.title;
+    startGlobalStatusPoller();
 });
 
 function setTitle(progress) {
@@ -115,6 +242,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
         setTitle("");
         parentProgressbar.removeChild(divProgress);
         if (gallery && livePreview) gallery.removeChild(livePreview);
+        clearGlobalGpuProgress(id_task);
         atEnd();
 
         divProgress = null;
@@ -123,6 +251,8 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
     var funProgress = function(id_task) {
         requestWakeLock();
         request("./internal/progress", {id_task: id_task, live_preview: false}, function(res) {
+            updateGlobalGpuProgress(id_task, res);
+
             if (res.completed) {
                 removeProgressBar();
                 return;
@@ -171,6 +301,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 funProgress(id_task, res.id_live_preview);
             }, opts.live_preview_refresh_period || 500);
         }, function() {
+            clearGlobalGpuProgress(id_task);
             removeProgressBar();
         });
     };

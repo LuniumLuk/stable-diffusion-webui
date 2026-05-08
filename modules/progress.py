@@ -75,6 +75,7 @@ class ProgressResponse(BaseModel):
 
 def setup_progress_api(app):
     app.add_api_route("/internal/pending-tasks", get_pending_tasks, methods=["GET"])
+    app.add_api_route("/internal/global-status", global_status_api, methods=["GET"])
     return app.add_api_route("/internal/progress", progressapi, methods=["POST"], response_model=ProgressResponse)
 
 
@@ -82,6 +83,63 @@ def get_pending_tasks():
     pending_tasks_ids = list(pending_tasks)
     pending_len = len(pending_tasks_ids)
     return PendingTasksResponse(size=pending_len, tasks=pending_tasks_ids)
+
+
+def global_status_api():
+    """Server-side global generation status. No task ID required; readable by any client."""
+    active = current_task is not None
+    queued_count = len(pending_tasks)
+
+    progress = 0.0
+    eta = None
+    step = 0
+    total_steps = 0
+    job_no = 0
+    job_count = 0
+    textinfo = ""
+
+    if active:
+        job_count = shared.state.job_count
+        job_no = shared.state.job_no
+        total_steps = shared.state.sampling_steps
+        step = shared.state.sampling_step
+        textinfo = shared.state.textinfo or ""
+
+        if job_count > 0:
+            progress += job_no / job_count
+        if total_steps > 0 and job_count > 0:
+            progress += (1.0 / job_count) * (step / total_steps)
+        progress = min(progress, 1.0)
+
+        elapsed = time.time() - shared.state.time_start
+        if progress > 0:
+            eta = elapsed / progress - elapsed
+
+    # VRAM
+    vram_used = 0.0
+    vram_total = 0.0
+    try:
+        import torch
+        if torch.cuda.is_available():
+            dev = torch.cuda.current_device()
+            vram_used = torch.cuda.memory_allocated(dev) / (1024 ** 3)
+            vram_total = torch.cuda.get_device_properties(dev).total_memory / (1024 ** 3)
+    except Exception:
+        pass
+
+    return {
+        "active": active,
+        "queued_count": queued_count,
+        "progress": round(progress, 4),
+        "step": step,
+        "total_steps": total_steps,
+        "job_no": job_no,
+        "job_count": job_count,
+        "eta": round(eta, 1) if eta is not None else None,
+        "textinfo": textinfo,
+        "vram_used_gb": round(vram_used, 2),
+        "vram_total_gb": round(vram_total, 2),
+    }
 
 
 def progressapi(req: ProgressRequest):

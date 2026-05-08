@@ -872,6 +872,56 @@ table.popup-table .link{
     height: calc(100% - 60px);  /* to match gradio's height */
 }
 
+.global-gpu-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1100;
+    height: 24px;
+    background: rgba(2, 6, 23, 0.92);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.4);
+    overflow: hidden;
+    backdrop-filter: blur(2px);
+}
+
+.global-gpu-progress-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    background: linear-gradient(90deg, #0ea5e9 0%, #22c55e 100%);
+    color: #ffffff;
+    font-size: 11px;
+    line-height: 24px;
+    text-align: right;
+    padding: 0 8px;
+    font-weight: 700;
+    white-space: nowrap;
+    transition: width 120ms linear;
+}
+
+.global-gpu-progress-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #e2e8f0;
+    text-shadow: 0 1px 1px rgba(2, 6, 23, 0.8);
+    pointer-events: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dark .global-gpu-progress {
+    background: rgba(2, 6, 23, 0.94);
+}
+
 /* fullscreen popup (ie in Lora's (i) button) */
 
 .popup-metadata{
@@ -2085,6 +2135,24 @@ body.resizing .resize-handle {
 .endgal-preview-action:disabled {
     opacity: 0.45;
     cursor: default;
+}
+
+.endgal-preview-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 15px;
+    padding: 0 14px;
+    min-width: 110px;
+    color: #7dd3fc;
+    border-color: rgba(125, 211, 252, 0.45);
+}
+
+.endgal-preview-download:hover {
+    color: #bae6fd;
+    border-color: rgba(125, 211, 252, 0.9);
+    background: rgba(14, 116, 144, 0.28);
 }
 
 /* ---- Keyword Insights panel ---- */
