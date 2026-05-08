@@ -87,7 +87,10 @@ def get_pending_tasks():
 
 def global_status_api():
     """Server-side global generation status. No task ID required; readable by any client."""
-    active = current_task is not None
+    # Some generation paths update shared.state without touching current_task.
+    # Derive "active" from runtime state first so totals stay correct.
+    state_job_count = int(shared.state.job_count or 0)
+    active = state_job_count > 0 or (current_task is not None)
     queued_count = len(pending_tasks)
 
     progress = 0.0
@@ -97,13 +100,17 @@ def global_status_api():
     job_no = 0
     job_count = 0
     textinfo = ""
+    finished_images = 0
+    total_images = 0
 
     if active:
-        job_count = shared.state.job_count
-        job_no = shared.state.job_no
-        total_steps = shared.state.sampling_steps
-        step = shared.state.sampling_step
+        job_count = int(shared.state.job_count or 0)
+        job_no = int(shared.state.job_no or 0)
+        total_steps = int(shared.state.sampling_steps or 0)
+        step = int(shared.state.sampling_step or 0)
         textinfo = shared.state.textinfo or ""
+        total_images = max(0, job_count)
+        finished_images = max(0, min(job_no, total_images))
 
         if job_count > 0:
             progress += job_no / job_count
@@ -130,6 +137,8 @@ def global_status_api():
     return {
         "active": active,
         "queued_count": queued_count,
+        "finished_images": finished_images,
+        "total_images": total_images,
         "progress": round(progress, 4),
         "step": step,
         "total_steps": total_steps,

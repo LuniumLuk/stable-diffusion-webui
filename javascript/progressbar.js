@@ -56,6 +56,7 @@ var globalGpuProgress = {
     root: null,
     fill: null,
     label: null,
+    meta: null,
     pollerHandle: null,
 };
 
@@ -100,14 +101,21 @@ function ensureGlobalGpuProgressBar() {
         label.className = 'global-gpu-progress-label';
         label.textContent = '';
 
+        var meta = document.createElement('div');
+        meta.id = 'global_gpu_progress_meta';
+        meta.className = 'global-gpu-progress-meta';
+        meta.textContent = '';
+
         root.appendChild(fill);
         root.appendChild(label);
         document.body.appendChild(root);
+        document.body.appendChild(meta);
     }
 
     globalGpuProgress.root = root;
     globalGpuProgress.fill = root.querySelector('.global-gpu-progress-fill');
     globalGpuProgress.label = root.querySelector('.global-gpu-progress-label');
+    globalGpuProgress.meta = document.getElementById('global_gpu_progress_meta');
 }
 
 function renderGlobalStatusResponse(res) {
@@ -117,13 +125,17 @@ function renderGlobalStatusResponse(res) {
         globalGpuProgress.fill.style.width = '0%';
         globalGpuProgress.fill.textContent = '';
         globalGpuProgress.label.textContent = '';
+        if (globalGpuProgress.meta) {
+            globalGpuProgress.meta.textContent = '';
+            globalGpuProgress.meta.style.display = 'none';
+        }
         return;
     }
 
     var pct = Math.max(0, Math.min(100, (res.progress || 0) * 100.0));
     globalGpuProgress.root.style.display = 'block';
     globalGpuProgress.fill.style.width = pct.toFixed(2) + '%';
-    globalGpuProgress.fill.textContent = pct > 0 ? (pct.toFixed(0) + '%') : '';
+    globalGpuProgress.fill.textContent = '';
 
     // Build label: "Step 14/20  Image 2/4  ETA 8s  |  VRAM 6.2/16.0 GiB (39%)"
     var parts = [];
@@ -150,6 +162,13 @@ function renderGlobalStatusResponse(res) {
     }
 
     globalGpuProgress.label.textContent = parts.join('  |  ');
+    if (globalGpuProgress.meta) {
+        var finished = Math.max(0, Number(res.finished_images) || 0);
+        var total = Math.max(0, Number(res.total_images) || 0);
+        var queued = Math.max(0, Number(res.queued_count) || 0);
+        globalGpuProgress.meta.textContent = 'Done ' + finished + '  |  Total ' + total + '  |  Queue ' + queued;
+        globalGpuProgress.meta.style.display = 'flex';
+    }
 }
 
 function startGlobalStatusPoller() {

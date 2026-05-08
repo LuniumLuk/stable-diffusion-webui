@@ -10,3 +10,4 @@
 # - device: matches as a case-insensitive substring of User-Agent.
 
 token:6433a985-0a20-41fa-94e7-772669d6492a
+token:a9a1dc0f-58f2-44b5-a350-a7dcf7173281
