@@ -8,6 +8,7 @@ import io
 import json
 import os
 import time
+import urllib.parse
 
 import gradio as gr
 from PIL import Image
@@ -27,6 +28,11 @@ _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
 
 THUMB_PX = 192
 PAGE_SIZE_DEFAULT = 48
+THUMB_SIZE_PRESETS = {
+    "Small": 140,
+    "Medium": 220,
+    "Large": 280,
+}
 
 _thumb_cache: dict = {}
 _THUMB_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_thumbs")
@@ -57,17 +63,20 @@ def _get_thumb(path: str) -> str:
             img.thumbnail((THUMB_PX, THUMB_PX))
             img.save(thumb_path, format="WEBP", quality=72, method=5)
 
-        with open(thumb_path, "rb") as f:
-            b64 = "data:image/webp;base64," + base64.b64encode(f.read()).decode("ascii")
-
-        _thumb_cache[cache_key] = b64
-        return b64
+        url = _file_url(thumb_path)
+        _thumb_cache[cache_key] = url
+        return url
     except Exception:
         return ""
 
 
 def _b64(s: str) -> str:
     return base64.b64encode((s or "").encode("utf-8", errors="ignore")).decode("ascii")
+
+
+def _file_url(path: str) -> str:
+    normalized = str(path or "").replace(chr(92), "/")
+    return f'/file={urllib.parse.quote(normalized, safe="")}' if normalized else ""
 
 
 def _get_output_dirs() -> list:
@@ -144,14 +153,19 @@ def _fetch_composed_records(query: str, page: int, page_size: int):
     return rows, total
 
 
-def _composed_card_html(record: dict) -> str:
+def _extras_details_open_attr(card_extras_mode: str) -> str:
+    mode = (card_extras_mode or "Expanded").strip().lower()
+    return "" if mode.startswith("f") else " open"
+
+
+def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str:
     import datetime as _dt
     path = record.get("path", "")
     fname = os.path.basename(path)
     mtime = record.get("file_mtime")
     date = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else ""
     thumb = _get_thumb(path) if path else ""
-    orig_url = f'/file={path.replace(chr(92), "/")}' if path else ""
+    orig_url = _file_url(path)
     path_b64 = _b64(path)
     config_path = record.get("config_path", "")
     config_path_b64 = _b64(config_path)
@@ -175,24 +189,29 @@ def _composed_card_html(record: dict) -> str:
     )
     composer_btn_class = "endgal-btn-send2img endgal-btn-composer" + ("" if has_config else " endgal-btn-disabled")
 
-    return f"""
+        details_open = _extras_details_open_attr(card_extras_mode)
+
+        return f"""
 <div class="endgal-card endgal-composed-card">
   <div class="endgal-thumb">{thumb_html}</div>
-  <div class="endgal-body">
-    <div class="endgal-prompt">{_html.escape(fname)}{config_badge}</div>
-    <div class="endgal-date">{_html.escape(date)}</div>
-  </div>
-  <div class="endgal-actions">
-    <button class="{composer_btn_class}"
-      title="{'Send to Composer and restore full state' if has_config else 'No composer config available for this image'}"
-      {composer_btn_attrs}>&#8594; Composer</button>
-    <button class="endgal-btn-send2img"
-      title="send to img2img"
-      onclick="endorsedGallery.sendTo('', 'img2img', '{path_b64}')">img2img</button>
-    <button class="endgal-btn-send2img"
-      title="send to extras"
-      onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
-  </div>
+    <details class="endgal-card-extra"{details_open}>
+        <summary class="endgal-card-extra-summary">Details &amp; Quick Actions</summary>
+        <div class="endgal-body">
+            <div class="endgal-prompt">{_html.escape(fname)}{config_badge}</div>
+            <div class="endgal-date">{_html.escape(date)}</div>
+        </div>
+        <div class="endgal-actions">
+            <button class="{composer_btn_class}"
+                title="{'Send to Composer and restore full state' if has_config else 'No composer config available for this image'}"
+                {composer_btn_attrs}>&#8594; Composer</button>
+            <button class="endgal-btn-send2img"
+                title="send to img2img"
+                onclick="endorsedGallery.sendTo('', 'img2img', '{path_b64}')">img2img</button>
+            <button class="endgal-btn-send2img"
+                title="send to extras"
+                onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
+        </div>
+    </details>
 </div>
 """
 
@@ -260,7 +279,7 @@ def _apply_removebg(path: str) -> tuple[bool, str]:
     return True, f"Removebg saved: {_html.escape(fullfn)}"
 
 
-def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False) -> str:
+def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False, card_extras_mode: str = "Expanded") -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
     seed = str(record.get("seed", ""))
@@ -272,7 +291,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         date = datetime.datetime.fromtimestamp(record["file_mtime"]).strftime("%Y-%m-%d %H:%M")
 
     thumb = _get_thumb(path) if path else ""
-    orig_url = f'/file={path.replace(chr(92), "/")}' if path else ""
+    orig_url = _file_url(path)
 
     payload = _action_payload(record)
     endorse_action = {
@@ -316,6 +335,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     thumb_html = (
         f'<img src="{thumb}" alt="generated image" loading="lazy" '
         f'data-orig="{orig_url}" '
+        f'data-infotext="{infotext_b64}" '
         f'data-endorse-action="{endorse_action_b64}" '
         f'data-dislike-action="{dislike_action_b64}" '
         f'data-endorse-label="{endorse_label}" '
@@ -332,28 +352,34 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         if tags_pills_html else ''
     )
 
-    return f"""
+        details_open = _extras_details_open_attr(card_extras_mode)
+
+        return f"""
 <div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
   <div class="endgal-thumb">{thumb_html}</div>
-  <div class="endgal-body">
-    <div class="endgal-prompt">{_html.escape(prompt[:220])}</div>
-    <div class="endgal-meta">seed { _html.escape(seed) } · { _html.escape(sampler) } · { _html.escape(model) }</div>
-    <div class="endgal-date">{_html.escape(date)}</div>
-    {tags_section}
-    <details class="endgal-details">
-      <summary>Params</summary>
-      <pre class="endgal-infotext">{_html.escape(infotext)}</pre>
+    <details class="endgal-card-extra"{details_open}>
+        <summary class="endgal-card-extra-summary">Details &amp; Quick Actions</summary>
+        <div class="endgal-body">
+            <div class="endgal-prompt">{_html.escape(prompt[:220])}</div>
+            <div class="endgal-meta">seed { _html.escape(seed) } · { _html.escape(sampler) } · { _html.escape(model) }</div>
+            <div class="endgal-date">{_html.escape(date)}</div>
+            {tags_section}
+            <details class="endgal-details">
+                <summary>Params</summary>
+                <pre class="endgal-infotext">{_html.escape(infotext)}</pre>
+            </details>
+        </div>
+        <div class="endgal-actions">
+                    <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
+            <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">txt2img</button>
+            <button class="endgal-btn-send2img" title="queue txt2img with Hires fix preset" onclick="endorsedGallery.queueTxt2ImgHires('{infotext_b64}')">queue hires</button>
+            <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">img2img</button>
+                    <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
+            <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
+                    <button class="{archive_class}" title="{archive_title}" onclick="endorsedGallery.action('{archive_action}')">{archive_label}</button>
+                    <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
+        </div>
     </details>
-  </div>
-  <div class="endgal-actions">
-        <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
-    <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">txt2img</button>
-    <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">img2img</button>
-        <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
-    <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
-        <button class="{archive_class}" title="{archive_title}" onclick="endorsedGallery.action('{archive_action}')">{archive_label}</button>
-        <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
-  </div>
 </div>
 """
 
@@ -525,10 +551,21 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
     return total, rows
 
 
-def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter: str):
+def _thumb_size_css_class(thumb_size: str) -> str:
+    label = (thumb_size or "Medium").strip().lower()
+    if label.startswith("s"):
+        return "endgal-thumb-small"
+    if label.startswith("l"):
+        return "endgal-thumb-large"
+    return "endgal-thumb-medium"
+
+
+def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter: str, thumb_size: str, card_extras_mode: str):
     total, rows = _fetch_mode_records(mode, query, page, page_size, date_filter)
     pages = max(1, (total + int(page_size) - 1) // int(page_size))
     page = max(1, min(int(page), pages))
+    size_class = _thumb_size_css_class(thumb_size)
+    card_min = THUMB_SIZE_PRESETS.get((thumb_size or "Medium").strip().title(), THUMB_SIZE_PRESETS["Medium"])
 
     if page != int(page or 1):
         total, rows = _fetch_mode_records(mode, query, page, page_size, date_filter)
@@ -547,9 +584,9 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
 
     # Composed mode: use a simplified card that skips DB lookups and shows a "→ Composer" button.
     if mode == "🎨 Composed":
-        cards = [_composed_card_html(rec) for rec in rows]
+        cards = [_composed_card_html(rec, card_extras_mode=card_extras_mode) for rec in rows]
         header = f'<div class="endgal-count">{total} composed image(s)</div>'
-        grid = '<div class="endgal-grid endgal-composed-grid">' + "".join(cards) + "</div>"
+        grid = f'<div class="endgal-grid endgal-composed-grid {size_class}" style="--endgal-card-min:{card_min}px">' + "".join(cards) + "</div>"
         page_info = f"{total} items · page {page}/{pages}"
         return header + grid, page_info, page, is_last_page
 
@@ -569,26 +606,26 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
         did = endorsement_db.get_disliked_id_by_path(path)
         tags = tags_map.get(item_key, [])
         is_arch = item_key in archived_keys
-        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch))
+        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch, card_extras_mode=card_extras_mode))
 
     header = f'<div class="endgal-count">{total} items</div>'
-    grid = '<div class="endgal-grid" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
+    grid = f'<div class="endgal-grid {size_class}" style="--endgal-card-min:{card_min}px" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
     page_info = f"{total} items · page {page}/{pages}"
     return header + grid, page_info, page, is_last_page
 
 
-def _reset_to_first_page(mode, query, page_size, date_filter):
-    html, info, page, is_last = render_gallery(mode, query, 1, int(page_size or PAGE_SIZE_DEFAULT), date_filter)
+def _reset_to_first_page(mode, query, page_size, date_filter, thumb_size, card_extras_mode):
+    html, info, page, is_last = render_gallery(mode, query, 1, int(page_size or PAGE_SIZE_DEFAULT), date_filter, thumb_size, card_extras_mode)
     return html, info, info, page
 
 
-def _goto_prev_page(mode, query, page, page_size, date_filter):
+def _goto_prev_page(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode):
     new_page = max(1, int(page or 1) - 1)
-    html, info, page, is_last = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT), date_filter)
+    html, info, page, is_last = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT), date_filter, thumb_size, card_extras_mode)
     return html, info, info, page
 
 
-def _goto_next_page(mode, query, page, page_size, date_filter):
+def _goto_next_page(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode):
     current_page = int(page or 1)
     page_size_int = int(page_size or PAGE_SIZE_DEFAULT)
     
@@ -598,18 +635,18 @@ def _goto_next_page(mode, query, page, page_size, date_filter):
     
     # If already on last page, don't go further but signal end-of-gallery
     if current_page >= pages:
-        html, info, page, is_last = render_gallery(mode, query, current_page, page_size_int, date_filter)
+        html, info, page, is_last = render_gallery(mode, query, current_page, page_size_int, date_filter, thumb_size, card_extras_mode)
         # Add end-of-gallery hint to info
         hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
         html_with_hint = html + hint_html
         return html_with_hint, info, info, page
     
     new_page = current_page + 1
-    html, info, page, is_last = render_gallery(mode, query, new_page, page_size_int, date_filter)
+    html, info, page, is_last = render_gallery(mode, query, new_page, page_size_int, date_filter, thumb_size, card_extras_mode)
     return html, info, info, page
 
 
-def handle_gallery_action(action_json: str, mode: str, query: str, page: int, page_size: int, date_filter: str):
+def handle_gallery_action(action_json: str, mode: str, query: str, page: int, page_size: int, date_filter: str, thumb_size: str, card_extras_mode: str):
     try:
         data = json.loads(action_json) if action_json.strip() else {}
     except Exception:
@@ -686,7 +723,7 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         else:
             status_message = f'<div class="endgal-sync-result">{status_message}</div>'
 
-    html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter)
+    html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode)
     
     # If gallery became empty after action (e.g., endorsed last image and filter changed), show hint
     if '<div class="endgal-empty">' in html:
@@ -822,9 +859,59 @@ def on_ui_tabs():
                 elem_id="endgal_date_filter",
                 scale=1,
             )
+            thumb_size = gr.Dropdown(
+                choices=["Small", "Medium", "Large"],
+                value="Medium",
+                label="Thumb Size",
+                elem_id="endgal_thumb_size",
+                scale=1,
+            )
+            card_extras_mode = gr.Dropdown(
+                choices=["Expanded", "Folded"],
+                value="Expanded",
+                label="Card Extras",
+                elem_id="endgal_card_extras_mode",
+                scale=1,
+            )
             refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
             sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm")
             archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
+
+        with gr.Row(elem_id="endgal_hires_preset_row"):
+            hires_upscaler_preset = gr.Dropdown(
+                choices=[*shared.latent_upscale_modes, *[x.name for x in shared.sd_upscalers]],
+                value="Latent",
+                label="Queue Hires Upscaler",
+                elem_id="endgal_hires_upscaler_preset",
+                scale=2,
+            )
+            hires_steps_preset = gr.Slider(
+                minimum=0,
+                maximum=150,
+                step=1,
+                value=20,
+                label="Queue Hires Steps",
+                elem_id="endgal_hires_steps_preset",
+                scale=1,
+            )
+            hires_denoise_preset = gr.Slider(
+                minimum=0.0,
+                maximum=1.0,
+                step=0.01,
+                value=0.85,
+                label="Queue Hires Denoise",
+                elem_id="endgal_hires_denoise_preset",
+                scale=1,
+            )
+            hires_scale_preset = gr.Slider(
+                minimum=1.0,
+                maximum=4.0,
+                step=0.05,
+                value=1.5,
+                label="Queue Hires Upscale",
+                elem_id="endgal_hires_scale_preset",
+                scale=1,
+            )
 
         with gr.Row(elem_id="endgal_pager_row"):
             prev_btn = gr.Button("Prev", elem_id="endgal_prev_btn", size="sm")
@@ -876,81 +963,91 @@ def on_ui_tabs():
             show_progress=False,
         )
 
-        def do_sync(mode, query, pg, size, date_filter):
+        def do_sync(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
             msg = sync_all_to_db()
-            html, info, page, is_last = render_gallery(mode, query, pg, int(size), date_filter)
+            html, info, page, is_last = render_gallery(mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode)
             return f'<div class="endgal-sync-result">{_html.escape(msg)}</div>', html, info, info, page
 
-        def do_archive_unrated(mode, query, pg, size, date_filter):
+        def do_archive_unrated(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
             action_json = json.dumps({"type": "archive_all_unrated"})
             status, html, info, info2, page = handle_gallery_action(
-                action_json, mode, query, pg, int(size), date_filter
+                action_json, mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode
             )
             return status, html, info, info2, page
 
         refresh_btn.click(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         mode_radio.change(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         search_box.submit(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         page_size.change(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         date_filter.change(
             fn=_reset_to_first_page,
-            inputs=[mode_radio, search_box, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
+            outputs=[gallery_html, page_info, page_info_bottom, page_state],
+        )
+        thumb_size.change(
+            fn=_reset_to_first_page,
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
+            outputs=[gallery_html, page_info, page_info_bottom, page_state],
+        )
+        card_extras_mode.change(
+            fn=_reset_to_first_page,
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 
         prev_btn.click(
             fn=_goto_prev_page,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         next_btn.click(
             fn=_goto_next_page,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 
         prev_btn_bottom.click(
             fn=_goto_prev_page,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         next_btn_bottom.click(
             fn=_goto_next_page,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
 
         sync_btn.click(
             fn=do_sync,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
 
         archive_unrated_btn.click(
             fn=do_archive_unrated,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
 
         action_btn.click(
             fn=handle_gallery_action,
-            inputs=[action_input, mode_radio, search_box, page_state, page_size, date_filter],
+            inputs=[action_input, mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
 

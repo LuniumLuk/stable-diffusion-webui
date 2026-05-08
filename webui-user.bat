@@ -14,8 +14,12 @@ set STABLE_DIFFUSION_REPO=https://github.com/CompVis/stable-diffusion.git
 set STABLE_DIFFUSION_COMMIT_HASH=21f890f9da3cfbeaba8e2ac3c425ee9e998d5229
 
 set PYTHONPATH=%~dp0repositories\taming-transformers;%PYTHONPATH%
+set AUTH_FILE=%~dp0webui-auth.txt
+set OUTPUTS_DIR=%~dp0outputs
+set LOG_DIR=%~dp0log
+set CACHE_DIR=%~dp0cache
 
 set TORCH_COMMAND=pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 torchaudio==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
-set COMMANDLINE_ARGS=
+set COMMANDLINE_ARGS=--listen --server-name 0.0.0.0 --gradio-auth-path "%AUTH_FILE%" --gradio-allowed-path "%OUTPUTS_DIR%" --gradio-allowed-path "%LOG_DIR%" --gradio-allowed-path "%CACHE_DIR%" --theme dark --timeout 600 --timeout-keep-alive 120 --no-gradio-queue
 
 call webui.bat

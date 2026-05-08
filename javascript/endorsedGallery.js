@@ -6,6 +6,7 @@
  *   .action(actionDataB64)       – endorse or remove a card via hidden Gradio bus
  *   .copyParams(infotextB64)     – copy raw infotext to clipboard
  *   .sendTo(infotextB64, target) – paste params into txt2img or img2img
+ *   .queueTxt2ImgHires(...)      – queue txt2img with the gallery hires preset
  */
 
 (function () {
@@ -27,6 +28,15 @@
     let dragStartY = 0;
     let dragOriginX = 0;
     let dragOriginY = 0;
+
+    const DEFAULT_GALLERY_HIRES_PRESET = Object.freeze({
+        upscaler: 'Latent',
+        steps: 20,
+        denoising: 0.85,
+        scale: 1.5,
+        resizeX: 0,
+        resizeY: 0,
+    });
 
     // ---------------------------------------------------------------------------
     // Helpers
@@ -50,6 +60,10 @@
             return String.fromCharCode(parseInt(p1, 16));
         });
         return btoa(bytes);
+    }
+
+    function escapeRegex(text) {
+        return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     function parseActionB64(actionDataB64) {
@@ -147,6 +161,74 @@
     function toFileServeUrl(absPath) {
         const normalized = String(absPath || '').replace(/\\/g, '/');
         return `/file=${encodeURIComponent(normalized)}`;
+    }
+
+    function getComponentInputValue(elemId) {
+        const host = gradioApp().querySelector(`#${elemId}`);
+        if (!host) return '';
+        const input = host.querySelector('input, textarea, select');
+        return input ? String(input.value || '').trim() : '';
+    }
+
+    function clampNumber(value, fallback, min, max) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(max, Math.max(min, n));
+    }
+
+    function readGalleryHiresPreset() {
+        const upscalerRaw = getComponentInputValue('endgal_hires_upscaler_preset');
+        const stepsRaw = getComponentInputValue('endgal_hires_steps_preset');
+        const denoiseRaw = getComponentInputValue('endgal_hires_denoise_preset');
+        const scaleRaw = getComponentInputValue('endgal_hires_scale_preset');
+
+        return {
+            upscaler: upscalerRaw || DEFAULT_GALLERY_HIRES_PRESET.upscaler,
+            steps: Math.round(clampNumber(stepsRaw, DEFAULT_GALLERY_HIRES_PRESET.steps, 0, 150)),
+            denoising: clampNumber(denoiseRaw, DEFAULT_GALLERY_HIRES_PRESET.denoising, 0, 1),
+            scale: clampNumber(scaleRaw, DEFAULT_GALLERY_HIRES_PRESET.scale, 1, 4),
+            resizeX: 0,
+            resizeY: 0,
+        };
+    }
+
+    function upsertInfotextParam(text, key, value) {
+        const prefix = String(text || '').trim();
+        const rendered = `${key}: ${value}`;
+        const pattern = new RegExp(
+            `(^|,\\s*)${escapeRegex(key)}:\\s*(?:"(?:\\\\.|[^\\"])*"|[^,\\n]*)(?=(?:,\\s*[\\w][\\w \\/-]*:\\s*)|$)`,
+            'm'
+        );
+
+        if (pattern.test(prefix)) {
+            return prefix.replace(pattern, `$1${rendered}`);
+        }
+
+        if (!prefix) {
+            return rendered;
+        }
+
+        const lines = prefix.split('\n');
+        const lastLine = lines[lines.length - 1] || '';
+        if (/\w[\w \/-]*:\s*/.test(lastLine)) {
+            lines[lines.length - 1] = `${lastLine}, ${rendered}`;
+            return lines.join('\n');
+        }
+
+        lines.push(rendered);
+        return lines.join('\n');
+    }
+
+    function withGalleryHiresPreset(infotext, preset) {
+        const use = preset || DEFAULT_GALLERY_HIRES_PRESET;
+        let updated = String(infotext || '').trim();
+        updated = upsertInfotextParam(updated, 'Denoising strength', String(use.denoising));
+        updated = upsertInfotextParam(updated, 'Hires upscale', String(use.scale));
+        updated = upsertInfotextParam(updated, 'Hires upscaler', use.upscaler);
+        updated = upsertInfotextParam(updated, 'Hires steps', String(use.steps));
+        updated = upsertInfotextParam(updated, 'Hires resize-1', String(use.resizeX));
+        updated = upsertInfotextParam(updated, 'Hires resize-2', String(use.resizeY));
+        return updated;
     }
 
     async function injectPathToExtrasUpload(absPath) {
@@ -307,6 +389,9 @@
             } else if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 triggerPreviewAction('dislike');
+            } else if (e.key === 'h' || e.key === 'H') {
+                e.preventDefault();
+                queueCurrentPreviewHires();
             }
         });
 
@@ -352,6 +437,7 @@
         previewList = imgs
             .map(el => ({
                 src: el.dataset.orig || el.getAttribute('src'),
+                infotextB64: el.dataset.infotext || '',
                 endorseAction: el.dataset.endorseAction || '',
                 dislikeAction: el.dataset.dislikeAction || '',
                 endorseLabel: el.dataset.endorseLabel || '☆',
@@ -388,6 +474,13 @@
         tagsEl.innerHTML = tags
             .map(t => `<span class="endgal-tag-pill endgal-tag-pill-preview">${t.replace(/_/g, ' ')}</span>`)
             .join('');
+    }
+
+    function queueCurrentPreviewHires() {
+        const item = previewList[previewIndex] || null;
+        if (!item || !item.infotextB64) return;
+
+        window.endorsedGallery.queueTxt2ImgHires(item.infotextB64, { keepGalleryTab: true });
     }
 
     function triggerPreviewAction(kind) {
@@ -544,6 +637,35 @@
             }
         },
 
+        queueTxt2ImgHires: function (infotextB64, options) {
+            const opts = options || {};
+            const preset = readGalleryHiresPreset();
+            const infotext = withGalleryHiresPreset(b64Decode(infotextB64 || ''), preset);
+            if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
+                console.warn('[endorsedGallery] infotext_apply textbox not found');
+                return;
+            }
+
+            clickGradioBtn('endorsed_gallery_apply_txt2img_btn', 0);
+
+            // Paste binding auto-switches to txt2img; keep user on Gallery for this quick action.
+            if (opts.keepGalleryTab !== false) {
+                setTimeout(() => {
+                    switchToTabByName('gallery');
+                }, 20);
+            }
+
+            setTimeout(() => {
+                const queueBtn = gradioApp().querySelector('#txt2img_queue_btn');
+                if (!queueBtn) {
+                    console.warn('[endorsedGallery] txt2img queue button not found');
+                    return;
+                }
+
+                queueBtn.click();
+            }, 450);
+        },
+
         /**
          * Send a composed image (and its optional .composerstate.json) to the Composer tab.
          * @param {string} imagePathB64  base64(abs_file_path_to_png)
@@ -589,6 +711,7 @@
             if (previewIndex < 0) {
                 previewList.push({
                     src,
+                    infotextB64: '',
                     endorseAction: '',
                     dislikeAction: '',
                     endorseLabel: '☆',

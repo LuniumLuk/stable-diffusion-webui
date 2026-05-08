@@ -1658,6 +1658,19 @@ body.resizing .resize-handle {
 #endgal_sync_btn    { min-width: 100px; background: #1e3a5f; border-color: #38bdf8; }
 #endgal_sync_btn:hover { background: #0c4a6e; }
 #endgal_page_size { min-width: 110px; }
+#endgal_thumb_size { min-width: 120px; }
+#endgal_card_extras_mode { min-width: 125px; }
+
+#endgal_hires_preset_row {
+    gap: 8px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+#endgal_hires_upscaler_preset { min-width: 200px; }
+#endgal_hires_steps_preset,
+#endgal_hires_denoise_preset,
+#endgal_hires_scale_preset { min-width: 170px; }
 
 #endgal_pager_row {
     gap: 8px;
@@ -1726,9 +1739,21 @@ body.resizing .resize-handle {
 /* Card grid */
 .endgal-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(var(--endgal-card-min, 220px), 1fr));
     gap: 12px;
     padding: 4px 2px;
+}
+
+.endgal-grid.endgal-thumb-small {
+    --endgal-card-min: 140px;
+}
+
+.endgal-grid.endgal-thumb-medium {
+    --endgal-card-min: 220px;
+}
+
+.endgal-grid.endgal-thumb-large {
+    --endgal-card-min: 280px;
 }
 
 /* Individual card */
@@ -1752,6 +1777,41 @@ body.resizing .resize-handle {
 .endgal-card.disliked {
     border-color: #ef4444;
     box-shadow: 0 0 0 2px #ef444422;
+}
+
+.endgal-card-extra {
+    border-top: 1px solid var(--block-border-color, #1e293b);
+}
+
+.endgal-card-extra-summary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    color: #93c5fd;
+    padding: 7px 10px;
+    background: rgba(15, 23, 42, 0.5);
+    border-bottom: 1px solid transparent;
+}
+
+.endgal-card-extra-summary::-webkit-details-marker {
+    display: none;
+}
+
+.endgal-card-extra-summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 6px;
+    color: #7dd3fc;
+}
+
+.endgal-card-extra[open] .endgal-card-extra-summary::before {
+    content: "▾";
+}
+
+.endgal-card-extra[open] .endgal-card-extra-summary {
+    border-bottom-color: var(--block-border-color, #1e293b);
+    background: rgba(30, 41, 59, 0.48);
 }
 
 /* Thumbnail */
@@ -2205,6 +2265,20 @@ body.resizing .resize-handle {
     color: #a78bfa;
     vertical-align: middle;
     cursor: default;
+}
+
+@media (max-width: 700px) {
+    .endgal-grid {
+        gap: 8px;
+    }
+
+    .endgal-grid.endgal-thumb-small {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .endgal-grid.endgal-thumb-medium {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    }
 }
 
 

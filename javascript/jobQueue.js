@@ -13,6 +13,60 @@ function queue_job_img2img() {
     var activeProgressTrackers = {};
     var queueControlsForcedVisible = false;
     var lastQueueActivityAt = 0;
+    var QUEUE_TRACKER_STATE_KEY = 'webui_queue_active_task';
+
+    function saveQueueTrackerState(taskId, jobType, imageCount) {
+        if (!taskId || !jobType) return;
+        try {
+            localSet(QUEUE_TRACKER_STATE_KEY, JSON.stringify({
+                taskId: String(taskId),
+                jobType: jobType === 'img2img' ? 'img2img' : 'txt2img',
+                imageCount: Math.max(1, Number(imageCount) || 1),
+                ts: Date.now(),
+            }));
+        } catch (_e) {
+            // no-op
+        }
+    }
+
+    function loadQueueTrackerState() {
+        try {
+            var raw = localGet(QUEUE_TRACKER_STATE_KEY);
+            if (!raw) return null;
+            var parsed = JSON.parse(raw);
+            if (!parsed || !parsed.taskId || !parsed.jobType) return null;
+            return {
+                taskId: String(parsed.taskId),
+                jobType: parsed.jobType === 'img2img' ? 'img2img' : 'txt2img',
+                imageCount: Math.max(1, Number(parsed.imageCount) || 1),
+            };
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    function clearQueueTrackerState(taskId) {
+        try {
+            var raw = localGet(QUEUE_TRACKER_STATE_KEY);
+            if (!raw) return;
+            var parsed = JSON.parse(raw);
+            if (taskId && parsed && parsed.taskId && String(parsed.taskId) !== String(taskId)) {
+                return;
+            }
+            localRemove(QUEUE_TRACKER_STATE_KEY);
+        } catch (_e) {
+            localRemove(QUEUE_TRACKER_STATE_KEY);
+        }
+    }
+
+    function isQueueTabVisible() {
+        var queueTab = gradioApp().getElementById('tab_job_queue_tab');
+        return Boolean(queueTab && queueTab.style.display !== 'none');
+    }
+
+    function markQueueActivity() {
+        lastQueueActivityAt = Date.now();
+    }
 
     function setGenerateButtonsDisabled(disabled) {
         var txt2imgGenerate = gradioApp().getElementById('txt2img_generate');
@@ -77,6 +131,7 @@ function queue_job_img2img() {
             imageCount: Math.max(1, Number(imageCount) || 1),
             startedNotified: false,
         };
+        saveQueueTrackerState(taskId, jobType, imageCount);
         lastQueueActivityAt = Date.now();
 
         if (typeof notifyGenerationEvent === 'function') {
@@ -87,6 +142,7 @@ function queue_job_img2img() {
         requestProgress(taskId, container, gallery, function () {
             var trackerMeta = activeProgressTrackers[taskId] || { jobType: jobType, imageCount: imageCount };
             delete activeProgressTrackers[taskId];
+            clearQueueTrackerState(taskId);
             lastQueueActivityAt = Date.now();
 
             localSet(tabName + '_task_id', taskId);
@@ -101,9 +157,23 @@ function queue_job_img2img() {
         }, null, 0);
     }
 
+    function restoreQueueProgressOnLoad() {
+        var persisted = loadQueueTrackerState();
+        if (!persisted || !persisted.taskId) {
+            return;
+        }
+
+        setGenerateButtonsDisabled(true);
+        setInterruptSkipForAllTabs(true);
+        queueControlsForcedVisible = true;
+        markQueueActivity();
+        startQueueProgressTracking(persisted.taskId, persisted.jobType, persisted.imageCount);
+    }
+
     function refreshQueueAndSyncUi() {
         var refreshButton = gradioApp().getElementById('jq_refresh_btn');
-        if (refreshButton) {
+        var shouldRefreshQueue = isQueueTabVisible() || hasActiveQueueTracker() || (Date.now() - lastQueueActivityAt) < 5000;
+        if (refreshButton && shouldRefreshQueue) {
             refreshButton.click();
         }
 
@@ -142,6 +212,21 @@ function queue_job_img2img() {
             return;
         }
 
+        // Force a short initial sync window after page reload so running queue jobs
+        // can be rediscovered even when Queue tab is not currently visible.
+        markQueueActivity();
+
+        var txt2imgQueueBtn = gradioApp().getElementById('txt2img_queue_btn');
+        var img2imgQueueBtn = gradioApp().getElementById('img2img_queue_btn');
+        if (txt2imgQueueBtn && !txt2imgQueueBtn.dataset.jqActivityBound) {
+            txt2imgQueueBtn.addEventListener('click', markQueueActivity);
+            txt2imgQueueBtn.dataset.jqActivityBound = '1';
+        }
+        if (img2imgQueueBtn && !img2imgQueueBtn.dataset.jqActivityBound) {
+            img2imgQueueBtn.addEventListener('click', markQueueActivity);
+            img2imgQueueBtn.dataset.jqActivityBound = '1';
+        }
+
         monitorTimer = setInterval(function () {
             refreshQueueAndSyncUi();
         }, 1500);
@@ -149,5 +234,6 @@ function queue_job_img2img() {
 
     onUiLoaded(function () {
         startMonitor();
+        restoreQueueProgressOnLoad();
     });
 })();

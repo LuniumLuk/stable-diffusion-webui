@@ -326,6 +326,13 @@ function setupResolutionPasting(tabname) {
 onUiLoaded(function() {
     showRestoreProgressButton('txt2img', localGet("txt2img_task_id"));
     showRestoreProgressButton('img2img', localGet("img2img_task_id"));
+    // After a browser refresh, auto-reattach to in-flight generation so users do not lose progress tracking.
+    if (localGet("txt2img_task_id")) {
+        setTimeout(() => restoreProgressTxt2img(), 100);
+    }
+    if (localGet("img2img_task_id")) {
+        setTimeout(() => restoreProgressImg2img(), 100);
+    }
     setupResolutionPasting('txt2img');
     setupResolutionPasting('img2img');
 });

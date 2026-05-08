@@ -413,14 +413,10 @@ def on_ui_tabs():
     return [(queue_ui, "Queue", "job_queue_tab")]
 
 
-_callbacks_registered = False
-
-
 def register_callbacks():
-    global _callbacks_registered
-
-    if _callbacks_registered:
+    callbacks = script_callbacks.callback_map.get("callbacks_ui_tabs", [])
+    already_registered = any(getattr(cb, "name", "") == "job_queue_tab" for cb in callbacks)
+    if already_registered:
         return
 
     script_callbacks.on_ui_tabs(on_ui_tabs, name="job_queue_tab")
-    _callbacks_registered = True
