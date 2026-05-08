@@ -189,9 +189,9 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
     )
     composer_btn_class = "endgal-btn-send2img endgal-btn-composer" + ("" if has_config else " endgal-btn-disabled")
 
-        details_open = _extras_details_open_attr(card_extras_mode)
+    details_open = _extras_details_open_attr(card_extras_mode)
 
-        return f"""
+    return f"""
 <div class="endgal-card endgal-composed-card">
   <div class="endgal-thumb">{thumb_html}</div>
     <details class="endgal-card-extra"{details_open}>
@@ -231,6 +231,113 @@ def _action_payload(record: dict) -> dict:
         "model_hash": record.get("model_hash", ""),
         "infotext": record.get("infotext", ""),
     }
+
+
+def _parse_hires_info(infotext: str) -> dict:
+    """Parse Hires Fix parameters from infotext. Returns dict with 'has_hires' and 'scale'."""
+    result = {"has_hires": False, "scale": 1.0}
+    if not infotext:
+        return result
+
+    info_lc = str(infotext or "").lower()
+    hires_markers = ("hires upscale:", "hires upscaler:", "hires steps:", "first pass size:", "hires resize:")
+    result["has_hires"] = any(marker in info_lc for marker in hires_markers)
+
+    if result["has_hires"]:
+        for line in (infotext or "").split(","):
+            line_stripped = line.strip()
+            if line_stripped.lower().startswith("hires upscale:"):
+                try:
+                    scale_str = line_stripped.split(":", 1)[1].strip()
+                    result["scale"] = float(scale_str)
+                    break
+                except Exception:
+                    pass
+
+    return result
+
+
+def _resolution_label(record: dict) -> str:
+    try:
+        w = int(record.get("width", 0) or 0)
+        h = int(record.get("height", 0) or 0)
+    except Exception:
+        return ""
+
+    if w <= 0 or h <= 0:
+        return ""
+
+    infotext = str(record.get("infotext", "") or "")
+    hires_info = _parse_hires_info(infotext)
+
+    if hires_info["has_hires"] and hires_info["scale"] > 1.0:
+        final_w = int(w * hires_info["scale"])
+        final_h = int(h * hires_info["scale"])
+        return f"{final_w}x{final_h}"
+
+    return f"{w}x{h}"
+
+
+def _hires_marker_label(record: dict) -> str:
+    """Return Hires Fix indicator if applicable."""
+    infotext = str(record.get("infotext", "") or "")
+    hires_info = _parse_hires_info(infotext)
+    if hires_info["has_hires"] and hires_info["scale"] > 1.0:
+        return f"🔼 Hires"
+    return ""
+
+
+def _generation_type_label(record: dict, path: str) -> str:
+    """Infer generation type with metadata-first rules.
+
+    Hires fix belongs to txt2img, but path-only checks can misclassify some outputs.
+    """
+    infotext = ""
+    if isinstance(record, dict):
+        infotext = str(record.get("infotext", "") or "")
+    info_lc = infotext.lower()
+
+    # Hires-fix markers are specific to txt2img and must win over path hints.
+    hires_markers = (
+        "hires upscale:",
+        "hires upscaler:",
+        "hires steps:",
+        "first pass size:",
+        "hires resize:",
+    )
+    if any(marker in info_lc for marker in hires_markers):
+        return "txt2img"
+
+    # Img2img/inpaint markers that are not normally present in plain txt2img.
+    img2img_markers = (
+        "init image hash:",
+        "mask blur:",
+        "inpaint area:",
+        "inpainting mask weight:",
+        "resize mode:",
+    )
+    if any(marker in info_lc for marker in img2img_markers):
+        return "img2img"
+
+    # Denoising strength exists in both img2img and txt2img+hires; at this point
+    # there were no hires markers, so treat it as img2img.
+    if "denoising strength:" in info_lc:
+        return "img2img"
+
+    candidates = [
+        record.get("original_path", "") if isinstance(record, dict) else "",
+        path or "",
+    ]
+    for candidate in candidates:
+        p = str(candidate or "").replace("\\", "/").lower()
+        if not p:
+            continue
+        if "txt2img" in p:
+            return "txt2img"
+        if "img2img" in p:
+            return "img2img"
+
+    return ""
 
 
 def _apply_removebg(path: str) -> tuple[bool, str]:
@@ -292,6 +399,9 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
 
     thumb = _get_thumb(path) if path else ""
     orig_url = _file_url(path)
+    resolution_label = _resolution_label(record)
+    hires_marker = _hires_marker_label(record)
+    generation_type_label = _generation_type_label(record, path)
 
     payload = _action_payload(record)
     endorse_action = {
@@ -332,6 +442,25 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         for t in tags_display
     )
 
+    left_badge = ""
+    if resolution_label or hires_marker:
+        badge_lines = []
+        if resolution_label:
+            badge_lines.append(_html.escape(resolution_label))
+        if hires_marker:
+            badge_lines.append(_html.escape(hires_marker))
+        left_badge_content = "<br>".join(badge_lines)
+        left_badge = f'<span class="endgal-thumb-badge endgal-thumb-badge-left">{left_badge_content}</span>'
+    
+    right_badge = (
+        f'<span class="endgal-thumb-badge endgal-thumb-badge-right">{_html.escape(generation_type_label)}</span>'
+        if generation_type_label else ""
+    )
+    thumb_badges = (
+        f'<div class="endgal-thumb-overlay">{left_badge}{right_badge}</div>'
+        if (left_badge or right_badge) else ""
+    )
+
     thumb_html = (
         f'<img src="{thumb}" alt="generated image" loading="lazy" '
         f'data-orig="{orig_url}" '
@@ -343,6 +472,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         f'data-tags="{tags_full_b64}" '
         f'onclick="endorsedGallery.previewImage(this.dataset.orig || this.src)" />'
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
+    thumb_html = thumb_html + thumb_badges
 
     tags_section = (
         f'<details class="endgal-details endgal-tags-details">'
@@ -352,9 +482,9 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         if tags_pills_html else ''
     )
 
-        details_open = _extras_details_open_attr(card_extras_mode)
+    details_open = _extras_details_open_attr(card_extras_mode)
 
-        return f"""
+    return f"""
 <div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
   <div class="endgal-thumb">{thumb_html}</div>
     <details class="endgal-card-extra"{details_open}>

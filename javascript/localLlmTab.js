@@ -19,16 +19,10 @@
       return raw.endsWith("/") ? raw : raw + "/";
     }
 
-    async function checkStatus(url) {
-      try {
-        const res = await fetch(new URL("api/status", url).toString(), { method: "GET" });
-        if (!res.ok) {
-          throw new Error("status " + res.status);
-        }
-
-        const data = await res.json();
+    function setReachable(reachable) {
+      if (reachable) {
         overlay.classList.remove("show");
-      } catch (_err) {
+      } else {
         overlay.classList.add("show");
       }
     }
@@ -37,8 +31,8 @@
       const normalized = normalizeUrl(url);
       urlInput.value = normalized;
       openLink.href = normalized;
+      setReachable(false);
       frame.src = normalized;
-      checkStatus(normalized);
     }
 
     function applySignalPayload(payloadText) {
@@ -50,21 +44,22 @@
         openLink.href = targetUrl;
 
         if (payload.action === "stop") {
-          overlay.classList.add("show");
+          setReachable(false);
           return;
         }
 
         if (payload.action === "start" || payload.action === "restart") {
           frame.src = targetUrl;
-          setTimeout(function () {
-            checkStatus(targetUrl);
-          }, 400);
+          // Keep overlay visible until iframe confirms load.
+          setReachable(false);
           return;
         }
 
-        checkStatus(targetUrl);
+        if (typeof payload.reachable === "boolean") {
+          setReachable(payload.reachable);
+        }
       } catch (_err) {
-        checkStatus(normalizeUrl(urlInput.value || defaultUrl));
+        setReachable(false);
       }
     }
 
@@ -80,7 +75,11 @@
     });
 
     frame.addEventListener("load", function () {
-      checkStatus(normalizeUrl(urlInput.value));
+      setReachable(true);
+    });
+
+    frame.addEventListener("error", function () {
+      setReachable(false);
     });
 
     if (signalInput) {
@@ -107,6 +106,7 @@
       });
     }
 
+    applySignalPayload(signalInput ? signalInput.value : "");
     applyUrl(urlInput.value || defaultUrl);
   }
 

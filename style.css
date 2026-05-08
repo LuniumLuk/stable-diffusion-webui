@@ -1820,6 +1820,7 @@ body.resizing .resize-handle {
     aspect-ratio: 1;
     overflow: hidden;
     background: #0f172a;
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1839,6 +1840,35 @@ body.resizing .resize-handle {
     justify-content: center;
     color: #475569;
     font-size: 11px;
+}
+
+.endgal-thumb-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.endgal-thumb-badge {
+    position: absolute;
+    top: 6px;
+    font-size: 10px;
+    line-height: 1.2;
+    color: #e2e8f0;
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    border-radius: 6px;
+    padding: 2px 6px;
+    text-transform: lowercase;
+    backdrop-filter: blur(2px);
+}
+
+.endgal-thumb-badge-left {
+    left: 6px;
+    text-transform: none;
+}
+
+.endgal-thumb-badge-right {
+    right: 6px;
 }
 
 /* Body */
