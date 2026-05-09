@@ -1493,6 +1493,18 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         self.is_hr_pass = True
         restore_attention_optimization = False
 
+        def log_hr_vram(label):
+            if not opts.samples_log_stdout or not torch.cuda.is_available():
+                return
+
+            device_id = devices.get_cuda_device_id()
+            allocated = torch.cuda.memory_allocated(device_id) / (1024 ** 3)
+            reserved = torch.cuda.memory_reserved(device_id) / (1024 ** 3)
+            free, total = torch.cuda.mem_get_info(device_id)
+            free_gb = free / (1024 ** 3)
+            total_gb = total / (1024 ** 3)
+            print(f"[hires-vram] {label}: alloc={allocated:.2f}GB reserved={reserved:.2f}GB free={free_gb:.2f}GB total={total_gb:.2f}GB")
+
         try:
             import modules.sd_hijack as sd_hijack
 
@@ -1628,6 +1640,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                         uc=self.hr_uc,
                     )
 
+                log_hr_vram(f"stage {stage_index + 1}/{len(stage_plan)} before sample")
                 samples = self.sampler.sample_img2img(self, samples, noise, self.hr_c, self.hr_uc, steps=stage_steps, image_conditioning=image_conditioning)
                 decoded_samples = None
 
@@ -1645,6 +1658,15 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                     del image_conditioning
                 devices.torch_gc()
 
+            if restore_attention_optimization:
+                try:
+                    import modules.sd_hijack as sd_hijack
+                    sd_hijack.model_hijack.apply_optimizations(opts.cross_attention_optimization)
+                except Exception as e:
+                    print(f"Failed to restore attention optimization before final hires decode: {e}")
+                restore_attention_optimization = False
+
+            log_hr_vram("before final decode")
             decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)
             return decoded_samples
         finally:
