@@ -374,7 +374,8 @@ def webui():
         if not cmd_opts.no_gradio_queue:
             shared.demo.queue(64)
 
-        gradio_auth_creds = list(initialize_util.get_gradio_auth_creds()) or None
+        # Password auth disabled - access now controlled by IP allowlist
+        gradio_auth_creds = None
 
         auto_launch_browser = False
         if os.getenv('SD_WEBUI_RESTARTING') != '1':

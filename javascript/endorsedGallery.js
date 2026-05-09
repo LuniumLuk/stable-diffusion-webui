@@ -171,6 +171,49 @@
         return input ? String(input.value || '').trim() : '';
     }
 
+    function setupDropdownInputGuard() {
+        const guardedIds = [
+            'endgal_page_size',
+            'endgal_date_filter',
+            'endgal_thumb_size',
+            'endgal_card_extras_mode',
+            'endgal_hires_upscaler_preset',
+        ];
+
+        function patchDropdownInput(host) {
+            if (!host) return;
+            const input = host.querySelector('input');
+            if (!input || input.dataset.endgalNoInputPatched === '1') return;
+
+            input.dataset.endgalNoInputPatched = '1';
+            input.setAttribute('inputmode', 'none');
+            input.setAttribute('autocomplete', 'off');
+            input.setAttribute('autocapitalize', 'off');
+            input.setAttribute('spellcheck', 'false');
+        }
+
+        function applyGuard() {
+            const app = gradioApp();
+            if (!app) return;
+            guardedIds.forEach((id) => {
+                patchDropdownInput(app.querySelector(`#${id}`));
+            });
+        }
+
+        applyGuard();
+
+        const app = gradioApp();
+        if (!app) return;
+        const observer = new MutationObserver(() => {
+            applyGuard();
+        });
+
+        observer.observe(app, {
+            childList: true,
+            subtree: true,
+        });
+    }
+
     function clampNumber(value, fallback, min, max) {
         const n = Number(value);
         if (!Number.isFinite(n)) return fallback;
@@ -816,10 +859,12 @@
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             bootstrapClearSearchTextbox();
+            setupDropdownInputGuard();
             setTimeout(onTabSwitch, 1500);
         });
     } else {
         bootstrapClearSearchTextbox();
+        setupDropdownInputGuard();
         setTimeout(onTabSwitch, 1500);
     }
 

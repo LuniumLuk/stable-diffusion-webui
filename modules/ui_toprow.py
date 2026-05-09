@@ -1,6 +1,6 @@
 import gradio as gr
 
-from modules import shared, ui_prompt_styles
+from modules import shared, ui_prompt_styles, prompt_presets
 import modules.images
 
 from modules.ui_components import ToolButton
@@ -81,6 +81,22 @@ class Toprow:
 
     def create_prompts(self):
         with gr.Column(elem_id=f"{self.id_part}_prompt_container", elem_classes=["prompt-container-compact"] if self.is_compact else [], scale=6):
+            # Prompt presets row
+            with gr.Row(elem_id=f"{self.id_part}_presets_row", scale=1):
+                preset_list = prompt_presets.prompt_presets.get_presets() or ["(No presets)"]
+                self.preset_dropdown = gr.Dropdown(
+                    choices=preset_list,
+                    value="",
+                    label="Prompt Presets",
+                    elem_id=f"{self.id_part}_preset_dropdown",
+                    scale=5,
+                    interactive=True,
+                )
+                with gr.Column(scale=1, min_width=50):
+                    self.preset_add_btn = ToolButton(value="➕", elem_id=f"{self.id_part}_preset_add", tooltip="Save selected text as preset")
+                    self.preset_edit_btn = ToolButton(value="✏️", elem_id=f"{self.id_part}_preset_edit", tooltip="Edit selected preset")
+                    self.preset_delete_btn = ToolButton(value="🗑️", elem_id=f"{self.id_part}_preset_delete", tooltip="Delete selected preset")
+            
             with gr.Row(elem_id=f"{self.id_part}_prompt_row", elem_classes=["prompt-row"]):
                 self.prompt = gr.Textbox(label="Prompt", elem_id=f"{self.id_part}_prompt", show_label=False, lines=3, placeholder="Prompt\n(Press Ctrl+Enter to generate, Alt+Enter to skip, Esc to interrupt)", elem_classes=["prompt"])
                 self.prompt_img = gr.File(label="", elem_id=f"{self.id_part}_prompt_image", file_count="single", type="binary", visible=False)
@@ -93,6 +109,22 @@ class Toprow:
             inputs=[self.prompt_img],
             outputs=[self.prompt, self.prompt_img],
             show_progress=False,
+        )
+        
+        # Setup preset button handlers with JS calls
+        self.preset_add_btn.click(
+            fn=lambda: None,
+            _js=f'function(){{window.save_prompt_preset_{self.id_part}(document.querySelector("#{self.id_part}_prompt textarea").value); return [];}}'
+        )
+        
+        self.preset_edit_btn.click(
+            fn=lambda: None,
+            _js=f'function(){{var name = document.querySelector("#{self.id_part}_preset_dropdown input").value; window.edit_prompt_preset_{self.id_part}(name); return [];}}'
+        )
+        
+        self.preset_delete_btn.click(
+            fn=lambda: None,
+            _js=f'function(){{var name = document.querySelector("#{self.id_part}_preset_dropdown input").value; if (confirm("Delete preset \\"" + name + "\\"?")) {{delete window.getPresets()[name]; window.savePresets(window.getPresets()); window.updateDropdown_{self.id_part}();}} return [];}}'
         )
 
     def create_submit_box(self):

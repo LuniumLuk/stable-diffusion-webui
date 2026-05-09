@@ -7,6 +7,7 @@ import html as _html
 import io
 import json
 import os
+import re
 import time
 import urllib.parse
 
@@ -523,14 +524,50 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
 
     details_open = _extras_details_open_attr(card_extras_mode)
 
+    steps = str(record.get("steps", ""))
+    cfg_scale = str(record.get("cfg_scale", ""))
+    seed_short = seed[:3] + "..." + seed[-3:] if len(seed) > 8 else seed
+
+    def infotext_param(key: str) -> str:
+        pat = re.compile(
+            rf'(^|,\\s*){re.escape(key)}:\\s*(?:"((?:\\\\.|[^"])+)"|([^,\\n]*))',
+            re.IGNORECASE,
+        )
+        m = pat.search(infotext or "")
+        if not m:
+            return ""
+        return (m.group(2) or m.group(3) or "").strip()
+
+    hires_stage_capsules = []
+    hires_stages_raw = infotext_param("Hires stages")
+    if hires_stages_raw:
+        for stage in [s.strip() for s in hires_stages_raw.split(",") if s.strip()]:
+            hires_stage_capsules.append(
+                f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(stage)}</span>'
+            )
+    else:
+        hires_scale = infotext_param("Hires upscale")
+        hires_steps = infotext_param("Hires steps")
+        if hires_scale and hires_steps:
+            hires_stage_capsules.append(
+                f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(hires_scale)}/{_html.escape(hires_steps)}</span>'
+            )
+
+    settings_capsules = (
+        f'<span class="endgal-capsule endgal-capsule-steps">Steps: {_html.escape(steps)}</span>'
+        f'<span class="endgal-capsule endgal-capsule-cfg">CFG: {_html.escape(cfg_scale)}</span>'
+        f'<span class="endgal-capsule endgal-capsule-seed">Seed: {_html.escape(seed_short)}</span>'
+        + "".join(hires_stage_capsules)
+    )
+
     return f"""
 <div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
   <div class="endgal-thumb">{thumb_html}</div>
     <details class="endgal-card-extra"{details_open}>
         <summary class="endgal-card-extra-summary">Details &amp; Quick Actions</summary>
         <div class="endgal-body">
-            <div class="endgal-prompt">{_html.escape(prompt[:220])}</div>
-            <div class="endgal-meta">seed { _html.escape(seed) } · { _html.escape(sampler) } · { _html.escape(model) }</div>
+            <div class="endgal-prompt oneline">{_html.escape(prompt)}</div>
+            <div class="endgal-capsules">{settings_capsules}</div>
             <div class="endgal-date">{_html.escape(date)}</div>
             {tags_section}
             <details class="endgal-details">
@@ -539,14 +576,14 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
             </details>
         </div>
         <div class="endgal-actions">
-                    <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
-            <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">txt2img</button>
-            <button class="endgal-btn-send2img" title="queue txt2img with Hires fix preset" onclick="endorsedGallery.queueTxt2ImgHires('{infotext_b64}')">queue hires</button>
-            <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">img2img</button>
-                    <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
+            <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
+            <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">t2i</button>
+            <button class="endgal-btn-send2img" title="queue txt2img with Hires fix preset" onclick="endorsedGallery.queueTxt2ImgHires('{infotext_b64}')">hires</button>
+            <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">i2i</button>
+            <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
             <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
-                    <button class="{archive_class}" title="{archive_title}" onclick="endorsedGallery.action('{archive_action}')">{archive_label}</button>
-                    <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
+            <button class="{archive_class}" title="{archive_title}" onclick="endorsedGallery.action('{archive_action}')">{archive_label}</button>
+            <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
         </div>
     </details>
 </div>
@@ -1020,6 +1057,7 @@ def on_ui_tabs():
                 label="Page Size",
                 elem_id="endgal_page_size",
                 scale=1,
+                filterable=False,
             )
             date_filter = gr.Dropdown(
                 choices=["All time", "1 day", "2 days", "1 week"],
@@ -1027,6 +1065,7 @@ def on_ui_tabs():
                 label="Date",
                 elem_id="endgal_date_filter",
                 scale=1,
+                filterable=False,
             )
             thumb_size = gr.Dropdown(
                 choices=["Small", "Medium", "Large"],
@@ -1034,6 +1073,7 @@ def on_ui_tabs():
                 label="Thumb Size",
                 elem_id="endgal_thumb_size",
                 scale=1,
+                filterable=False,
             )
             card_extras_mode = gr.Dropdown(
                 choices=["Expanded", "Folded"],
@@ -1041,6 +1081,7 @@ def on_ui_tabs():
                 label="Card Extras",
                 elem_id="endgal_card_extras_mode",
                 scale=1,
+                filterable=False,
             )
             refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
             sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm")
@@ -1053,6 +1094,7 @@ def on_ui_tabs():
                 label="Queue Hires Upscaler",
                 elem_id="endgal_hires_upscaler_preset",
                 scale=2,
+                filterable=False,
             )
             hires_steps_preset = gr.Slider(
                 minimum=0,
