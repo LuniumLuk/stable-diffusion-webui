@@ -342,6 +342,14 @@ def create_ui():
                                     hr_resize_x = gr.Slider(minimum=0, maximum=2048, step=8, label="Resize width to", value=0, elem_id="txt2img_hr_resize_x")
                                     hr_resize_y = gr.Slider(minimum=0, maximum=2048, step=8, label="Resize height to", value=0, elem_id="txt2img_hr_resize_y")
 
+                                with FormRow(elem_id="txt2img_hires_fix_row_stage_config", variant="compact"):
+                                    hr_stage_config = gr.Textbox(
+                                        label="Stage config",
+                                        elem_id="txt2img_hr_stage_config",
+                                        lines=4,
+                                        placeholder="scale: 1.1, cfg: 5.5, steps: 10;\nscale: 1.25, cfg: 0, steps: 20;\nscale: 1.5;",
+                                    )
+
                                 with FormRow(elem_id="txt2img_hires_fix_row3", variant="compact", visible=opts.hires_fix_show_sampler) as hr_sampler_container:
 
                                     hr_checkpoint_name = gr.Dropdown(label='Checkpoint', elem_id="hr_checkpoint", choices=["Use same checkpoint"] + modules.sd_models.checkpoint_tiles(use_short=True), value="Use same checkpoint")
@@ -415,6 +423,7 @@ def create_ui():
                 hr_second_pass_steps,
                 hr_resize_x,
                 hr_resize_y,
+                hr_stage_config,
                 hr_checkpoint_name,
                 hr_sampler_name,
                 hr_scheduler,
@@ -490,6 +499,7 @@ def create_ui():
                 PasteField(hr_second_pass_steps, "Hires steps", api="hr_second_pass_steps"),
                 PasteField(hr_resize_x, "Hires resize-1", api="hr_resize_x"),
                 PasteField(hr_resize_y, "Hires resize-2", api="hr_resize_y"),
+                PasteField(hr_stage_config, "Hires stage config", api="hr_stage_config_text"),
                 PasteField(hr_checkpoint_name, "Hires checkpoint", api="hr_checkpoint_name"),
                 PasteField(hr_sampler_name, sd_samplers.get_hr_sampler_from_infotext, api="hr_sampler_name"),
                 PasteField(hr_scheduler, sd_samplers.get_hr_scheduler_from_infotext, api="hr_scheduler"),

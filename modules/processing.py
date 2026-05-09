@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import hashlib
 from dataclasses import dataclass, field
@@ -1182,6 +1183,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
     hr_second_pass_steps: int = 0
     hr_resize_x: int = 0
     hr_resize_y: int = 0
+    hr_stage_config_text: str = ''
     hr_checkpoint_name: str = None
     hr_sampler_name: str = None
     hr_scheduler: str = None
@@ -1206,6 +1208,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
     hr_prompts: list = field(default=None, init=False)
     hr_negative_prompts: list = field(default=None, init=False)
     hr_extra_network_data: list = field(default=None, init=False)
+    hr_stage_plan: list = field(default=None, init=False)
 
     def __post_init__(self):
         super().__post_init__()
@@ -1218,6 +1221,102 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
 
         self.cached_hr_uc = StableDiffusionProcessingTxt2Img.cached_hr_uc
         self.cached_hr_c = StableDiffusionProcessingTxt2Img.cached_hr_c
+
+    @staticmethod
+    def parse_hr_stage_config_text(config_text):
+        if not config_text:
+            return []
+
+        parsed = []
+        chunks = re.split(r"[;\n]+", config_text)
+        for chunk in chunks:
+            line = chunk.strip()
+            if not line:
+                continue
+
+            stage = {}
+            for part in line.split(","):
+                item = part.strip()
+                if not item or ":" not in item:
+                    continue
+
+                key, value = item.split(":", 1)
+                key = key.strip().lower()
+                value = value.strip()
+
+                if key == "scale":
+                    try:
+                        stage["scale"] = float(value)
+                    except Exception:
+                        continue
+                elif key == "cfg":
+                    try:
+                        stage["cfg"] = float(value)
+                    except Exception:
+                        continue
+                elif key == "steps":
+                    try:
+                        stage["steps"] = max(0, int(round(float(value))))
+                    except Exception:
+                        continue
+
+            scale = stage.get("scale")
+            if scale is None or scale <= 1.0:
+                continue
+
+            parsed.append({
+                "scale": float(scale),
+                "cfg": stage.get("cfg"),
+                "steps": stage.get("steps"),
+            })
+
+        return parsed
+
+    @staticmethod
+    def _round_to_latent_grid(value):
+        return max(opt_f, int(round(value / opt_f)) * opt_f)
+
+    def build_hr_stage_plan(self):
+        final_w = self.hr_upscale_to_x
+        final_h = self.hr_upscale_to_y
+        current_w = self.width
+        current_h = self.height
+        default_steps = self.hr_second_pass_steps or self.steps
+
+        parsed = self.parse_hr_stage_config_text(self.hr_stage_config_text)
+        stages = []
+
+        for stage in parsed:
+            target_w = self._round_to_latent_grid(self.width * stage["scale"])
+            target_h = self._round_to_latent_grid(self.height * stage["scale"])
+
+            target_w = min(target_w, final_w)
+            target_h = min(target_h, final_h)
+
+            if target_w <= current_w and target_h <= current_h:
+                continue
+
+            stages.append({
+                "target_width": target_w,
+                "target_height": target_h,
+                "steps": stage.get("steps") if stage.get("steps") is not None else default_steps,
+                "cfg": stage.get("cfg"),
+                "scale": stage.get("scale"),
+                "is_final": False,
+            })
+            current_w, current_h = target_w, target_h
+
+        if current_w != final_w or current_h != final_h:
+            stages.append({
+                "target_width": final_w,
+                "target_height": final_h,
+                "steps": default_steps,
+                "cfg": None,
+                "scale": None,
+                "is_final": True,
+            })
+
+        return stages
 
     def calculate_target_resolution(self):
         if opts.use_old_hires_fix_width_height and self.applied_old_hires_behavior_to != (self.width, self.height):
@@ -1296,15 +1395,32 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
 
             self.calculate_target_resolution()
 
+            self.hr_stage_plan = self.build_hr_stage_plan()
+
+            if self.hr_stage_config_text and self.hr_stage_config_text.strip():
+                self.extra_generation_params["Hires stage config"] = self.hr_stage_config_text.strip()
+
+            if self.hr_stage_plan:
+                self.extra_generation_params["Hires stage count"] = len(self.hr_stage_plan)
+                plan_parts = []
+                prev_scale = 1.0
+                for stage in self.hr_stage_plan:
+                    target_scale = stage["target_width"] / self.width
+                    cfg_used = stage["cfg"] if stage["cfg"] is not None else self.cfg_scale
+                    plan_parts.append(f"{round(prev_scale, 3)}->{round(target_scale, 3)} cfg={cfg_used} steps={stage['steps']}")
+                    prev_scale = target_scale
+                self.extra_generation_params["Hires stage plan"] = "; ".join(plan_parts)
+
             if not state.processing_has_refined_job_count:
                 if state.job_count == -1:
                     state.job_count = self.n_iter
+                hr_total_steps = sum(stage["steps"] for stage in self.hr_stage_plan) if self.hr_stage_plan else 0
                 if getattr(self, 'txt2img_upscale', False):
-                    total_steps = (self.hr_second_pass_steps or self.steps) * state.job_count
+                    total_steps = hr_total_steps * state.job_count
                 else:
-                    total_steps = (self.steps + (self.hr_second_pass_steps or self.steps)) * state.job_count
+                    total_steps = (self.steps + hr_total_steps) * state.job_count
                 shared.total_tqdm.updateTotal(total_steps)
-                state.job_count = state.job_count * 2
+                state.job_count = state.job_count * (1 + len(self.hr_stage_plan) if self.hr_stage_plan else 1)
                 state.processing_has_refined_job_count = True
 
             if self.hr_second_pass_steps:
@@ -1375,8 +1491,17 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             return samples
 
         self.is_hr_pass = True
-        target_width = self.hr_upscale_to_x
-        target_height = self.hr_upscale_to_y
+        restore_attention_optimization = False
+
+        try:
+            import modules.sd_hijack as sd_hijack
+
+            current_optimizer = sd_hijack.current_optimizer.name if sd_hijack.current_optimizer is not None else None
+            if opts.hires_force_sdp_attention and current_optimizer not in (None, "sdp", "sdp-no-mem", "xformers"):
+                sd_hijack.model_hijack.apply_optimizations("sdp - scaled dot product")
+                restore_attention_optimization = True
+        except Exception as e:
+            print(f"Failed to switch attention optimization for hires pass: {e}")
 
         def save_intermediate(image, index):
             """saves image before applying hires fix, if enabled in options; takes as an argument either an image or batch with latent space images"""
@@ -1391,86 +1516,149 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             images.save_image(image, self.outpath_samples, "", seeds[index], prompts[index], opts.samples_format, info=info, p=self, suffix="-before-highres-fix")
 
         img2img_sampler_name = self.hr_sampler_name or self.sampler_name
-
         self.sampler = sd_samplers.create_sampler(img2img_sampler_name, self.sd_model)
+        stage_plan = self.hr_stage_plan or []
 
-        if self.latent_scale_mode is not None:
-            for i in range(samples.shape[0]):
-                save_intermediate(samples, i)
+        if not stage_plan:
+            self.sampler = None
+            self.is_hr_pass = False
+            if restore_attention_optimization:
+                try:
+                    import modules.sd_hijack as sd_hijack
+                    sd_hijack.model_hijack.apply_optimizations(opts.cross_attention_optimization)
+                except Exception as e:
+                    print(f"Failed to restore attention optimization after hires pass: {e}")
+            if samples is not None:
+                return decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)
+            recovered = DecodedSamples()
+            for i in range(decoded_samples.shape[0]):
+                recovered.append(decoded_samples[i].to(devices.cpu))
+            return recovered
 
-            samples = torch.nn.functional.interpolate(samples, size=(target_height // opt_f, target_width // opt_f), mode=self.latent_scale_mode["mode"], antialias=self.latent_scale_mode["antialias"])
+        original_cfg_scale = self.cfg_scale
 
-            # Avoid making the inpainting conditioning unless necessary as
-            # this does need some extra compute to decode / encode the image again.
-            if getattr(self, "inpainting_mask_weight", shared.opts.inpainting_mask_weight) < 1.0:
-                image_conditioning = self.img2img_image_conditioning(decode_first_stage(self.sd_model, samples), samples)
-            else:
-                image_conditioning = self.txt2img_image_conditioning(samples)
-        else:
-            lowres_samples = torch.clamp((decoded_samples + 1.0) / 2.0, min=0.0, max=1.0)
+        try:
+            for stage_index, stage in enumerate(stage_plan):
+                if shared.state.interrupted:
+                    break
 
-            batch_images = []
-            for i, x_sample in enumerate(lowres_samples):
-                x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
-                x_sample = x_sample.astype(np.uint8)
-                image = Image.fromarray(x_sample)
+                target_width = stage["target_width"]
+                target_height = stage["target_height"]
+                stage_steps = stage["steps"]
+                stage_cfg = original_cfg_scale if stage["cfg"] is None else stage["cfg"]
 
-                save_intermediate(image, i)
+                if self.latent_scale_mode is not None:
+                    if stage_index == 0:
+                        for i in range(samples.shape[0]):
+                            save_intermediate(samples, i)
 
-                image = images.resize_image(0, image, target_width, target_height, upscaler_name=self.hr_upscaler)
-                image = np.array(image).astype(np.float32) / 255.0
-                image = np.moveaxis(image, 2, 0)
-                batch_images.append(image)
+                    samples = torch.nn.functional.interpolate(samples, size=(target_height // opt_f, target_width // opt_f), mode=self.latent_scale_mode["mode"], antialias=self.latent_scale_mode["antialias"])
 
-            decoded_samples = torch.from_numpy(np.array(batch_images))
-            decoded_samples = decoded_samples.to(shared.device, dtype=devices.dtype_vae)
+                    # Avoid making the inpainting conditioning unless necessary as
+                    # this does need some extra compute to decode / encode the image again.
+                    if getattr(self, "inpainting_mask_weight", shared.opts.inpainting_mask_weight) < 1.0:
+                        image_conditioning = self.img2img_image_conditioning(decode_first_stage(self.sd_model, samples), samples)
+                    else:
+                        image_conditioning = self.txt2img_image_conditioning(samples)
+                else:
+                    if decoded_samples is None:
+                        decoded_samples = torch.stack(decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)).to(dtype=torch.float32)
 
-            if opts.sd_vae_encode_method != 'Full':
-                self.extra_generation_params['VAE Encoder'] = opts.sd_vae_encode_method
-            samples = images_tensor_to_samples(decoded_samples, approximation_indexes.get(opts.sd_vae_encode_method))
+                    lowres_samples = torch.clamp((decoded_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
-            image_conditioning = self.img2img_image_conditioning(decoded_samples, samples)
+                    batch_images = []
+                    for i, x_sample in enumerate(lowres_samples):
+                        x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
+                        x_sample = x_sample.astype(np.uint8)
+                        image = Image.fromarray(x_sample)
 
-        shared.state.nextjob()
+                        if stage_index == 0:
+                            save_intermediate(image, i)
 
-        samples = samples[:, :, self.truncate_y//2:samples.shape[2]-(self.truncate_y+1)//2, self.truncate_x//2:samples.shape[3]-(self.truncate_x+1)//2]
+                        image = images.resize_image(0, image, target_width, target_height, upscaler_name=self.hr_upscaler)
+                        image = np.array(image).astype(np.float32) / 255.0
+                        image = np.moveaxis(image, 2, 0)
+                        batch_images.append(image)
 
-        self.rng = rng.ImageRNG(samples.shape[1:], self.seeds, subseeds=self.subseeds, subseed_strength=self.subseed_strength, seed_resize_from_h=self.seed_resize_from_h, seed_resize_from_w=self.seed_resize_from_w)
-        noise = self.rng.next()
+                    decoded_samples = torch.from_numpy(np.array(batch_images))
+                    decoded_samples = decoded_samples.to(shared.device, dtype=devices.dtype_vae)
 
-        # GC now before running the next img2img to prevent running out of memory
-        devices.torch_gc()
+                    if opts.sd_vae_encode_method != 'Full':
+                        self.extra_generation_params['VAE Encoder'] = opts.sd_vae_encode_method
+                    samples = images_tensor_to_samples(decoded_samples, approximation_indexes.get(opts.sd_vae_encode_method))
 
-        if not self.disable_extra_networks:
-            with devices.autocast():
-                extra_networks.activate(self, self.hr_extra_network_data)
+                    image_conditioning = self.img2img_image_conditioning(decoded_samples, samples)
 
-        with devices.autocast():
-            self.calculate_hr_conds()
+                    del batch_images
+                    del lowres_samples
 
-        sd_models.apply_token_merging(self.sd_model, self.get_token_merging_ratio(for_hr=True))
+                if stage["is_final"]:
+                    samples = samples[:, :, self.truncate_y//2:samples.shape[2]-(self.truncate_y+1)//2, self.truncate_x//2:samples.shape[3]-(self.truncate_x+1)//2]
 
-        if self.scripts is not None:
-            self.scripts.before_hr(self)
-            self.scripts.process_before_every_sampling(
-                p=self,
-                x=samples,
-                noise=noise,
-                c=self.hr_c,
-                uc=self.hr_uc,
-            )
+                shared.state.nextjob()
 
-        samples = self.sampler.sample_img2img(self, samples, noise, self.hr_c, self.hr_uc, steps=self.hr_second_pass_steps or self.steps, image_conditioning=image_conditioning)
+                self.hr_upscale_to_x = target_width
+                self.hr_upscale_to_y = target_height
+                self.cfg_scale = stage_cfg
+                self.hr_c = None
+                self.hr_uc = None
 
-        sd_models.apply_token_merging(self.sd_model, self.get_token_merging_ratio())
+                self.rng = rng.ImageRNG(samples.shape[1:], self.seeds, subseeds=self.subseeds, subseed_strength=self.subseed_strength, seed_resize_from_h=self.seed_resize_from_h, seed_resize_from_w=self.seed_resize_from_w)
+                noise = self.rng.next()
 
-        self.sampler = None
-        devices.torch_gc()
+                # GC now before running the next img2img to prevent running out of memory
+                devices.torch_gc()
 
-        decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)
+                if not self.disable_extra_networks:
+                    with devices.autocast():
+                        extra_networks.activate(self, self.hr_extra_network_data)
 
-        self.is_hr_pass = False
-        return decoded_samples
+                with devices.autocast():
+                    self.calculate_hr_conds(steps_override=stage_steps)
+
+                sd_models.apply_token_merging(self.sd_model, self.get_token_merging_ratio(for_hr=True))
+
+                if self.scripts is not None:
+                    self.scripts.before_hr(self)
+                    self.scripts.process_before_every_sampling(
+                        p=self,
+                        x=samples,
+                        noise=noise,
+                        c=self.hr_c,
+                        uc=self.hr_uc,
+                    )
+
+                samples = self.sampler.sample_img2img(self, samples, noise, self.hr_c, self.hr_uc, steps=stage_steps, image_conditioning=image_conditioning)
+                decoded_samples = None
+
+                if hasattr(self.sampler, "model_wrap_cfg") and self.sampler.model_wrap_cfg is not None:
+                    self.sampler.model_wrap_cfg.init_latent = None
+                self.sampler.last_latent = None
+                self.sampler.sampler_extra_args = None
+
+                # Release stage-local intermediates early so cascade mode does not
+                # keep old stage tensors alive until the very end of the hires pass.
+                if self.latent_scale_mode is not None:
+                    del image_conditioning
+                else:
+                    del decoded_samples
+                    del image_conditioning
+                devices.torch_gc()
+
+            decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)
+            return decoded_samples
+        finally:
+            self.cfg_scale = original_cfg_scale
+            sd_models.apply_token_merging(self.sd_model, self.get_token_merging_ratio())
+            self.sampler = None
+            devices.torch_gc()
+            if restore_attention_optimization:
+                try:
+                    import modules.sd_hijack as sd_hijack
+                    sd_hijack.model_hijack.apply_optimizations(opts.cross_attention_optimization)
+                except Exception as e:
+                    print(f"Failed to restore attention optimization after hires pass: {e}")
+            self.is_hr_pass = False
 
     def close(self):
         super().close()
@@ -1505,7 +1693,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         self.all_hr_prompts = [shared.prompt_styles.apply_styles_to_prompt(x, self.styles) for x in self.all_hr_prompts]
         self.all_hr_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_hr_negative_prompts]
 
-    def calculate_hr_conds(self):
+    def calculate_hr_conds(self, steps_override=None):
         if self.hr_c is not None:
             return
 
@@ -1513,7 +1701,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         hr_negative_prompts = prompt_parser.SdConditioning(self.hr_negative_prompts, width=self.hr_upscale_to_x, height=self.hr_upscale_to_y, is_negative_prompt=True)
 
         sampler_config = sd_samplers.find_sampler_config(self.hr_sampler_name or self.sampler_name)
-        steps = self.hr_second_pass_steps or self.steps
+        steps = steps_override if steps_override is not None else (self.hr_second_pass_steps or self.steps)
         total_steps = sampler_config.total_steps(steps) if sampler_config else steps
 
         self.hr_uc = self.get_conds_with_caching(prompt_parser.get_learned_conditioning, hr_negative_prompts, self.firstpass_steps, [self.cached_hr_uc, self.cached_uc], self.hr_extra_network_data, total_steps)
