@@ -1,168 +1,47 @@
 /**
  * Prompt Presets Manager
- * Handles UI interactions for saving, loading, and managing prompt text presets
- * Uses localStorage for persistence
+ * Handles UI interactions for prompt preset payload/copy UX.
+ * Persistence and dropdown choice updates are backend-driven from ui_toprow.py.
  */
 
 (function () {
     'use strict';
 
-    // Preset storage namespace
-    const STORAGE_KEY = 'prompt_presets';
+    const STORAGE_KEY = 'prompt_presets_cache';
 
-    /**
-     * Get all presets from localStorage
-     */
-    window.getPresets = function() {
+    function getPresets() {
         try {
             const data = localStorage.getItem(STORAGE_KEY);
             return data ? JSON.parse(data) : {};
         } catch (e) {
-            console.warn('[Presets] Error reading from localStorage:', e);
+            console.warn('[Presets] Error reading cache:', e);
             return {};
         }
-    };
+    }
 
-    /**
-     * Save all presets to localStorage
-     */
-    window.savePresets = function(presets) {
+    function savePresets(presets) {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(presets || {}));
         } catch (e) {
-            console.warn('[Presets] Error writing to localStorage:', e);
+            console.warn('[Presets] Error writing cache:', e);
         }
-    };
-
-    /**
-     * Insert text into textarea at cursor position
-     */
-    function insertAtCursor(textarea, text) {
-        if (!textarea) return;
-        
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const before = textarea.value.substring(0, start);
-        const after = textarea.value.substring(end);
-        
-        // Add comma separator if textarea is not empty
-        const separator = textarea.value.trim() ? ', ' : '';
-        textarea.value = before + separator + text + after;
-        
-        // Move cursor to after inserted text
-        const newPos = start + text.length + separator.length;
-        textarea.selectionStart = textarea.selectionEnd = newPos;
-        
-        // Trigger input event for Gradio to notice the change
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    /**
-     * Update preset dropdown with current presets
-     */
-    window.updateDropdown = function(tab) {
-        const presets = window.getPresets();
-        const names = Object.keys(presets).sort();
+    function getDropdownSelectedName(tab) {
         const dropdown = gradioApp().querySelector(`#${tab}_preset_dropdown`);
-        
-        if (!dropdown) return;
-        
-        // Find the select element
+        if (!dropdown) return '';
         const selectEl = dropdown.querySelector('select');
-        if (!selectEl) return;
-        
-        selectEl.innerHTML = names.length ? 
-            names.map(name => `<option value="${name}">${name}</option>`).join('') :
-            '<option value="">(No presets)</option>';
-    };
-    
-    function updateDropdown(tab) {
-        window.updateDropdown(tab);
+        if (selectEl) return String(selectEl.value || '').trim();
+        const inputEl = dropdown.querySelector('input');
+        return inputEl ? String(inputEl.value || '').trim() : '';
     }
 
-    /**
-     * Global functions for preset operations
-     */
-    window.save_prompt_preset_txt2img = function(promptText) {
-        return save_prompt_preset_impl('txt2img', promptText);
-    };
-    
-    window.save_prompt_preset_img2img = function(promptText) {
-        return save_prompt_preset_impl('img2img', promptText);
-    };
-    
-    function save_prompt_preset_impl(tab, promptText) {
-        const textarea = gradioApp().querySelector(`#${tab}_prompt textarea`);
-        const selectedStart = textarea?.selectionStart || 0;
-        const selectedEnd = textarea?.selectionEnd || 0;
-        const selectedText = textarea?.value.substring(selectedStart, selectedEnd) || '';
-        const fallbackText = String(promptText || textarea?.value || '').trim();
-        const contentToSave = selectedText.trim() ? selectedText.trim() : fallbackText;
-
-        if (!contentToSave) {
-            alert('Prompt is empty. Type or select text first.');
-            return;
-        }
-
-        const presetName = prompt('Preset name:', contentToSave.substring(0, 30));
-        if (!presetName) return;
-
-        const presets = window.getPresets();
-        presets[presetName] = contentToSave;
-        window.savePresets(presets);
-        updateDropdown(tab);
-        
-        console.log('[Presets] Saved:', presetName);
-    }
-
-    window.edit_prompt_preset_txt2img = function(name) {
-        return edit_prompt_preset_impl('txt2img', name);
-    };
-    
-    window.edit_prompt_preset_img2img = function(name) {
-        return edit_prompt_preset_impl('img2img', name);
-    };
-    
-    function edit_prompt_preset_impl(tab, name) {
-        if (!name || name === '(No presets)') {
-            alert('Please select a preset to edit');
-            return;
-        }
-        
-        const presets = window.getPresets();
-        const currentContent = presets[name] || '';
-        const newContent = prompt('Edit preset content:', currentContent);
-        
-        if (newContent === null) return;
-        
-        presets[name] = newContent;
-        window.savePresets(presets);
-        updateDropdown(tab);
-        
-        console.log('[Presets] Updated:', name);
-    }
-
-    window.preset_selected_txt2img = function(name) {
-        return preset_selected_impl('txt2img', name);
-    };
-    
-    window.preset_selected_img2img = function(name) {
-        return preset_selected_impl('img2img', name);
-    };
-    
-    function preset_selected_impl(tab, name) {
-        if (!name || name === '(No presets)') return;
-        
-        const presets = window.getPresets();
-        const content = presets[name];
-
+    function copyText(text) {
+        const content = String(text || '');
         if (!content) return;
 
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(content).then(() => {
-                console.log('[Presets] Copied to clipboard:', name);
-            }).catch(() => {
+            navigator.clipboard.writeText(content).catch(() => {
                 const temp = document.createElement('textarea');
                 temp.value = content;
                 temp.style.position = 'fixed';
@@ -172,7 +51,6 @@
                 temp.select();
                 try {
                     document.execCommand('copy');
-                    console.log('[Presets] Copied to clipboard (fallback):', name);
                 } finally {
                     document.body.removeChild(temp);
                 }
@@ -189,34 +67,117 @@
         temp.select();
         try {
             document.execCommand('copy');
-            console.log('[Presets] Copied to clipboard (legacy):', name);
         } finally {
             document.body.removeChild(temp);
         }
     }
 
+    async function refreshPresetCacheFromFile() {
+        try {
+            const res = await fetch(`/file=${encodeURIComponent('prompt_presets/presets.json')}?t=${Date.now()}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                savePresets(data);
+            }
+        } catch (_e) {
+            // Ignore unavailable file fetch; cache will still work for session-created presets.
+        }
+    }
+
+    function buildAddPayload(tab) {
+        const promptText = gradioApp().querySelector(`#${tab}_prompt textarea`)?.value || '';
+        const textarea = gradioApp().querySelector(`#${tab}_prompt textarea`);
+        const selectedStart = textarea?.selectionStart || 0;
+        const selectedEnd = textarea?.selectionEnd || 0;
+        const selectedText = textarea?.value.substring(selectedStart, selectedEnd) || '';
+        const fallbackText = String(promptText || textarea?.value || '').trim();
+        const contentToSave = selectedText.trim() ? selectedText.trim() : fallbackText;
+
+        if (!contentToSave) {
+            alert('Prompt is empty. Type or select text first.');
+            return '';
+        }
+
+        const presetName = prompt('Preset name:', contentToSave.substring(0, 30));
+        if (!presetName) return '';
+
+        const presets = getPresets();
+        presets[presetName] = contentToSave;
+        savePresets(presets);
+
+        return JSON.stringify({ name: presetName, content: contentToSave });
+    }
+
+    function buildEditPayload(tab) {
+        const name = getDropdownSelectedName(tab);
+        if (!name || name === '(No presets)') {
+            alert('Please select a preset to edit');
+            return '';
+        }
+
+        const presets = getPresets();
+        const currentContent = presets[name] || '';
+        const newContent = prompt('Edit preset content:', currentContent);
+
+        if (newContent === null) return '';
+
+        presets[name] = newContent;
+        savePresets(presets);
+
+        return JSON.stringify({ name, content: newContent });
+    }
+
+    async function copyPresetByName(name) {
+        if (!name || name === '(No presets)') return;
+
+        let presets = getPresets();
+        let content = presets[name];
+        if (!content) {
+            await refreshPresetCacheFromFile();
+            presets = getPresets();
+            content = presets[name] || '';
+        }
+        if (!content) return;
+
+        copyText(content);
+        console.log('[Presets] Copied to clipboard:', name);
+    }
+
+    window.buildPromptPresetAddPayload = function(tab) {
+        return buildAddPayload(tab);
+    };
+
+    window.buildPromptPresetEditPayload = function(tab) {
+        return buildEditPayload(tab);
+    };
+
+    window.confirmDeletePromptPreset = function(name) {
+        const presetName = String(name || '').trim();
+        if (!presetName || presetName === '(No presets)') {
+            alert('Please select a preset to delete');
+            return false;
+        }
+        const ok = confirm(`Delete preset "${presetName}"?`);
+        if (ok) {
+            const presets = getPresets();
+            delete presets[presetName];
+            savePresets(presets);
+        }
+        return ok;
+    };
+
+    window.copyPromptPresetByName = function(name) {
+        copyPresetByName(name);
+    };
+
     /**
-     * Initialize presets dropdown interactions
+     * Initialize preset cache sync for copy behavior.
      */
     function setupPresetDropdowns() {
-        const tabs = ['txt2img', 'img2img'];
-        tabs.forEach(tab => {
-            const dropdown = gradioApp().querySelector(`#${tab}_preset_dropdown`);
-            if (!dropdown) return;
-            
-            // Update dropdown on load
-            updateDropdown(tab);
-            
-            // Set up dropdown change event
-            const selectEl = dropdown.querySelector('select');
-            if (selectEl) {
-                selectEl.addEventListener('change', () => {
-                    const name = selectEl.value;
-                    preset_selected_impl(tab, name);
-                    selectEl.value = '';  // Reset dropdown
-                });
-            }
-        });
+        refreshPresetCacheFromFile();
+        setTimeout(refreshPresetCacheFromFile, 1200);
+        setTimeout(refreshPresetCacheFromFile, 2800);
     }
 
     // Wait for Gradio to be ready

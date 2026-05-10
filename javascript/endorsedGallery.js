@@ -274,7 +274,7 @@
 
     function buildKeywordHighlightHtml(text) {
         const src = String(text || '');
-        const re = /(^|[,\n]\s*)([^:,\n]+)(\s*:\s*)([^,\n]*)/g;
+        const re = /(^|[,\n]\s*)([^:,\n]+)(\s*:\s*)([^,\n]*(?:\[[^\]\n]*\][^,\n]*)*)/g;
         let out = '';
         let last = 0;
         let m;
@@ -290,9 +290,14 @@
             }
             out += escapeHtml(m[3]);
 
-            const valueText = m[4] || '';
+            let valueText = m[4] || '';
             if (canonicalKey) {
-                const valueCheck = validateValueForKey(canonicalKey, valueText);
+                let valueCheck = validateValueForKey(canonicalKey, valueText);
+                const variants = parseValueVariants(valueText);
+                if (!valueCheck.ok && !variants.error && variants.values.length > 1) {
+                    const allValid = variants.values.every((one) => validateValueForKey(canonicalKey, one).ok);
+                    valueCheck = { ok: allValid, reason: allValid ? '' : valueCheck.reason };
+                }
                 if (valueText.trim()) {
                     if (valueCheck.ok) {
                         out += `<span class="endgal-fire-value-valid">${escapeHtml(valueText)}</span>`;
