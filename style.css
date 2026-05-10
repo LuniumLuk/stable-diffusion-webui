@@ -33,6 +33,103 @@
 .endgal-capsule-seed { background: #f59e42; font-size: 0.78em; padding: 0.10em 0.55em; }
 .endgal-capsule-hires { background: #a21caf; }
 
+/* Gallery fire config assist */
+#endgal_hires_override_config {
+    position: relative;
+}
+
+#endgal_hires_override_config textarea {
+    position: relative;
+    z-index: 2;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--body-text-color, #e5e7eb);
+    text-shadow: none;
+}
+
+.endgal-fire-highlight {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--body-text-color, #e5e7eb);
+    font: inherit;
+}
+
+.endgal-fire-key-valid {
+    color: #f59e0b;
+    font-weight: inherit;
+}
+
+.endgal-fire-value-valid {
+    color: #22c55e;
+}
+
+.endgal-fire-value-invalid {
+    color: #ef4444;
+    text-decoration: underline wavy rgba(239, 68, 68, 0.7);
+}
+
+#endgal_hires_override_config.endgal-fire-config-invalid textarea {
+    outline: 1px solid #ef4444;
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.55);
+    border-color: #ef4444 !important;
+}
+
+.endgal-fire-config-error {
+    margin-left: 0.4rem;
+    color: #ef4444;
+    font-weight: 600;
+    font-size: 0.82em;
+    display: none;
+    vertical-align: middle;
+}
+
+.endgal-fire-config-jobs {
+    margin-left: 0.45rem;
+    color: #9ca3af;
+    font-weight: 600;
+    font-size: 0.82em;
+    vertical-align: middle;
+}
+
+.endgal-fire-keyword-hints {
+    position: absolute;
+    z-index: 30;
+    left: 10px;
+    right: 10px;
+    top: calc(100% + 4px);
+    display: none;
+    max-height: 220px;
+    overflow: auto;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(20, 20, 22, 0.96);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+    padding: 6px;
+}
+
+.endgal-fire-keyword-hint {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #f8fafc;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.92rem;
+}
+
+.endgal-fire-keyword-hint:hover,
+.endgal-fire-keyword-hint.active {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fde68a;
+}
+
 /* temporary fix to load default gradio font in frontend instead of backend */
 
 @import url('webui-assets/css/sourcesanspro.css');

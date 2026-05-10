@@ -12,6 +12,7 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
         self.steps = None
         self.sampler_name = None
         self.scheduler = None
+        self.batch_steps = None
 
     def title(self):
         return "Sampler"
@@ -24,9 +25,12 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
             with FormRow(elem_id=f"sampler_selection_{self.tabname}"):
                 self.sampler_name = gr.Dropdown(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=sampler_names[0])
                 self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=scheduler_names[0])
-                self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20)
+            with FormRow(elem_id=f"sampler_steps_{self.tabname}"):
+                self.batch_steps = gr.Textbox(label="Batch steps (queue)", elem_id=f"{self.tabname}_batch_steps", placeholder="e.g., 24,26,28 (leave empty to use single step)", scale=1)
+                self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20, scale=2)
         else:
             with FormGroup(elem_id=f"sampler_selection_{self.tabname}"):
+                self.batch_steps = gr.Textbox(label="Batch steps (queue)", elem_id=f"{self.tabname}_batch_steps", placeholder="e.g., 24,26,28 (leave empty to use single step)")
                 self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20)
                 self.sampler_name = gr.Radio(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=sampler_names[0])
                 self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=scheduler_names[0])
@@ -37,9 +41,9 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
             PasteField(self.scheduler, sd_samplers.get_scheduler_from_infotext, api="scheduler"),
         ]
 
-        return self.steps, self.sampler_name, self.scheduler
+        return self.batch_steps, self.steps, self.sampler_name, self.scheduler
 
-    def setup(self, p, steps, sampler_name, scheduler):
+    def setup(self, p, batch_steps, steps, sampler_name, scheduler):
         p.steps = steps
         p.sampler_name = sampler_name
         p.scheduler = scheduler

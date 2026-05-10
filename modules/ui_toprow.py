@@ -92,7 +92,7 @@ class Toprow:
                     scale=5,
                     interactive=True,
                 )
-                with gr.Column(scale=1, min_width=50):
+                with gr.Row(scale=1, min_width=150):
                     self.preset_add_btn = ToolButton(value="➕", elem_id=f"{self.id_part}_preset_add", tooltip="Save selected text as preset")
                     self.preset_edit_btn = ToolButton(value="✏️", elem_id=f"{self.id_part}_preset_edit", tooltip="Edit selected preset")
                     self.preset_delete_btn = ToolButton(value="🗑️", elem_id=f"{self.id_part}_preset_delete", tooltip="Delete selected preset")

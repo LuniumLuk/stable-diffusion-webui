@@ -1,6 +1,7 @@
 """Paged gallery with endorsements, dislikes, and cached thumbnails."""
 
 import base64
+import colorsys
 import datetime
 import hashlib
 import html as _html
@@ -378,6 +379,36 @@ def _generation_type_label(record: dict, path: str) -> str:
     return ""
 
 
+def _seed_capsule_style(seed: str) -> str:
+    """Color seed capsule with high separation for close/consecutive seeds."""
+    raw = str(seed or "")
+    digits = re.sub(r"\D", "", raw)
+    if not raw:
+        return ""
+
+    # Keep only a sane amount of digits to avoid giant-int overhead.
+    base_num = int(digits[-18:] or "0")
+
+    # Golden-ratio hue progression strongly separates adjacent seeds.
+    phi = 0.6180339887498949
+    hue = (base_num * phi) % 1.0
+
+    # Slight S/V variation from independent irrational strides.
+    sat = 0.65 + (0.30 * ((base_num * 0.7548776662466927) % 1.0))
+    val = 0.72 + (0.23 * ((base_num * 0.5698402909980532) % 1.0))
+
+    rf, gf, bf = colorsys.hsv_to_rgb(hue, sat, val)
+    r = int(rf * 255)
+    g = int(gf * 255)
+    bch = int(bf * 255)
+
+    # Keep text readable against generated background.
+    luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * bch)
+    text_color = "#111111" if luminance > 145 else "#ffffff"
+
+    return f' style="background: rgb({r}, {g}, {bch}); color: {text_color};"'
+
+
 def _apply_removebg(path: str) -> tuple[bool, str]:
     source_path = os.path.abspath(path or "")
     if not source_path or not os.path.exists(source_path):
@@ -553,10 +584,12 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
                 f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(hires_scale)}/{_html.escape(hires_steps)}</span>'
             )
 
+    seed_capsule_style = _seed_capsule_style(seed)
+
     settings_capsules = (
         f'<span class="endgal-capsule endgal-capsule-steps">Steps: {_html.escape(steps)}</span>'
         f'<span class="endgal-capsule endgal-capsule-cfg">CFG: {_html.escape(cfg_scale)}</span>'
-        f'<span class="endgal-capsule endgal-capsule-seed">Seed: {_html.escape(seed_short)}</span>'
+        f'<span class="endgal-capsule endgal-capsule-seed"{seed_capsule_style}>Seed: {_html.escape(seed_short)}</span>'
         + "".join(hires_stage_capsules)
     )
 
@@ -578,7 +611,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         <div class="endgal-actions">
             <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
             <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">t2i</button>
-            <button class="endgal-btn-send2img" title="queue txt2img with Hires fix preset" onclick="endorsedGallery.queueTxt2ImgHires('{infotext_b64}')">hires</button>
+            <button class="endgal-btn-send2img" title="queue txt2img override jobs from fire config" onclick="endorsedGallery.queueTxt2ImgFire('{infotext_b64}')">🔥</button>
             <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">i2i</button>
             <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
             <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
@@ -1088,40 +1121,13 @@ def on_ui_tabs():
             archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
 
         with gr.Row(elem_id="endgal_hires_preset_row"):
-            hires_upscaler_preset = gr.Dropdown(
-                choices=[*shared.latent_upscale_modes, *[x.name for x in shared.sd_upscalers]],
-                value="Latent",
-                label="Queue Hires Upscaler",
-                elem_id="endgal_hires_upscaler_preset",
-                scale=2,
-                filterable=False,
-            )
-            hires_steps_preset = gr.Slider(
-                minimum=0,
-                maximum=150,
-                step=1,
-                value=20,
-                label="Queue Hires Steps",
-                elem_id="endgal_hires_steps_preset",
-                scale=1,
-            )
-            hires_denoise_preset = gr.Slider(
-                minimum=0.0,
-                maximum=1.0,
-                step=0.01,
-                value=0.85,
-                label="Queue Hires Denoise",
-                elem_id="endgal_hires_denoise_preset",
-                scale=1,
-            )
-            hires_scale_preset = gr.Slider(
-                minimum=1.0,
-                maximum=4.0,
-                step=0.05,
-                value=1.5,
-                label="Queue Hires Upscale",
-                elem_id="endgal_hires_scale_preset",
-                scale=1,
+            hires_override_config = gr.Textbox(
+                value="steps: 14",
+                lines=2,
+                label="Queue Fire Config (one override set per line, comma-separated key:value)",
+                placeholder="steps: 14\nsteps: 18, cfg scale: 6.5\nhires steps: 10, denoising strength: 0.4",
+                elem_id="endgal_hires_override_config",
+                scale=8,
             )
 
         with gr.Row(elem_id="endgal_pager_row"):

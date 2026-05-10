@@ -6,11 +6,99 @@
  *   .action(actionDataB64)       – endorse or remove a card via hidden Gradio bus
  *   .copyParams(infotextB64)     – copy raw infotext to clipboard
  *   .sendTo(infotextB64, target) – paste params into txt2img or img2img
- *   .queueTxt2ImgHires(...)      – queue txt2img with the gallery hires preset
+ *   .queueTxt2ImgFire(...)       – queue txt2img jobs with fire override config
  */
 
 (function () {
     'use strict';
+
+    const FIRE_CANONICAL_KEYS = [
+        'Prompt',
+        'Negative prompt',
+        'Enable Hires fix',
+        'Steps',
+        'Sampler',
+        'Schedule type',
+        'CFG scale',
+        'Seed',
+        'Width',
+        'Height',
+        'Denoising strength',
+        'Hires upscale',
+        'Hires upscaler',
+        'Hires steps',
+        'Hires resize-1',
+        'Hires resize-2',
+    ];
+
+    const FIRE_KEY_ALIASES = {
+        prompt: 'Prompt',
+        neg: 'Negative prompt',
+        negative: 'Negative prompt',
+        'negative prompt': 'Negative prompt',
+        'enable hires fix': 'Enable Hires fix',
+        'hires fix': 'Enable Hires fix',
+        'enable hr fix': 'Enable Hires fix',
+        'enable_hires_fix': 'Enable Hires fix',
+        'enable_hr': 'Enable Hires fix',
+        step: 'Steps',
+        steps: 'Steps',
+        sampler: 'Sampler',
+        schedule: 'Schedule type',
+        scheduler: 'Schedule type',
+        'schedule type': 'Schedule type',
+        cfg: 'CFG scale',
+        'cfg scale': 'CFG scale',
+        seed: 'Seed',
+        width: 'Width',
+        w: 'Width',
+        height: 'Height',
+        h: 'Height',
+        denoise: 'Denoising strength',
+        denoising: 'Denoising strength',
+        'denoising strength': 'Denoising strength',
+        'hires upscale': 'Hires upscale',
+        'hires upscaler': 'Hires upscaler',
+        'hires steps': 'Hires steps',
+        'hires resize-1': 'Hires resize-1',
+        'hires resize-2': 'Hires resize-2',
+        'hr upscale': 'Hires upscale',
+        'hr upscaler': 'Hires upscaler',
+        'hr steps': 'Hires steps',
+    };
+
+    const FIRE_VALUE_SUGGEST_DEFAULTS = {
+        'Enable Hires fix': [
+            'true',
+            'false',
+        ],
+        'Sampler': [
+            'Euler',
+            'Euler a',
+            'DPM++ 2M',
+            'DPM++ 2M Karras',
+            'DPM++ SDE',
+            'DPM++ SDE Karras',
+            'DDIM',
+        ],
+        'Hires upscaler': [
+            'Latent',
+            'Latent (antialiased)',
+            'Latent (bicubic)',
+            'Latent (bicubic antialiased)',
+            'Lanczos',
+            'ESRGAN_4x',
+        ],
+        'Schedule type': [
+            'Automatic',
+            'Karras',
+            'Exponential',
+            'Polyexponential',
+            'SGM Uniform',
+        ],
+    };
+
+    const FIRE_CONFIG_STORAGE_KEY = 'endgal_fire_override_config_last';
 
     let previewOverlay = null;
     let previewImage = null;
@@ -29,15 +117,6 @@
     let dragStartY = 0;
     let dragOriginX = 0;
     let dragOriginY = 0;
-
-    const DEFAULT_GALLERY_HIRES_PRESET = Object.freeze({
-        upscaler: 'Latent',
-        steps: 20,
-        denoising: 0.85,
-        scale: 1.5,
-        resizeX: 0,
-        resizeY: 0,
-    });
 
     // ---------------------------------------------------------------------------
     // Helpers
@@ -171,13 +250,573 @@
         return input ? String(input.value || '').trim() : '';
     }
 
+    function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function escapeHtml(text) {
+        return String(text || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function normalizeKeywordKey(key) {
+        const cleaned = String(key || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        if (!cleaned) return '';
+        if (FIRE_KEY_ALIASES[cleaned]) return FIRE_KEY_ALIASES[cleaned];
+
+        const canonical = FIRE_CANONICAL_KEYS.find((k) => k.toLowerCase() === cleaned);
+        return canonical || '';
+    }
+
+    function buildKeywordHighlightHtml(text) {
+        const src = String(text || '');
+        const re = /(^|[,\n]\s*)([^:,\n]+)(\s*:\s*)([^,\n]*)/g;
+        let out = '';
+        let last = 0;
+        let m;
+
+        while ((m = re.exec(src)) !== null) {
+            out += escapeHtml(src.slice(last, m.index));
+            out += escapeHtml(m[1]);
+            const canonicalKey = normalizeKeywordKey(m[2]);
+            if (canonicalKey) {
+                out += `<span class="endgal-fire-key-valid">${escapeHtml(m[2])}</span>`;
+            } else {
+                out += escapeHtml(m[2]);
+            }
+            out += escapeHtml(m[3]);
+
+            const valueText = m[4] || '';
+            if (canonicalKey) {
+                const valueCheck = validateValueForKey(canonicalKey, valueText);
+                if (valueText.trim()) {
+                    if (valueCheck.ok) {
+                        out += `<span class="endgal-fire-value-valid">${escapeHtml(valueText)}</span>`;
+                    } else {
+                        out += `<span class="endgal-fire-value-invalid">${escapeHtml(valueText)}</span>`;
+                    }
+                } else {
+                    out += escapeHtml(valueText);
+                }
+            } else {
+                out += escapeHtml(valueText);
+            }
+            last = re.lastIndex;
+        }
+
+        out += escapeHtml(src.slice(last));
+        return out.replace(/\n/g, '<br>');
+    }
+
+    function currentKeywordFragment(textarea) {
+        const value = String(textarea.value || '');
+        const caret = textarea.selectionStart || 0;
+        const before = value.slice(0, caret);
+        const lineStart = before.lastIndexOf('\n') + 1;
+        const lineChunk = before.slice(lineStart);
+        const segStartInLine = lineChunk.lastIndexOf(',') + 1;
+        const segment = lineChunk.slice(segStartInLine);
+
+        if (segment.includes(':')) return null;
+        const leadingSpaces = (segment.match(/^\s*/) || [''])[0];
+        const fragment = segment.slice(leadingSpaces.length);
+        return {
+            fragment,
+            lineStart,
+            segStartInLine,
+            leadingSpaces,
+        };
+    }
+
+    function keywordCandidates(fragment) {
+        const needle = String(fragment || '').trim().toLowerCase();
+        if (!needle) return FIRE_CANONICAL_KEYS.slice(0, 12);
+
+        const starts = [];
+        const contains = [];
+        const seen = new Set();
+
+        Object.entries(FIRE_KEY_ALIASES).forEach(([alias, canonical]) => {
+            const scoreSrc = `${alias} ${canonical}`.toLowerCase();
+            if (!scoreSrc.includes(needle)) return;
+            if (seen.has(canonical)) return;
+            seen.add(canonical);
+            if (canonical.toLowerCase().startsWith(needle) || alias.startsWith(needle)) {
+                starts.push(canonical);
+            } else {
+                contains.push(canonical);
+            }
+        });
+
+        return [...starts, ...contains].slice(0, 12);
+    }
+
+    function getDropdownChoicesByElemId(elemId) {
+        const host = gradioApp().querySelector(`#${elemId}`);
+        if (!host) return [];
+
+        const select = host.querySelector('select');
+        if (!select) return [];
+
+        return Array.from(select.querySelectorAll('option'))
+            .map((opt) => String(opt.textContent || '').trim())
+            .filter(Boolean);
+    }
+
+    function uniqStrings(values) {
+        const seen = new Set();
+        const out = [];
+        (values || []).forEach((v) => {
+            const s = String(v || '').trim();
+            if (!s) return;
+            const key = s.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(s);
+        });
+        return out;
+    }
+
+    function valueCandidatesForKey(canonicalKey, fragment) {
+        const key = String(canonicalKey || '');
+        const needle = String(fragment || '').trim().toLowerCase();
+        const pool = getAllValueChoicesForKey(key);
+        if (!pool.length) return [];
+
+        if (!needle) return pool.slice(0, 12);
+
+        const starts = pool.filter((x) => x.toLowerCase().startsWith(needle));
+        const contains = pool.filter((x) => !x.toLowerCase().startsWith(needle) && x.toLowerCase().includes(needle));
+        return [...starts, ...contains].slice(0, 12);
+    }
+
+    function getAllValueChoicesForKey(canonicalKey) {
+        const key = String(canonicalKey || '');
+        if (key === 'Enable Hires fix') {
+            return uniqStrings([...(FIRE_VALUE_SUGGEST_DEFAULTS['Enable Hires fix'] || [])]);
+        }
+        if (key === 'Sampler') {
+            return uniqStrings([
+                ...getDropdownChoicesByElemId('txt2img_sampling'),
+                ...getDropdownChoicesByElemId('img2img_sampling'),
+                ...(FIRE_VALUE_SUGGEST_DEFAULTS['Sampler'] || []),
+            ]);
+        }
+        if (key === 'Hires upscaler') {
+            return uniqStrings([
+                ...getDropdownChoicesByElemId('txt2img_hr_upscaler'),
+                ...(FIRE_VALUE_SUGGEST_DEFAULTS['Hires upscaler'] || []),
+            ]);
+        }
+        if (key === 'Schedule type') {
+            return uniqStrings([
+                ...getDropdownChoicesByElemId('txt2img_scheduler'),
+                ...getDropdownChoicesByElemId('img2img_scheduler'),
+                ...(FIRE_VALUE_SUGGEST_DEFAULTS['Schedule type'] || []),
+            ]);
+        }
+        return [];
+    }
+
+    function validateValueForKey(canonicalKey, value) {
+        const key = String(canonicalKey || '').trim();
+        const raw = String(value || '').trim();
+        if (!key) return { ok: true };
+        if (!raw) return { ok: false, reason: `empty value for '${key}'` };
+
+        const lower = raw.toLowerCase();
+        const enumChoices = getAllValueChoicesForKey(key);
+        if (enumChoices.length) {
+            const matched = enumChoices.some((x) => x.toLowerCase() === lower);
+            return matched
+                ? { ok: true, normalized: enumChoices.find((x) => x.toLowerCase() === lower) || raw }
+                : { ok: false, reason: `invalid value '${raw}' for '${key}'` };
+        }
+
+        function asNumber() {
+            const n = Number(raw);
+            return Number.isFinite(n) ? n : null;
+        }
+
+        function asInteger() {
+            if (!/^-?\d+$/.test(raw)) return null;
+            const n = Number(raw);
+            return Number.isFinite(n) ? n : null;
+        }
+
+        if (key === 'Steps') {
+            const n = asInteger();
+            return (n !== null && n >= 1) ? { ok: true } : { ok: false, reason: `Steps must be an integer >= 1` };
+        }
+        if (key === 'Hires steps') {
+            const n = asInteger();
+            return (n !== null && n >= 0) ? { ok: true } : { ok: false, reason: `Hires steps must be an integer >= 0` };
+        }
+        if (key === 'Width' || key === 'Height' || key === 'Hires resize-1' || key === 'Hires resize-2') {
+            const n = asInteger();
+            return (n !== null && n >= 0) ? { ok: true } : { ok: false, reason: `${key} must be an integer >= 0` };
+        }
+        if (key === 'CFG scale') {
+            const n = asNumber();
+            return (n !== null && n >= 0) ? { ok: true } : { ok: false, reason: `CFG scale must be a number >= 0` };
+        }
+        if (key === 'Denoising strength') {
+            const n = asNumber();
+            return (n !== null && n >= 0 && n <= 1) ? { ok: true } : { ok: false, reason: `Denoising strength must be between 0 and 1` };
+        }
+        if (key === 'Hires upscale') {
+            const n = asNumber();
+            return (n !== null && n >= 1) ? { ok: true } : { ok: false, reason: `Hires upscale must be a number >= 1` };
+        }
+        if (key === 'Seed') {
+            const n = asInteger();
+            return (n !== null) ? { ok: true } : { ok: false, reason: `Seed must be an integer` };
+        }
+
+        return { ok: true };
+    }
+
+    function currentAssistContext(textarea) {
+        const value = String(textarea.value || '');
+        const caret = textarea.selectionStart || 0;
+        const before = value.slice(0, caret);
+        const lineStart = before.lastIndexOf('\n') + 1;
+        const lineChunk = before.slice(lineStart);
+        const segStartInLine = (() => {
+            let inQuote = false;
+            let depth = 0;
+            let lastComma = -1;
+            for (let i = 0; i < lineChunk.length; i += 1) {
+                const ch = lineChunk[i];
+                if (ch === '"') {
+                    inQuote = !inQuote;
+                    continue;
+                }
+                if (inQuote) continue;
+                if (ch === '[') {
+                    depth += 1;
+                    continue;
+                }
+                if (ch === ']') {
+                    depth = Math.max(0, depth - 1);
+                    continue;
+                }
+                if (ch === ',' && depth === 0) {
+                    lastComma = i;
+                }
+            }
+            return lastComma + 1;
+        })();
+        const segment = lineChunk.slice(segStartInLine);
+        const segAbs = lineStart + segStartInLine;
+
+        const colon = segment.indexOf(':');
+        if (colon < 0) {
+            const leadingSpaces = (segment.match(/^\s*/) || [''])[0];
+            const fragment = segment.slice(leadingSpaces.length);
+            return {
+                mode: 'key',
+                fragment,
+                leadingSpaces,
+                segAbs,
+                caret,
+            };
+        }
+
+        const rawKey = segment.slice(0, colon).trim();
+        const canonicalKey = normalizeKeywordKey(rawKey) || rawKey;
+        const afterColon = segment.slice(colon + 1);
+        const valueLeadingSpaces = (afterColon.match(/^\s*/) || [''])[0];
+        const valueFragment = afterColon.slice(valueLeadingSpaces.length);
+        const valueStartAbs = segAbs + colon + 1 + valueLeadingSpaces.length;
+
+        return {
+            mode: 'value',
+            key: canonicalKey,
+            fragment: valueFragment,
+            valueStartAbs,
+            caret,
+        };
+    }
+
+    function setupFireConfigAssist() {
+        const host = gradioApp().querySelector('#endgal_hires_override_config');
+        if (!host) return;
+
+        const textarea = host.querySelector('textarea');
+        if (!textarea || textarea.dataset.endgalFireAssistReady === '1') return;
+        textarea.dataset.endgalFireAssistReady = '1';
+
+        host.style.position = 'relative';
+
+        const highlight = document.createElement('div');
+        highlight.className = 'endgal-fire-highlight';
+        host.appendChild(highlight);
+
+        const hints = document.createElement('div');
+        hints.className = 'endgal-fire-keyword-hints';
+        host.appendChild(hints);
+
+        let hintIndex = -1;
+        let hintItems = [];
+        let lastHintMode = '';
+
+        const titleLabel = host.querySelector('label > span');
+        let errorBadge = host.querySelector('.endgal-fire-config-error');
+        let jobsBadge = host.querySelector('.endgal-fire-config-jobs');
+        if (!jobsBadge && titleLabel) {
+            jobsBadge = document.createElement('span');
+            jobsBadge.className = 'endgal-fire-config-jobs';
+            titleLabel.insertAdjacentElement('afterend', jobsBadge);
+        }
+        if (!errorBadge && titleLabel) {
+            errorBadge = document.createElement('span');
+            errorBadge.className = 'endgal-fire-config-error';
+            if (jobsBadge) {
+                jobsBadge.insertAdjacentElement('afterend', errorBadge);
+            } else {
+                titleLabel.insertAdjacentElement('afterend', errorBadge);
+            }
+        }
+
+        function loadSavedFireConfig() {
+            try {
+                return localStorage.getItem(FIRE_CONFIG_STORAGE_KEY) || '';
+            } catch (_e) {
+                return '';
+            }
+        }
+
+        function persistFireConfig(raw) {
+            try {
+                localStorage.setItem(FIRE_CONFIG_STORAGE_KEY, String(raw || ''));
+            } catch (_e) {
+                // Ignore storage failures (private mode/quota/security settings).
+            }
+        }
+
+        function applyValidationState() {
+            const result = validateFireOverrideConfig(textarea.value || '');
+            host.classList.toggle('endgal-fire-config-invalid', !result.valid);
+
+            if (jobsBadge) {
+                const expanded = buildExpandedOverrideSets(textarea.value || '');
+                const count = Math.max(1, expanded.count || 1);
+                jobsBadge.textContent = `  (${count} jobs)`;
+                jobsBadge.title = `${count} jobs will be queued`;
+                jobsBadge.style.display = 'inline';
+            }
+
+            if (!errorBadge) return;
+            if (!result.valid) {
+                errorBadge.textContent = `  ${result.errors[0]}`;
+                errorBadge.title = result.errors.join('\n');
+                errorBadge.style.display = 'inline';
+            } else {
+                errorBadge.textContent = '';
+                errorBadge.title = '';
+                errorBadge.style.display = 'none';
+            }
+        }
+
+        function syncHighlightLayout() {
+            const cs = window.getComputedStyle(textarea);
+            highlight.style.top = `${textarea.offsetTop}px`;
+            highlight.style.left = `${textarea.offsetLeft}px`;
+            highlight.style.width = `${textarea.clientWidth}px`;
+            highlight.style.height = `${textarea.clientHeight}px`;
+            highlight.style.paddingTop = cs.paddingTop;
+            highlight.style.paddingRight = cs.paddingRight;
+            highlight.style.paddingBottom = cs.paddingBottom;
+            highlight.style.paddingLeft = cs.paddingLeft;
+            highlight.style.font = cs.font;
+            highlight.style.lineHeight = cs.lineHeight;
+            highlight.style.letterSpacing = cs.letterSpacing;
+            highlight.style.textAlign = cs.textAlign;
+            highlight.style.tabSize = cs.tabSize;
+        }
+
+        function warmupHighlightSync() {
+            [0, 80, 180, 380, 800].forEach((ms) => {
+                setTimeout(() => {
+                    syncHighlightLayout();
+                    syncHighlight();
+                }, ms);
+            });
+
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(() => {
+                    syncHighlightLayout();
+                    syncHighlight();
+                }).catch(() => {});
+            }
+        }
+
+        function hideHints() {
+            hints.style.display = 'none';
+            hints.innerHTML = '';
+            hintItems = [];
+            hintIndex = -1;
+        }
+
+        function updateHintActive() {
+            const rows = hints.querySelectorAll('.endgal-fire-keyword-hint');
+            rows.forEach((row, idx) => {
+                row.classList.toggle('active', idx === hintIndex);
+            });
+        }
+
+        function applyCandidate(candidate) {
+            const ctx = currentAssistContext(textarea);
+            if (!ctx) return;
+
+            const value = String(textarea.value || '');
+            const caret = textarea.selectionStart || 0;
+            let nextValue = value;
+            let newCaret = caret;
+
+            if (ctx.mode === 'key') {
+                const replacement = `${ctx.leadingSpaces}${candidate}: `;
+                nextValue = `${value.slice(0, ctx.segAbs)}${replacement}${value.slice(caret)}`;
+                newCaret = ctx.segAbs + replacement.length;
+            } else if (ctx.mode === 'value') {
+                nextValue = `${value.slice(0, ctx.valueStartAbs)}${candidate}${value.slice(caret)}`;
+                newCaret = ctx.valueStartAbs + candidate.length;
+            }
+
+            textarea.value = nextValue;
+            textarea.selectionStart = newCaret;
+            textarea.selectionEnd = newCaret;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            hideHints();
+        }
+
+        function renderHints() {
+            const ctx = currentAssistContext(textarea);
+            if (!ctx) {
+                hideHints();
+                return;
+            }
+
+            const prevChosen = hintItems[Math.max(0, hintIndex)] || '';
+            const mode = ctx.mode;
+            hintItems = mode === 'value'
+                ? valueCandidatesForKey(ctx.key, ctx.fragment)
+                : keywordCandidates(ctx.fragment);
+
+            if (!hintItems.length) {
+                hideHints();
+                return;
+            }
+
+            hints.innerHTML = hintItems
+                .map((k) => `<button type="button" class="endgal-fire-keyword-hint">${escapeHtml(k)}</button>`)
+                .join('');
+            hints.style.display = 'block';
+
+            if (mode === lastHintMode && prevChosen) {
+                const prevIdx = hintItems.indexOf(prevChosen);
+                hintIndex = prevIdx >= 0 ? prevIdx : 0;
+            } else {
+                hintIndex = 0;
+            }
+            lastHintMode = mode;
+            updateHintActive();
+
+            const buttons = Array.from(hints.querySelectorAll('.endgal-fire-keyword-hint'));
+            buttons.forEach((btn, idx) => {
+                btn.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    applyCandidate(hintItems[idx]);
+                });
+            });
+        }
+
+        function syncHighlight() {
+            highlight.innerHTML = buildKeywordHighlightHtml(textarea.value || '');
+            highlight.scrollTop = textarea.scrollTop;
+            highlight.scrollLeft = textarea.scrollLeft;
+        }
+
+        textarea.addEventListener('input', () => {
+            persistFireConfig(textarea.value || '');
+            syncHighlight();
+            renderHints();
+            applyValidationState();
+        });
+        textarea.addEventListener('click', renderHints);
+        textarea.addEventListener('keyup', (e) => {
+            if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+                return;
+            }
+            renderHints();
+        });
+        textarea.addEventListener('focus', () => {
+            warmupHighlightSync();
+            renderHints();
+        });
+        textarea.addEventListener('scroll', syncHighlight);
+        textarea.addEventListener('blur', () => {
+            setTimeout(hideHints, 120);
+        });
+
+        textarea.addEventListener('keydown', (e) => {
+            if (hints.style.display !== 'block' || !hintItems.length) return;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                hintIndex = (hintIndex + 1) % hintItems.length;
+                updateHintActive();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                hintIndex = (hintIndex - 1 + hintItems.length) % hintItems.length;
+                updateHintActive();
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                const ctx = currentAssistContext(textarea);
+                if (!ctx) return;
+                e.preventDefault();
+                applyCandidate(hintItems[Math.max(0, hintIndex)]);
+            } else if (e.key === 'Escape') {
+                hideHints();
+            }
+        });
+
+        const savedRaw = loadSavedFireConfig();
+        if (!String(textarea.value || '').trim() && String(savedRaw || '').trim()) {
+            textarea.value = savedRaw;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        syncHighlightLayout();
+        syncHighlight();
+        renderHints();
+        applyValidationState();
+        warmupHighlightSync();
+
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(() => {
+                syncHighlightLayout();
+                syncHighlight();
+            });
+            ro.observe(textarea);
+            ro.observe(host);
+        }
+
+        window.addEventListener('resize', () => {
+            syncHighlightLayout();
+            syncHighlight();
+        });
+    }
+
     function setupDropdownInputGuard() {
         const guardedIds = [
             'endgal_page_size',
             'endgal_date_filter',
             'endgal_thumb_size',
             'endgal_card_extras_mode',
-            'endgal_hires_upscaler_preset',
         ];
 
         function patchDropdownInput(host) {
@@ -214,28 +853,6 @@
         });
     }
 
-    function clampNumber(value, fallback, min, max) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return fallback;
-        return Math.min(max, Math.max(min, n));
-    }
-
-    function readGalleryHiresPreset() {
-        const upscalerRaw = getComponentInputValue('endgal_hires_upscaler_preset');
-        const stepsRaw = getComponentInputValue('endgal_hires_steps_preset');
-        const denoiseRaw = getComponentInputValue('endgal_hires_denoise_preset');
-        const scaleRaw = getComponentInputValue('endgal_hires_scale_preset');
-
-        return {
-            upscaler: upscalerRaw || DEFAULT_GALLERY_HIRES_PRESET.upscaler,
-            steps: Math.round(clampNumber(stepsRaw, DEFAULT_GALLERY_HIRES_PRESET.steps, 0, 150)),
-            denoising: clampNumber(denoiseRaw, DEFAULT_GALLERY_HIRES_PRESET.denoising, 0, 1),
-            scale: clampNumber(scaleRaw, DEFAULT_GALLERY_HIRES_PRESET.scale, 1, 4),
-            resizeX: 0,
-            resizeY: 0,
-        };
-    }
-
     function upsertInfotextParam(text, key, value) {
         const prefix = String(text || '').trim();
         const rendered = `${key}: ${value}`;
@@ -263,16 +880,225 @@
         return lines.join('\n');
     }
 
-    function withGalleryHiresPreset(infotext, preset) {
-        const use = preset || DEFAULT_GALLERY_HIRES_PRESET;
+    function splitTopLevelCsv(text) {
+        const s = String(text || '');
+        const out = [];
+        let cur = '';
+        let inQuote = false;
+        let bracketDepth = 0;
+
+        for (let i = 0; i < s.length; i += 1) {
+            const ch = s[i];
+            if (ch === '"') {
+                inQuote = !inQuote;
+                cur += ch;
+                continue;
+            }
+            if (!inQuote) {
+                if (ch === '[') {
+                    bracketDepth += 1;
+                    cur += ch;
+                    continue;
+                }
+                if (ch === ']') {
+                    bracketDepth = Math.max(0, bracketDepth - 1);
+                    cur += ch;
+                    continue;
+                }
+                if (ch === ',' && bracketDepth === 0) {
+                    out.push(cur.trim());
+                    cur = '';
+                    continue;
+                }
+            }
+            cur += ch;
+        }
+
+        out.push(cur.trim());
+        return out.filter(Boolean);
+    }
+
+    function parseValueVariants(rawValue) {
+        const value = String(rawValue || '').trim();
+        if (!value) return { values: [], error: 'empty value' };
+
+        if (value.startsWith('[') || value.endsWith(']')) {
+            if (!(value.startsWith('[') && value.endsWith(']'))) {
+                return { values: [], error: `malformed list value '${value}'` };
+            }
+            const inner = value.slice(1, -1).trim();
+            if (!inner) return { values: [], error: 'list value cannot be empty' };
+            const items = splitTopLevelCsv(inner).map((x) => x.trim()).filter(Boolean);
+            if (!items.length) return { values: [], error: 'list value cannot be empty' };
+            return { values: items, error: '' };
+        }
+
+        return { values: [value], error: '' };
+    }
+
+    function applyInfotextOverrides(infotext, overrides) {
         let updated = String(infotext || '').trim();
-        updated = upsertInfotextParam(updated, 'Denoising strength', String(use.denoising));
-        updated = upsertInfotextParam(updated, 'Hires upscale', String(use.scale));
-        updated = upsertInfotextParam(updated, 'Hires upscaler', use.upscaler);
-        updated = upsertInfotextParam(updated, 'Hires steps', String(use.steps));
-        updated = upsertInfotextParam(updated, 'Hires resize-1', String(use.resizeX));
-        updated = upsertInfotextParam(updated, 'Hires resize-2', String(use.resizeY));
+        (overrides || []).forEach((entry) => {
+            if (!entry || !entry.key) return;
+            updated = upsertInfotextParam(updated, entry.key, entry.value);
+        });
         return updated;
+    }
+
+    function parseOverrideLine(line) {
+        const text = String(line || '').trim();
+        if (!text) return [];
+
+        const parts = splitTopLevelCsv(text);
+
+        const entries = [];
+        parts.forEach((part) => {
+            const idx = part.indexOf(':');
+            if (idx <= 0) return;
+            const key = part.slice(0, idx).trim();
+            const value = part.slice(idx + 1).trim();
+            if (!key) return;
+            const normalizedKey = normalizeKeywordKey(key) || key;
+            const parsed = parseValueVariants(value);
+            if (!parsed.values.length) return;
+            entries.push({ key: normalizedKey, values: parsed.values, value: parsed.values[0] });
+        });
+        return entries;
+    }
+
+    function parseOverrideLineWithErrors(line, lineNo) {
+        const text = String(line || '').trim();
+        if (!text) return { entries: [], errors: [] };
+
+        const parts = splitTopLevelCsv(text);
+
+        const entries = [];
+        const errors = [];
+
+        parts.forEach((part) => {
+            const idx = part.indexOf(':');
+            if (idx <= 0) {
+                errors.push(`Line ${lineNo}: '${part}' is not in key:value format`);
+                return;
+            }
+
+            const key = part.slice(0, idx).trim();
+            const value = part.slice(idx + 1).trim();
+            if (!key) {
+                errors.push(`Line ${lineNo}: empty key in '${part}'`);
+                return;
+            }
+            if (!value) {
+                errors.push(`Line ${lineNo}: empty value for key '${key}'`);
+                return;
+            }
+
+            const normalizedKey = normalizeKeywordKey(key) || key;
+            const parsedValues = parseValueVariants(value);
+            if (parsedValues.error) {
+                errors.push(`Line ${lineNo}: ${parsedValues.error}`);
+                return;
+            }
+
+            for (let i = 0; i < parsedValues.values.length; i += 1) {
+                const one = parsedValues.values[i];
+                const valueCheck = validateValueForKey(normalizedKey, one);
+                if (!valueCheck.ok) {
+                    errors.push(`Line ${lineNo}: ${valueCheck.reason}`);
+                    return;
+                }
+            }
+            entries.push({ key: normalizedKey, values: parsedValues.values, value: parsedValues.values[0] });
+        });
+
+        if (!entries.length && !errors.length) {
+            errors.push(`Line ${lineNo}: no valid key:value entries`);
+        }
+
+        return { entries, errors };
+    }
+
+    function validateFireOverrideConfig(raw) {
+        const text = String(raw || '').trim();
+        if (!text) {
+            return { valid: true, errors: [] };
+        }
+
+        const lines = String(raw)
+            .split(/\r?\n/)
+            .map((line) => line.trim());
+
+        const errors = [];
+        lines.forEach((line, idx) => {
+            if (!line) return;
+            const parsed = parseOverrideLineWithErrors(line, idx + 1);
+            if (parsed.errors.length) {
+                errors.push(...parsed.errors);
+            }
+        });
+
+        return { valid: errors.length === 0, errors };
+    }
+
+    function readGalleryFireOverrideSets() {
+        const raw = getComponentInputValue('endgal_hires_override_config');
+        if (!raw) return [[]];
+
+        const lines = String(raw)
+            .split(/\r?\n/)
+            .map((x) => x.trim())
+            .filter(Boolean);
+
+        if (!lines.length) return [[]];
+
+        const sets = lines
+            .map(parseOverrideLine)
+            .filter((entries) => entries.length > 0);
+
+        return sets.length ? sets : [[]];
+    }
+
+    function expandOverrideEntrySet(entries) {
+        const src = Array.isArray(entries) ? entries : [];
+        if (!src.length) return [[]];
+
+        let combos = [[]];
+        src.forEach((entry) => {
+            const values = Array.isArray(entry.values) && entry.values.length
+                ? entry.values
+                : [entry.value];
+            const next = [];
+            combos.forEach((base) => {
+                values.forEach((v) => {
+                    next.push([...base, { key: entry.key, value: v }]);
+                });
+            });
+            combos = next;
+        });
+
+        return combos.length ? combos : [[]];
+    }
+
+    function buildExpandedOverrideSets(rawText) {
+        const raw = typeof rawText === 'string' ? rawText : getComponentInputValue('endgal_hires_override_config');
+        if (!raw) return { sets: [[]], count: 1 };
+
+        const lines = String(raw)
+            .split(/\r?\n/)
+            .map((x) => x.trim())
+            .filter(Boolean);
+
+        if (!lines.length) return { sets: [[]], count: 1 };
+
+        const perLine = lines
+            .map(parseOverrideLine)
+            .filter((entries) => entries.length > 0)
+            .map(expandOverrideEntrySet);
+
+        if (!perLine.length) return { sets: [[]], count: 1 };
+
+        const flatSets = perLine.flat();
+        return { sets: flatSets, count: Math.max(1, flatSets.length) };
     }
 
     async function injectPathToExtrasUpload(absPath) {
@@ -437,7 +1263,7 @@
                 triggerPreviewAction('dislike');
             } else if (e.key === 'h' || e.key === 'H') {
                 e.preventDefault();
-                queueCurrentPreviewHires();
+                queueCurrentPreviewFire();
             }
         });
 
@@ -535,11 +1361,11 @@
             .join('');
     }
 
-    function queueCurrentPreviewHires() {
+    function queueCurrentPreviewFire() {
         const item = previewList[previewIndex] || null;
         if (!item || !item.infotextB64) return;
 
-        window.endorsedGallery.queueTxt2ImgHires(item.infotextB64, { keepGalleryTab: true });
+        window.endorsedGallery.queueTxt2ImgFire(item.infotextB64, { keepGalleryTab: true });
     }
 
     function triggerPreviewAction(kind) {
@@ -696,33 +1522,42 @@
             }
         },
 
-        queueTxt2ImgHires: function (infotextB64, options) {
+        queueTxt2ImgFire: async function (infotextB64, options) {
             const opts = options || {};
-            const preset = readGalleryHiresPreset();
-            const infotext = withGalleryHiresPreset(b64Decode(infotextB64 || ''), preset);
-            if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
-                console.warn('[endorsedGallery] infotext_apply textbox not found');
+            const baseInfotext = b64Decode(infotextB64 || '');
+            const overrideSets = buildExpandedOverrideSets().sets;
+            const queueBtn = gradioApp().querySelector('#txt2img_queue_btn');
+
+            if (!queueBtn) {
+                console.warn('[endorsedGallery] txt2img queue button not found');
                 return;
             }
 
-            clickGradioBtn('endorsed_gallery_apply_txt2img_btn', 0);
-
-            // Paste binding auto-switches to txt2img; keep user on Gallery for this quick action.
-            if (opts.keepGalleryTab !== false) {
-                setTimeout(() => {
-                    switchToTabByName('gallery');
-                }, 20);
-            }
-
-            setTimeout(() => {
-                const queueBtn = gradioApp().querySelector('#txt2img_queue_btn');
-                if (!queueBtn) {
-                    console.warn('[endorsedGallery] txt2img queue button not found');
+            for (let i = 0; i < overrideSets.length; i += 1) {
+                const infotext = applyInfotextOverrides(baseInfotext, overrideSets[i]);
+                if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
+                    console.warn('[endorsedGallery] infotext_apply textbox not found');
                     return;
                 }
 
+                clickGradioBtn('endorsed_gallery_apply_txt2img_btn', 0);
+
+                // Paste binding auto-switches to txt2img; keep user on Gallery for this quick action.
+                if (opts.keepGalleryTab !== false) {
+                    setTimeout(() => {
+                        switchToTabByName('gallery');
+                    }, 20);
+                }
+
+                await sleep(320);
                 queueBtn.click();
-            }, 450);
+                await sleep(260);
+            }
+        },
+
+        // Backward compatibility for existing callers.
+        queueTxt2ImgHires: function (infotextB64, options) {
+            return window.endorsedGallery.queueTxt2ImgFire(infotextB64, options);
         },
 
         /**
@@ -845,6 +1680,7 @@
         tabBtn.addEventListener('click', () => {
             setTimeout(() => {
                 clearSearchTextbox();
+                setupFireConfigAssist();
                 const html = gradioApp().querySelector('#endgal_html');
                 if (!html) return;
                 if (html.innerHTML.includes('Click ⟳ Refresh')) {
@@ -860,11 +1696,15 @@
         document.addEventListener('DOMContentLoaded', () => {
             bootstrapClearSearchTextbox();
             setupDropdownInputGuard();
+            setTimeout(setupFireConfigAssist, 1200);
+            setTimeout(setupFireConfigAssist, 2500);
             setTimeout(onTabSwitch, 1500);
         });
     } else {
         bootstrapClearSearchTextbox();
         setupDropdownInputGuard();
+        setTimeout(setupFireConfigAssist, 1200);
+        setTimeout(setupFireConfigAssist, 2500);
         setTimeout(onTabSwitch, 1500);
     }
 

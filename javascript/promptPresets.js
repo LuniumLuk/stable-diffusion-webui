@@ -93,20 +93,23 @@
     };
     
     function save_prompt_preset_impl(tab, promptText) {
-        const selectedStart = gradioApp().querySelector(`#${tab}_prompt textarea`)?.selectionStart || 0;
-        const selectedEnd = gradioApp().querySelector(`#${tab}_prompt textarea`)?.selectionEnd || 0;
-        const selectedText = gradioApp().querySelector(`#${tab}_prompt textarea`)?.value.substring(selectedStart, selectedEnd) || '';
-        
-        if (!selectedText.trim()) {
-            alert('Please select some text first to save as a preset');
+        const textarea = gradioApp().querySelector(`#${tab}_prompt textarea`);
+        const selectedStart = textarea?.selectionStart || 0;
+        const selectedEnd = textarea?.selectionEnd || 0;
+        const selectedText = textarea?.value.substring(selectedStart, selectedEnd) || '';
+        const fallbackText = String(promptText || textarea?.value || '').trim();
+        const contentToSave = selectedText.trim() ? selectedText.trim() : fallbackText;
+
+        if (!contentToSave) {
+            alert('Prompt is empty. Type or select text first.');
             return;
         }
-        
-        const presetName = prompt('Preset name:', selectedText.substring(0, 30));
+
+        const presetName = prompt('Preset name:', contentToSave.substring(0, 30));
         if (!presetName) return;
-        
+
         const presets = window.getPresets();
-        presets[presetName] = selectedText;
+        presets[presetName] = contentToSave;
         window.savePresets(presets);
         updateDropdown(tab);
         
@@ -153,10 +156,42 @@
         
         const presets = window.getPresets();
         const content = presets[name];
-        
-        if (content) {
-            const textarea = gradioApp().querySelector(`#${tab}_prompt textarea`);
-            insertAtCursor(textarea, content);
+
+        if (!content) return;
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(content).then(() => {
+                console.log('[Presets] Copied to clipboard:', name);
+            }).catch(() => {
+                const temp = document.createElement('textarea');
+                temp.value = content;
+                temp.style.position = 'fixed';
+                temp.style.opacity = '0';
+                document.body.appendChild(temp);
+                temp.focus();
+                temp.select();
+                try {
+                    document.execCommand('copy');
+                    console.log('[Presets] Copied to clipboard (fallback):', name);
+                } finally {
+                    document.body.removeChild(temp);
+                }
+            });
+            return;
+        }
+
+        const temp = document.createElement('textarea');
+        temp.value = content;
+        temp.style.position = 'fixed';
+        temp.style.opacity = '0';
+        document.body.appendChild(temp);
+        temp.focus();
+        temp.select();
+        try {
+            document.execCommand('copy');
+            console.log('[Presets] Copied to clipboard (legacy):', name);
+        } finally {
+            document.body.removeChild(temp);
         }
     }
 

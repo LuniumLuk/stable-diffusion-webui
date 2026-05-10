@@ -222,20 +222,163 @@ def ensure_manual_generation_allowed(id_task: str | None):
         raise gr.Error("A queued job is currently running. Please wait for it to finish before using Generate.")
 
 
+def _parse_batch_steps(batch_steps_str):
+    """Parse comma-separated step values. Returns list of integers or empty list if invalid."""
+    if not batch_steps_str or not isinstance(batch_steps_str, str):
+        return []
+    
+    batch_steps_str = batch_steps_str.strip()
+    if not batch_steps_str:
+        return []
+    
+    steps = []
+    try:
+        # Split by comma and parse each part
+        for s in batch_steps_str.split(','):
+            s = s.strip()
+            if s:
+                val = int(s)
+                # Validate step range
+                if 1 <= val <= 150:
+                    steps.append(val)
+    except (ValueError, AttributeError) as e:
+        # If parsing fails, return empty list
+        return []
+    
+    return steps
+
+
+def _find_batch_and_steps_indices(job_args):
+    """Dynamically find batch_steps and steps indices in job_args.
+    Returns (batch_steps_index, steps_index) or (None, None) if not found.
+    
+    Strategy: Look for a string followed by a number that looks like steps (1-150 range).
+    The batch_steps textbox and steps slider should be consecutive in custom_inputs.
+    We search from near the end since custom_inputs are appended at the end.
+    """
+    # Search from the last 50 items (to avoid false positives with hr_prompt etc)
+    search_start = max(0, len(job_args) - 50)
+    
+    for i in range(search_start, len(job_args) - 1):
+        arg = job_args[i]
+        next_arg = job_args[i + 1]
+        
+        # batch_steps should be a string (could be empty or contain commas)
+        if not isinstance(arg, str):
+            continue
+        
+        # Next should be a step value (int or convertible)
+        try:
+            step_value = int(next_arg) if next_arg is not None else None
+            # Steps typically range from 1-150
+            if step_value is not None and 1 <= step_value <= 150:
+                # Verify arg looks like batch_steps (empty, all digits with commas/spaces, or numbers)
+                arg_stripped = arg.strip()
+                if arg_stripped == "" or all(c.isdigit() or c in ", " for c in arg_stripped):
+                    # Additional check: make sure we're not picking up some other random string
+                    # by verifying it's not too long and doesn't contain weird characters
+                    if len(arg_stripped) <= 50:
+                        return i, i + 1
+        except (ValueError, TypeError):
+            pass
+    
+    return None, None
+
+
+def _add_batch_jobs(job_type, job_args, batch_steps_list, prompt):
+    """Add multiple jobs with different step values.
+    
+    Args:
+        job_type: "txt2img" or "img2img"
+        job_args: tuple of all arguments from the UI
+        batch_steps_list: list of step values to queue
+        prompt: prompt text for labeling
+        
+    Returns:
+        list of QueueJob objects created
+    """
+    batch_idx, steps_idx = _find_batch_and_steps_indices(job_args)
+    
+    # If we can't find the indices or no batch steps provided, add single job
+    if steps_idx is None or not batch_steps_list or len(batch_steps_list) < 1:
+        job = queue_manager.add_job(job_type, job_args, label=str(prompt)[:80])
+        return [job]
+    
+    jobs = []
+    for step_value in batch_steps_list:
+        try:
+            # Create a copy of job_args with the new step value
+            modified_args = list(job_args)
+            modified_args[steps_idx] = step_value
+            
+            # Also clear batch_steps field after processing to prevent re-queuing
+            if batch_idx is not None and batch_idx < len(modified_args):
+                modified_args[batch_idx] = ""
+            
+            # Create label with prompt and step value
+            label = f"{str(prompt)[:50]}...steps={step_value}" if prompt else f"steps={step_value}"
+            label = label[:80]  # Truncate to max label length
+            
+            job = queue_manager.add_job(job_type, tuple(modified_args), label=label)
+            jobs.append(job)
+        except Exception as e:
+            # If something goes wrong with one job, still try the others
+            continue
+    
+    # If all jobs failed, fall back to single job with original args
+    if not jobs:
+        job = queue_manager.add_job(job_type, job_args, label=str(prompt)[:80])
+        jobs.append(job)
+    
+    return jobs
+
+
 def add_to_queue_txt2img(*args):
     job_args = args[1:]
     prompt = job_args[0] if job_args else ""
-    job = queue_manager.add_job("txt2img", job_args, label=str(prompt)[:80])
-    queued = sum(1 for j in queue_manager.get_snapshot() if j.status == "queued")
-    return f'<span class="jq-notice">txt2img queued: <code>{job.id}</code> ({queued} waiting)</span>'
+    
+    # Find batch_steps position dynamically
+    batch_idx, steps_idx = _find_batch_and_steps_indices(job_args)
+    batch_steps_str = ""
+    if batch_idx is not None and batch_idx < len(job_args):
+        batch_steps_str = job_args[batch_idx] if isinstance(job_args[batch_idx], str) else ""
+    
+    batch_steps_list = _parse_batch_steps(batch_steps_str)
+    
+    if batch_steps_list and len(batch_steps_list) > 1:
+        # Multiple batch steps: add multiple jobs
+        jobs = _add_batch_jobs("txt2img", job_args, batch_steps_list, prompt)
+        queued = sum(1 for j in queue_manager.get_snapshot() if j.status == "queued")
+        return f'<span class="jq-notice">txt2img queued: {len(jobs)} jobs with steps {batch_steps_str} ({queued} total waiting)</span>'
+    else:
+        # Single or no batch steps: add one job as normal
+        job = queue_manager.add_job("txt2img", job_args, label=str(prompt)[:80])
+        queued = sum(1 for j in queue_manager.get_snapshot() if j.status == "queued")
+        return f'<span class="jq-notice">txt2img queued: <code>{job.id}</code> ({queued} waiting)</span>'
 
 
 def add_to_queue_img2img(*args):
     job_args = args[1:]
     prompt = job_args[1] if len(job_args) > 1 else ""
-    job = queue_manager.add_job("img2img", job_args, label=str(prompt)[:80])
-    queued = sum(1 for j in queue_manager.get_snapshot() if j.status == "queued")
-    return f'<span class="jq-notice">img2img queued: <code>{job.id}</code> ({queued} waiting)</span>'
+    
+    # Find batch_steps position dynamically
+    batch_idx, steps_idx = _find_batch_and_steps_indices(job_args)
+    batch_steps_str = ""
+    if batch_idx is not None and batch_idx < len(job_args):
+        batch_steps_str = job_args[batch_idx] if isinstance(job_args[batch_idx], str) else ""
+    
+    batch_steps_list = _parse_batch_steps(batch_steps_str)
+    
+    if batch_steps_list and len(batch_steps_list) > 1:
+        # Multiple batch steps: add multiple jobs
+        jobs = _add_batch_jobs("img2img", job_args, batch_steps_list, prompt)
+        queued = sum(1 for j in queue_manager.get_snapshot() if j.status == "queued")
+        return f'<span class="jq-notice">img2img queued: {len(jobs)} jobs with steps {batch_steps_str} ({queued} total waiting)</span>'
+    else:
+        # Single or no batch steps: add one job as normal
+        job = queue_manager.add_job("img2img", job_args, label=str(prompt)[:80])
+        queued = sum(1 for j in queue_manager.get_snapshot() if j.status == "queued")
+        return f'<span class="jq-notice">img2img queued: <code>{job.id}</code> ({queued} waiting)</span>'
 
 
 def _fmt_time(ts):

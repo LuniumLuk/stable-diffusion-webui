@@ -255,6 +255,7 @@ def create_output_panel(tabname, outdir, toprow=None):
 
             with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons"):
                 open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
+                compare_button = ToolButton('🔀', elem_id=f'{tabname}_compare', tooltip="Compare two images with a sliding overlay.")
 
                 if tabname != "extras":
                     save = ToolButton('💾', elem_id=f'save_{tabname}', tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
@@ -278,6 +279,14 @@ def create_output_panel(tabname, outdir, toprow=None):
                     open_folder_button,  # placeholder for index
                 ],
                 outputs=[],
+            )
+
+            compare_button.click(
+                fn=lambda: None,
+                _js=f"(x) => [window.launchImageCompare(x, selected_gallery_index()), null]",
+                inputs=[res.gallery],
+                outputs=[],
+                show_progress=False,
             )
 
             if tabname != "extras":
