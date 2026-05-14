@@ -111,6 +111,31 @@
     padding: 6px;
 }
 
+.endgal-prompt-keyword-hints {
+    left: 0;
+    right: 0;
+    top: calc(100% + 2px);
+    z-index: 180;
+}
+
+#txt2img_prompt,
+#txt2img_neg_prompt,
+#txt2img_negative_prompt,
+#img2img_prompt,
+#img2img_neg_prompt,
+#img2img_negative_prompt {
+    overflow: visible;
+}
+
+#txt2img_prompt.endgal-prompt-hints-open,
+#txt2img_neg_prompt.endgal-prompt-hints-open,
+#txt2img_negative_prompt.endgal-prompt-hints-open,
+#img2img_prompt.endgal-prompt-hints-open,
+#img2img_neg_prompt.endgal-prompt-hints-open,
+#img2img_negative_prompt.endgal-prompt-hints-open {
+    z-index: 179;
+}
+
 .endgal-fire-keyword-hint {
     display: block;
     width: 100%;

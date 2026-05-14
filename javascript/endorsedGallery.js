@@ -29,6 +29,8 @@
         'Hires steps',
         'Hires resize-1',
         'Hires resize-2',
+        'Batch count',
+        'Batch size',
     ];
 
     const FIRE_KEY_ALIASES = {
@@ -65,6 +67,12 @@
         'hr upscale': 'Hires upscale',
         'hr upscaler': 'Hires upscaler',
         'hr steps': 'Hires steps',
+        'batch count': 'Batch count',
+        'batch_count': 'Batch count',
+        'bc': 'Batch count',
+        'batch size': 'Batch size',
+        'batch_size': 'Batch size',
+        'bs': 'Batch size',
     };
 
     const FIRE_VALUE_SUGGEST_DEFAULTS = {
@@ -117,6 +125,10 @@
     let dragStartY = 0;
     let dragOriginX = 0;
     let dragOriginY = 0;
+    let suppressTxt2imgSwitch = false;
+    let txt2imgSwitchGuardReady = false;
+    let fireDbSuggestRawCache = '';
+    let fireDbSuggestParsedCache = {};
 
     // ---------------------------------------------------------------------------
     // Helpers
@@ -254,6 +266,20 @@
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    function ensureTxt2ImgSwitchGuard() {
+        if (txt2imgSwitchGuardReady) return;
+        const original = window.switch_to_txt2img;
+        if (typeof original !== 'function') return;
+
+        window.switch_to_txt2img = function (...args) {
+            if (suppressTxt2imgSwitch) {
+                return;
+            }
+            return original.apply(this, args);
+        };
+        txt2imgSwitchGuardReady = true;
+    }
+
     function escapeHtml(text) {
         return String(text || '')
             .replace(/&/g, '&amp;')
@@ -274,7 +300,7 @@
 
     function buildKeywordHighlightHtml(text) {
         const src = String(text || '');
-        const re = /(^|[,\n]\s*)([^:,\n]+)(\s*:\s*)([^,\n]*(?:\[[^\]\n]*\][^,\n]*)*)/g;
+        const re = /(^|[,\n]\s*)([^:,\n]+)(\s*:\s*)((?:\[[^\]\n]*\]|"(?:\\.|[^"\\])*"|[^,\n])*)/g;
         let out = '';
         let last = 0;
         let m;
@@ -401,6 +427,9 @@
 
     function getAllValueChoicesForKey(canonicalKey) {
         const key = String(canonicalKey || '');
+        if (key === 'Prompt' || key === 'Negative prompt') {
+            return getDbValueSuggestionsForKey(key);
+        }
         if (key === 'Enable Hires fix') {
             return uniqStrings([...(FIRE_VALUE_SUGGEST_DEFAULTS['Enable Hires fix'] || [])]);
         }
@@ -425,6 +454,199 @@
             ]);
         }
         return [];
+    }
+
+    function parseDbSuggestionPayload(raw) {
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === 'object') ? parsed : {};
+        } catch (_e) {
+            return {};
+        }
+    }
+
+    function getDbValueSuggestionsForKey(canonicalKey) {
+        const raw = getComponentInputValue('endgal_fire_value_suggestions_json');
+        if (raw !== fireDbSuggestRawCache) {
+            fireDbSuggestRawCache = raw;
+            fireDbSuggestParsedCache = parseDbSuggestionPayload(raw);
+        }
+
+        const values = fireDbSuggestParsedCache && fireDbSuggestParsedCache[canonicalKey];
+        if (!Array.isArray(values)) return [];
+        return uniqStrings(values).slice(0, 300);
+    }
+
+    function currentPromptTokenContext(textarea) {
+        const value = String(textarea.value || '');
+        const caret = textarea.selectionStart || 0;
+        const before = value.slice(0, caret);
+
+        let segStart = 0;
+        for (let i = before.length - 1; i >= 0; i -= 1) {
+            const ch = before[i];
+            if (ch === ',' || ch === '\n' || ch === '\r') {
+                segStart = i + 1;
+                break;
+            }
+        }
+
+        const segment = before.slice(segStart);
+        const leadingSpaces = (segment.match(/^\s*/) || [''])[0];
+        const fragment = segment.slice(leadingSpaces.length);
+        return {
+            fragment,
+            tokenStartAbs: segStart + leadingSpaces.length,
+            caret,
+        };
+    }
+
+    function promptValueCandidates(canonicalKey, fragment) {
+        const needle = String(fragment || '').trim().toLowerCase();
+        const pool = getDbValueSuggestionsForKey(canonicalKey);
+        if (!pool.length) return [];
+        // Prompt editor assist should only show after the user types token chars.
+        if (!needle) return [];
+
+        const starts = pool.filter((x) => x.toLowerCase().startsWith(needle));
+        const contains = pool.filter((x) => !x.toLowerCase().startsWith(needle) && x.toLowerCase().includes(needle));
+        return [...starts, ...contains].slice(0, 12);
+    }
+
+    function setupPromptKeywordAssistForHost(host, canonicalKey) {
+        if (!host) return;
+        const textarea = host.querySelector('textarea');
+        if (!textarea || textarea.dataset.endgalPromptAssistReady === '1') return;
+        textarea.dataset.endgalPromptAssistReady = '1';
+
+        host.style.position = 'relative';
+
+        const hints = document.createElement('div');
+        hints.className = 'endgal-fire-keyword-hints endgal-prompt-keyword-hints';
+        host.appendChild(hints);
+
+        let hintItems = [];
+        let hintIndex = -1;
+
+        function setPromptHintsOpen(open) {
+            host.classList.toggle('endgal-prompt-hints-open', Boolean(open));
+        }
+
+        function hideHints() {
+            hints.style.display = 'none';
+            hints.innerHTML = '';
+            hintItems = [];
+            hintIndex = -1;
+            setPromptHintsOpen(false);
+        }
+
+        function updateHintActive() {
+            const rows = hints.querySelectorAll('.endgal-fire-keyword-hint');
+            rows.forEach((row, idx) => {
+                row.classList.toggle('active', idx === hintIndex);
+            });
+        }
+
+        function applyCandidate(candidate) {
+            const ctx = currentPromptTokenContext(textarea);
+            if (!ctx) return;
+
+            const value = String(textarea.value || '');
+            const replacement = candidate;
+            const nextValue = `${value.slice(0, ctx.tokenStartAbs)}${replacement}${value.slice(ctx.caret)}`;
+            const newCaret = ctx.tokenStartAbs + replacement.length;
+
+            textarea.value = nextValue;
+            textarea.selectionStart = newCaret;
+            textarea.selectionEnd = newCaret;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            hideHints();
+        }
+
+        function renderHints() {
+            const ctx = currentPromptTokenContext(textarea);
+            const items = promptValueCandidates(canonicalKey, ctx.fragment);
+            if (!items.length) {
+                hideHints();
+                return;
+            }
+
+            const prev = hintItems[Math.max(0, hintIndex)] || '';
+            hintItems = items;
+            hints.innerHTML = hintItems
+                .map((k) => `<button type="button" class="endgal-fire-keyword-hint">${escapeHtml(k)}</button>`)
+                .join('');
+            hints.style.display = 'block';
+            setPromptHintsOpen(true);
+
+            const prevIdx = prev ? hintItems.indexOf(prev) : -1;
+            hintIndex = prevIdx >= 0 ? prevIdx : 0;
+            updateHintActive();
+
+            const buttons = Array.from(hints.querySelectorAll('.endgal-fire-keyword-hint'));
+            buttons.forEach((btn, idx) => {
+                btn.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    applyCandidate(hintItems[idx]);
+                });
+            });
+        }
+
+        textarea.addEventListener('input', renderHints);
+        textarea.addEventListener('click', renderHints);
+        textarea.addEventListener('focus', renderHints);
+        textarea.addEventListener('blur', () => {
+            setTimeout(hideHints, 120);
+        });
+
+        textarea.addEventListener('keyup', (e) => {
+            if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) return;
+            renderHints();
+        });
+
+        textarea.addEventListener('keydown', (e) => {
+            if (hints.style.display !== 'block' || !hintItems.length) return;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                hintIndex = (hintIndex + 1) % hintItems.length;
+                updateHintActive();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                hintIndex = (hintIndex - 1 + hintItems.length) % hintItems.length;
+                updateHintActive();
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                applyCandidate(hintItems[Math.max(0, hintIndex)]);
+            } else if (e.key === 'Escape') {
+                hideHints();
+            }
+        });
+
+        renderHints();
+    }
+
+    function setupPromptKeywordAssist() {
+        const app = gradioApp();
+        if (!app) return;
+
+        const hosts = [
+            { ids: ['txt2img_prompt'], key: 'Prompt' },
+            { ids: ['txt2img_neg_prompt', 'txt2img_negative_prompt'], key: 'Negative prompt' },
+            { ids: ['img2img_prompt'], key: 'Prompt' },
+            { ids: ['img2img_neg_prompt', 'img2img_negative_prompt'], key: 'Negative prompt' },
+        ];
+
+        hosts.forEach((entry) => {
+            let host = null;
+            for (let i = 0; i < entry.ids.length; i += 1) {
+                host = app.querySelector(`#${entry.ids[i]}`);
+                if (host) break;
+            }
+            if (host) {
+                setupPromptKeywordAssistForHost(host, entry.key);
+            }
+        });
     }
 
     function validateValueForKey(canonicalKey, value) {
@@ -480,6 +702,14 @@
         if (key === 'Seed') {
             const n = asInteger();
             return (n !== null) ? { ok: true } : { ok: false, reason: `Seed must be an integer` };
+        }
+        if (key === 'Batch count') {
+            const n = asInteger();
+            return (n !== null && n >= 1) ? { ok: true } : { ok: false, reason: `Batch count must be an integer >= 1` };
+        }
+        if (key === 'Batch size') {
+            const n = asInteger();
+            return (n !== null && n >= 1) ? { ok: true } : { ok: false, reason: `Batch size must be an integer >= 1` };
         }
 
         return { ok: true };
@@ -767,6 +997,7 @@
         textarea.addEventListener('scroll', syncHighlight);
         textarea.addEventListener('blur', () => {
             setTimeout(hideHints, 120);
+            clickGradioBtn('endgal_fire_config_save_btn', 0);
         });
 
         textarea.addEventListener('keydown', (e) => {
@@ -1538,25 +1769,30 @@
                 return;
             }
 
-            for (let i = 0; i < overrideSets.length; i += 1) {
-                const infotext = applyInfotextOverrides(baseInfotext, overrideSets[i]);
-                if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
-                    console.warn('[endorsedGallery] infotext_apply textbox not found');
-                    return;
+            suppressTxt2imgSwitch = true;
+            try {
+                for (let i = 0; i < overrideSets.length; i += 1) {
+                    const infotext = applyInfotextOverrides(baseInfotext, overrideSets[i]);
+                    if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
+                        console.warn('[endorsedGallery] infotext_apply textbox not found');
+                        return;
+                    }
+
+                    clickGradioBtn('endorsed_gallery_apply_txt2img_btn', 0);
+
+                    // Optional fallback to keep Gallery visible if any external code still switches tabs.
+                    if (opts.keepGalleryTab !== false) {
+                        setTimeout(() => {
+                            switchToTabByName('gallery');
+                        }, 20);
+                    }
+
+                    await sleep(320);
+                    queueBtn.click();
+                    await sleep(260);
                 }
-
-                clickGradioBtn('endorsed_gallery_apply_txt2img_btn', 0);
-
-                // Paste binding auto-switches to txt2img; keep user on Gallery for this quick action.
-                if (opts.keepGalleryTab !== false) {
-                    setTimeout(() => {
-                        switchToTabByName('gallery');
-                    }, 20);
-                }
-
-                await sleep(320);
-                queueBtn.click();
-                await sleep(260);
+            } finally {
+                suppressTxt2imgSwitch = false;
             }
         },
 
@@ -1686,6 +1922,7 @@
             setTimeout(() => {
                 clearSearchTextbox();
                 setupFireConfigAssist();
+                setupPromptKeywordAssist();
                 const html = gradioApp().querySelector('#endgal_html');
                 if (!html) return;
                 if (html.innerHTML.includes('Click ⟳ Refresh')) {
@@ -1699,15 +1936,21 @@
     // Wait for Gradio to finish rendering before attaching listeners
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
+            ensureTxt2ImgSwitchGuard();
             bootstrapClearSearchTextbox();
             setupDropdownInputGuard();
+            setTimeout(setupPromptKeywordAssist, 900);
+            setTimeout(setupPromptKeywordAssist, 1800);
             setTimeout(setupFireConfigAssist, 1200);
             setTimeout(setupFireConfigAssist, 2500);
             setTimeout(onTabSwitch, 1500);
         });
     } else {
+        ensureTxt2ImgSwitchGuard();
         bootstrapClearSearchTextbox();
         setupDropdownInputGuard();
+        setTimeout(setupPromptKeywordAssist, 900);
+        setTimeout(setupPromptKeywordAssist, 1800);
         setTimeout(setupFireConfigAssist, 1200);
         setTimeout(setupFireConfigAssist, 2500);
         setTimeout(onTabSwitch, 1500);

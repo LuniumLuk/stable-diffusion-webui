@@ -1,6 +1,7 @@
 """SQLite persistence for generated images, endorsements, and dislikes."""
 
 import os
+import re
 import shutil
 import sqlite3
 from datetime import datetime
@@ -473,6 +474,97 @@ def _build_keyword_where(query: str, fields: list[str]) -> tuple[str, list]:
         params.extend([f"%{tok.lower()}%"] * len(fields))
 
     return " WHERE " + " AND ".join(clauses), params
+
+
+def _normalize_prompt_keyword(token: str) -> str:
+    text = str(token or "").strip()
+    if not text:
+        return ""
+
+    # Trim common prompt wrappers and trailing numeric weights.
+    text = text.strip('"\'')
+    text = re.sub(r"\s*:-?\d+(?:\.\d+)?$", "", text)
+
+    while text.startswith("(") and text.endswith(")") and len(text) > 2:
+        text = text[1:-1].strip()
+
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    if len(text) > 120:
+        return ""
+    return text
+
+
+def _split_prompt_keywords(text: str) -> list[str]:
+    src = str(text or "")
+    if not src:
+        return []
+
+    parts = re.split(r"[,\n\r]+", src)
+    out = []
+    for part in parts:
+        normalized = _normalize_prompt_keyword(part)
+        if normalized:
+            out.append(normalized)
+    return out
+
+
+def _ranked_terms_from_counter(counter: dict[str, int], limit: int) -> list[str]:
+    if not counter:
+        return []
+
+    rows = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+    out = []
+    seen = set()
+    for term, _count in rows:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+        if len(out) >= max(1, int(limit or 1)):
+            break
+    return out
+
+
+def get_fire_prompt_suggestions(limit_per_key: int = 160) -> dict:
+    """Return queue-fire value suggestions derived from endorsed prompt/caption data."""
+    prompt_counter: dict[str, int] = {}
+    negative_counter: dict[str, int] = {}
+
+    with _get_conn() as conn:
+        prompt_rows = conn.execute(
+            "SELECT prompt, negative_prompt FROM endorsements ORDER BY endorsed_at DESC LIMIT 5000"
+        ).fetchall()
+        for row in prompt_rows:
+            for token in _split_prompt_keywords(row["prompt"]):
+                prompt_counter[token] = prompt_counter.get(token, 0) + 1
+            for token in _split_prompt_keywords(row["negative_prompt"]):
+                negative_counter[token] = negative_counter.get(token, 0) + 1
+
+        # Captions are stored as DeepDanbooru tags for endorsed items.
+        tag_rows = conn.execute(
+            """
+            SELECT tag, COUNT(*) AS n
+            FROM image_tags
+            WHERE label='endorse'
+            GROUP BY tag
+            ORDER BY n DESC
+            LIMIT ?
+            """,
+            (max(200, int(limit_per_key or 160) * 4),),
+        ).fetchall()
+        for row in tag_rows:
+            token = _normalize_prompt_keyword(str(row["tag"] or "").replace("_", " "))
+            if not token:
+                continue
+            prompt_counter[token] = prompt_counter.get(token, 0) + int(row["n"] or 1)
+
+    return {
+        "Prompt": _ranked_terms_from_counter(prompt_counter, int(limit_per_key or 160)),
+        "Negative prompt": _ranked_terms_from_counter(negative_counter, int(limit_per_key or 160)),
+    }
 
 
 def _append_time_filter(where_sql: str, params: list, column: str, since_ts: float | None,

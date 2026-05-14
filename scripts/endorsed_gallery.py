@@ -40,6 +40,155 @@ THUMB_SIZE_PRESETS = {
 _thumb_cache: dict = {}
 _THUMB_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_thumbs")
 _PREVIEW_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_previews")
+_FIRE_CONFIG_FILE = os.path.join(_ROOT_DIR, "config_states", "endgal_fire_config.txt")
+_FIRE_CONFIG_DEFAULT = "steps: 14"
+
+
+def _normalize_fire_keyword(token: str) -> str:
+    text = str(token or "").strip()
+    if not text:
+        return ""
+
+    text = text.strip('"\'')
+    text = re.sub(r"\s*:-?\d+(?:\.\d+)?$", "", text)
+    while text.startswith("(") and text.endswith(")") and len(text) > 2:
+        text = text[1:-1].strip()
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text or len(text) > 120:
+        return ""
+    return text
+
+
+def _split_fire_keywords(text: str) -> list[str]:
+    src = str(text or "")
+    if not src:
+        return []
+    return [
+        t for t in (_normalize_fire_keyword(p) for p in re.split(r"[,\n\r]+", src))
+        if t
+    ]
+
+
+def _rank_fire_terms(counter: dict[str, int], limit: int = 180) -> list[str]:
+    rows = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+    out = []
+    seen = set()
+    for term, _n in rows:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+        if len(out) >= max(1, int(limit or 1)):
+            break
+    return out
+
+
+def _fallback_fire_prompt_suggestions(limit_per_key: int = 180) -> dict:
+    prompt_counter: dict[str, int] = {}
+    neg_counter: dict[str, int] = {}
+
+    with endorsement_db._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT prompt, negative_prompt FROM endorsements ORDER BY endorsed_at DESC LIMIT 5000"
+        ).fetchall()
+        for row in rows:
+            for token in _split_fire_keywords(row["prompt"]):
+                prompt_counter[token] = prompt_counter.get(token, 0) + 1
+            for token in _split_fire_keywords(row["negative_prompt"]):
+                neg_counter[token] = neg_counter.get(token, 0) + 1
+
+        tag_rows = conn.execute(
+            """
+            SELECT tag, COUNT(*) AS n
+            FROM image_tags
+            WHERE label='endorse'
+            GROUP BY tag
+            ORDER BY n DESC
+            LIMIT ?
+            """,
+            (max(200, int(limit_per_key or 180) * 4),),
+        ).fetchall()
+        for row in tag_rows:
+            token = _normalize_fire_keyword(str(row["tag"] or "").replace("_", " "))
+            if not token:
+                continue
+            prompt_counter[token] = prompt_counter.get(token, 0) + int(row["n"] or 1)
+
+    return {
+        "Prompt": _rank_fire_terms(prompt_counter, int(limit_per_key or 180)),
+        "Negative prompt": _rank_fire_terms(neg_counter, int(limit_per_key or 180)),
+    }
+
+
+def _get_fire_value_suggestions_json() -> str:
+    data = None
+    try:
+        provider = getattr(endorsement_db, "get_fire_prompt_suggestions", None)
+        if callable(provider):
+            data = provider(limit_per_key=180)
+    except Exception:
+        data = None
+
+    if not isinstance(data, dict):
+        try:
+            data = _fallback_fire_prompt_suggestions(limit_per_key=180)
+        except Exception:
+            data = {"Prompt": [], "Negative prompt": []}
+
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _rebuild_fire_suggestion_database() -> tuple[str, str]:
+    endorsed_items = endorsement_db.get_all_endorsed_items("", None)
+    tagged = 0
+    skipped = 0
+
+    try:
+        for _done, _total, tagged_now, skipped_now in gallery_tagger.iter_tag_untagged_filtered(endorsed_items, []):
+            tagged = int(tagged_now or 0)
+            skipped = int(skipped_now or 0)
+    except Exception:
+        # Keep rebuild resilient even if caption backfill fails for some records.
+        pass
+
+    payload = _get_fire_value_suggestions_json()
+    try:
+        parsed = json.loads(payload or "{}")
+    except Exception:
+        parsed = {}
+
+    prompt_count = len(parsed.get("Prompt") or [])
+    neg_count = len(parsed.get("Negative prompt") or [])
+    msg = (
+        f"Rebuilt fire suggestion DB from {len(endorsed_items)} endorsed record(s). "
+        f"Caption scan: {tagged} tagged, {skipped} skipped. "
+        f"Suggestions: Prompt {prompt_count}, Negative prompt {neg_count}."
+    )
+    status_html = f'<div class="endgal-sync-result">{_html.escape(msg)}</div>'
+    return status_html, payload
+
+
+def _load_fire_override_config() -> str:
+    try:
+        if os.path.exists(_FIRE_CONFIG_FILE):
+            with open(_FIRE_CONFIG_FILE, "r", encoding="utf-8") as f:
+                raw = f.read()
+            return raw if raw.strip() else _FIRE_CONFIG_DEFAULT
+    except Exception:
+        pass
+    return _FIRE_CONFIG_DEFAULT
+
+
+def _save_fire_override_config(raw: str) -> str:
+    try:
+        os.makedirs(os.path.dirname(_FIRE_CONFIG_FILE), exist_ok=True)
+        with open(_FIRE_CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write(str(raw or ""))
+        return "ok"
+    except Exception:
+        return "error"
 
 
 def _ensure_thumb_cache_dir():
@@ -1122,12 +1271,18 @@ def on_ui_tabs():
 
         with gr.Row(elem_id="endgal_hires_preset_row"):
             hires_override_config = gr.Textbox(
-                value="steps: 14",
+                value=_load_fire_override_config(),
                 lines=2,
                 label="Queue Fire Config (one override set per line, comma-separated key:value)",
                 placeholder="steps: 14\nsteps: 18, cfg scale: 6.5\nhires steps: 10, denoising strength: 0.4",
                 elem_id="endgal_hires_override_config",
                 scale=8,
+            )
+            rebuild_fire_suggest_btn = gr.Button(
+                "Rebuild Suggest DB",
+                elem_id="endgal_rebuild_fire_suggest_btn",
+                size="sm",
+                scale=1,
             )
 
         with gr.Row(elem_id="endgal_pager_row"):
@@ -1155,6 +1310,13 @@ def on_ui_tabs():
         apply_txt2img_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_apply_txt2img_btn")
         apply_img2img_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_apply_img2img_btn")
         apply_extras_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_apply_extras_btn")
+        save_fire_cfg_btn = gr.Button("", visible=False, elem_id="endgal_fire_config_save_btn")
+        fire_cfg_save_state = gr.Textbox(value="", visible=False, elem_id="endgal_fire_config_save_state")
+        fire_value_suggestions_json = gr.Textbox(
+            value=_get_fire_value_suggestions_json(),
+            visible=False,
+            elem_id="endgal_fire_value_suggestions_json",
+        )
 
         for btn, tabname in [(apply_txt2img_btn, "txt2img"), (apply_img2img_btn, "img2img")]:
             infotext_utils.register_paste_params_button(
@@ -1178,6 +1340,19 @@ def on_ui_tabs():
             inputs=[image_path_for_apply],
             outputs=[image_for_apply],
             show_progress=False,
+        )
+
+        save_fire_cfg_btn.click(
+            fn=_save_fire_override_config,
+            inputs=[hires_override_config],
+            outputs=[fire_cfg_save_state],
+            show_progress=False,
+        )
+
+        rebuild_fire_suggest_btn.click(
+            fn=_rebuild_fire_suggestion_database,
+            inputs=[],
+            outputs=[sync_status, fire_value_suggestions_json],
         )
 
         def do_sync(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
