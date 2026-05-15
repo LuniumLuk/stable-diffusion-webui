@@ -112,9 +112,11 @@
     let previewImage = null;
     let previewList = [];
     let previewIndex = -1;
-    let previewLikeBtn = null;
-    let previewDislikeBtn = null;
-    let previewDownloadBtn = null;
+    let previewPromptEl = null;
+    let previewNegativeEl = null;
+    let previewSettingsEl = null;
+    let previewCaptionEl = null;
+    let previewActionsEl = null;
     let actionUndoStack = [];
     let actionRedoStack = [];
     let zoomScale = 1;
@@ -129,6 +131,12 @@
     let txt2imgSwitchGuardReady = false;
     let fireDbSuggestRawCache = '';
     let fireDbSuggestParsedCache = {};
+    let previewBodyOverflowBefore = '';
+
+    function updatePreviewViewportHeightVar() {
+        const vh = Math.max(1, window.innerHeight || 1) * 0.01;
+        document.documentElement.style.setProperty('--endgal-preview-vh', `${vh}px`);
+    }
 
     // ---------------------------------------------------------------------------
     // Helpers
@@ -1363,17 +1371,33 @@
     function ensurePreviewOverlay() {
         if (previewOverlay) return previewOverlay;
 
+        updatePreviewViewportHeightVar();
+
         previewOverlay = document.createElement('div');
         previewOverlay.id = 'endgal_preview_overlay';
         previewOverlay.innerHTML = [
-            '<button id="endgal_preview_prev" class="endgal-preview-nav" aria-label="Previous image">‹</button>',
-            '<img id="endgal_preview_image" alt="preview" />',
-            '<button id="endgal_preview_next" class="endgal-preview-nav" aria-label="Next image">›</button>',
-            '<div id="endgal_preview_tags"></div>',
-            '<div id="endgal_preview_actions">',
-            '  <button id="endgal_preview_like" class="endgal-preview-action" title="toggle endorse">☆</button>',
-            '  <button id="endgal_preview_dislike" class="endgal-preview-action" title="toggle dislike">⬇</button>',
-            '  <a id="endgal_preview_download" class="endgal-preview-action endgal-preview-download" title="Download original image" download>&#8681; Download</a>',
+            '<div id="endgal_preview_panel">',
+            '  <div id="endgal_preview_left" class="endgal-preview-panel-col">',
+            '    <h3>Prompt</h3>',
+            '    <pre id="endgal_preview_prompt"></pre>',
+            '    <h3>Negative prompt</h3>',
+            '    <pre id="endgal_preview_negative"></pre>',
+            '    <h3>Settings</h3>',
+            '    <pre id="endgal_preview_settings"></pre>',
+            '    <h3>Captions</h3>',
+            '    <div id="endgal_preview_tags"></div>',
+            '  </div>',
+            '  <div id="endgal_preview_center">',
+            '    <button id="endgal_preview_prev" class="endgal-preview-nav" aria-label="Previous image">‹</button>',
+            '    <div id="endgal_preview_image_stage">',
+            '      <img id="endgal_preview_image" alt="preview" />',
+            '    </div>',
+            '    <button id="endgal_preview_next" class="endgal-preview-nav" aria-label="Next image">›</button>',
+            '  </div>',
+            '  <div id="endgal_preview_right" class="endgal-preview-panel-col">',
+            '    <h3>Quick actions</h3>',
+            '    <div id="endgal_preview_actions"></div>',
+            '  </div>',
             '</div>'
         ].join('');
 
@@ -1387,9 +1411,15 @@
         const prevBtn = previewOverlay.querySelector('#endgal_preview_prev');
         const nextBtn = previewOverlay.querySelector('#endgal_preview_next');
         previewImage = previewOverlay.querySelector('#endgal_preview_image');
-        previewLikeBtn = previewOverlay.querySelector('#endgal_preview_like');
-        previewDislikeBtn = previewOverlay.querySelector('#endgal_preview_dislike');
-        previewDownloadBtn = previewOverlay.querySelector('#endgal_preview_download');
+        previewPromptEl = previewOverlay.querySelector('#endgal_preview_prompt');
+        previewNegativeEl = previewOverlay.querySelector('#endgal_preview_negative');
+        previewSettingsEl = previewOverlay.querySelector('#endgal_preview_settings');
+        previewCaptionEl = previewOverlay.querySelector('#endgal_preview_tags');
+        previewActionsEl = previewOverlay.querySelector('#endgal_preview_actions');
+
+        const panel = previewOverlay.querySelector('#endgal_preview_panel');
+
+        window.addEventListener('resize', updatePreviewViewportHeightVar, { passive: true });
 
         if (prevBtn) {
             prevBtn.addEventListener('click', (e) => {
@@ -1404,17 +1434,28 @@
             });
         }
 
-        if (previewLikeBtn) {
-            previewLikeBtn.addEventListener('click', (e) => {
+        // Keep wheel scrolling contained to the preview panel.
+        if (panel) {
+            panel.addEventListener('wheel', (e) => {
                 e.stopPropagation();
-                triggerPreviewAction('like');
+            }, { passive: true });
+        }
+
+        if (previewPromptEl) {
+            previewPromptEl.title = 'Click to copy prompt';
+            previewPromptEl.classList.add('endgal-preview-copyable');
+            previewPromptEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyPreviewText(previewPromptEl);
             });
         }
 
-        if (previewDislikeBtn) {
-            previewDislikeBtn.addEventListener('click', (e) => {
+        if (previewNegativeEl) {
+            previewNegativeEl.title = 'Click to copy negative prompt';
+            previewNegativeEl.classList.add('endgal-preview-copyable');
+            previewNegativeEl.addEventListener('click', (e) => {
                 e.stopPropagation();
-                triggerPreviewAction('dislike');
+                copyPreviewText(previewNegativeEl);
             });
         }
 
@@ -1507,8 +1548,112 @@
         return previewOverlay;
     }
 
+    function copyPreviewText(el) {
+        if (!el) return;
+        const text = String(el.textContent || '').trim();
+        if (!text || text === '(empty)') return;
+
+        navigator.clipboard.writeText(text).then(() => {
+            el.classList.add('endgal-preview-copied');
+            setTimeout(() => el.classList.remove('endgal-preview-copied'), 900);
+        }).catch((err) => {
+            console.warn('[endorsedGallery] clipboard write failed:', err);
+        });
+    }
+
+    function parsePreviewInfotext(rawText) {
+        const full = String(rawText || '').trim();
+        const result = {
+            prompt: '',
+            negative: '',
+            settings: '',
+        };
+
+        if (!full) {
+            return result;
+        }
+
+        const negMatch = /negative\s+prompt\s*:/i.exec(full);
+        const idxNeg = negMatch ? negMatch.index : -1;
+        const idxSteps = full.lastIndexOf('Steps:');
+
+        if (idxNeg >= 0) {
+            result.prompt = full.slice(0, idxNeg).trim().replace(/,+\s*$/, '');
+            if (idxSteps > idxNeg) {
+                result.negative = full.slice(idxNeg + negMatch[0].length, idxSteps).trim().replace(/,+\s*$/, '');
+                result.settings = full.slice(idxSteps).trim().replace(/^,+\s*/, '');
+            } else {
+                result.negative = full.slice(idxNeg + negMatch[0].length).trim().replace(/,+\s*$/, '');
+            }
+        } else if (idxSteps > 0) {
+            result.prompt = full.slice(0, idxSteps).trim().replace(/,+\s*$/, '');
+            result.settings = full.slice(idxSteps).trim().replace(/^,+\s*/, '');
+        } else {
+            result.prompt = full;
+        }
+
+        if (!result.settings) {
+            result.settings = full;
+        }
+
+        return result;
+    }
+
+    function decodeFilePathFromFileUrl(fileUrl) {
+        const src = String(fileUrl || '');
+        if (!src) return '';
+
+        try {
+            const stripped = src.replace(/^\/file=/, '');
+            return decodeURIComponent(stripped);
+        } catch (_e) {
+            return src;
+        }
+    }
+
+    function collectCardQuickButtons(imgEl) {
+        const card = imgEl && imgEl.closest ? imgEl.closest('.endgal-card') : null;
+        if (!card) return [];
+
+        return Array.from(card.querySelectorAll('.endgal-thumb-corner-actions button, .endgal-thumb-actions button'));
+    }
+
+    function getCurrentPreviewPath() {
+        const item = previewList[previewIndex] || null;
+        if (!item) return '';
+        const p = decodeFilePathFromFileUrl(item.origUrl || item.src || '');
+        return String(p || '').trim();
+    }
+
+    function openCurrentPreviewInExplorer() {
+        const path = getCurrentPreviewPath();
+        if (!path) return;
+        const payload = b64Encode(JSON.stringify({ type: 'open_explorer', path }));
+        executeAction(payload, { recordHistory: false, clearRedo: false });
+    }
+
+    function downloadCurrentPreview() {
+        const item = previewList[previewIndex] || null;
+        const origUrl = item && item.origUrl ? item.origUrl : (item ? item.src : '');
+        if (!origUrl) return;
+
+        const decoded = decodeURIComponent(String(origUrl).replace(/^\/file=/, ''));
+        const fileName = decoded.split('/').pop().split('\\').pop() || 'image';
+
+        const a = document.createElement('a');
+        a.href = origUrl;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+
     function hidePreview() {
         if (previewOverlay) previewOverlay.classList.remove('show');
+        if (document && document.body) {
+            document.body.style.overflow = previewBodyOverflowBefore || '';
+        }
         isDragging = false;
         if (previewImage) previewImage.classList.remove('dragging');
     }
@@ -1544,6 +1689,7 @@
         const imgs = Array.from(gradioApp().querySelectorAll('#endgal_html .endgal-thumb img'));
         previewList = imgs
             .map(el => ({
+                element: el,
                 src: el.dataset.preview || el.dataset.orig || el.getAttribute('src'),
                 origUrl: el.dataset.orig || '',
                 infotextB64: el.dataset.infotext || '',
@@ -1551,6 +1697,7 @@
                 dislikeAction: el.dataset.dislikeAction || '',
                 endorseLabel: el.dataset.endorseLabel || '☆',
                 dislikeLabel: el.dataset.dislikeLabel || '⬇',
+                quickButtons: collectCardQuickButtons(el),
                 tags: (() => {
                     try { return JSON.parse(atob(el.dataset.tags || '')); }
                     catch (e) { return []; }
@@ -1561,40 +1708,132 @@
 
     function refreshPreviewActionButtons() {
         const item = previewList[previewIndex] || null;
-        if (previewLikeBtn) {
-            previewLikeBtn.textContent = item ? (item.endorseLabel || '☆') : '☆';
-            previewLikeBtn.disabled = !(item && item.endorseAction);
-        }
-        if (previewDislikeBtn) {
-            previewDislikeBtn.textContent = item ? (item.dislikeLabel || '⬇') : '⬇';
-            previewDislikeBtn.disabled = !(item && item.dislikeAction);
-        }
-        if (previewDownloadBtn) {
-            const origUrl = item && item.origUrl ? item.origUrl : (item ? item.src : '');
-            if (origUrl) {
-                previewDownloadBtn.href = origUrl;
-                // Extract filename from /file=path/to/file.png
-                const decoded = decodeURIComponent(origUrl.replace(/^\/file=/, ''));
-                previewDownloadBtn.download = decoded.split('/').pop().split('\\').pop() || 'image';
-                previewDownloadBtn.style.display = '';
+        const currentPath = getCurrentPreviewPath();
+        const hasDownload = Boolean(item && (item.origUrl || item.src));
+
+        if (previewActionsEl) {
+            previewActionsEl.innerHTML = '';
+            if (!item || !item.quickButtons || !item.quickButtons.length) {
+                const empty = document.createElement('div');
+                empty.className = 'endgal-preview-actions-empty';
+                empty.textContent = 'No actions available.';
+                previewActionsEl.appendChild(empty);
             } else {
-                previewDownloadBtn.style.display = 'none';
+                item.quickButtons.forEach((sourceBtn) => {
+                    const btn = document.createElement('button');
+                    btn.className = 'endgal-preview-action';
+
+                    if (sourceBtn.classList.contains('endgal-act-endorse')) {
+                        btn.classList.add('endgal-preview-action-endorse');
+                    } else if (sourceBtn.classList.contains('endgal-act-archive')) {
+                        btn.classList.add('endgal-preview-action-archive');
+                    } else if (sourceBtn.classList.contains('endgal-act-dislike')) {
+                        btn.classList.add('endgal-preview-action-dislike');
+                    }
+
+                    if (sourceBtn.classList.contains('active')) {
+                        btn.classList.add('endgal-preview-action-active');
+                    }
+
+                    const icon = (sourceBtn.dataset && sourceBtn.dataset.icon)
+                        ? String(sourceBtn.dataset.icon).trim()
+                        : String(sourceBtn.textContent || '').trim();
+                    const hint = (sourceBtn.dataset && sourceBtn.dataset.hint)
+                        ? String(sourceBtn.dataset.hint).trim()
+                        : String(sourceBtn.title || '').trim();
+
+                    btn.innerHTML = `<span class="endgal-preview-action-icon">${escapeHtml(icon || '•')}</span><span class="endgal-preview-action-label">${escapeHtml(hint || 'Action')}</span>`;
+                    btn.title = hint || sourceBtn.title || 'action';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (sourceBtn && sourceBtn.isConnected) {
+                            sourceBtn.click();
+                            return;
+                        }
+
+                        // Fallback when underlying card buttons are stale after re-render.
+                        if (hint.toLowerCase().includes('endorse')) {
+                            triggerPreviewAction('like');
+                        } else if (hint.toLowerCase().includes('dislike')) {
+                            triggerPreviewAction('dislike');
+                        } else if (hint.toLowerCase().includes('txt2img') && item.infotextB64) {
+                            window.endorsedGallery.sendTo(item.infotextB64, 'txt2img');
+                        } else if (hint.toLowerCase().includes('img2img') && item.infotextB64) {
+                            const p = decodeFilePathFromFileUrl(item.origUrl);
+                            window.endorsedGallery.sendTo(item.infotextB64, 'img2img', b64Encode(p));
+                        } else if (hint.toLowerCase().includes('fire')) {
+                            queueCurrentPreviewFire();
+                        } else if (hint.toLowerCase().includes('extras')) {
+                            const p = decodeFilePathFromFileUrl(item.origUrl);
+                            if (p) window.endorsedGallery.sendToExtras(b64Encode(p));
+                        }
+                    });
+                    previewActionsEl.appendChild(btn);
+                });
             }
+
+            const explorerBtn = document.createElement('button');
+            explorerBtn.className = 'endgal-preview-action';
+            explorerBtn.title = 'View in Explorer';
+            explorerBtn.innerHTML = '<span class="endgal-preview-action-icon">📁</span><span class="endgal-preview-action-label">View in Explorer</span>';
+            explorerBtn.disabled = !currentPath;
+            explorerBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openCurrentPreviewInExplorer();
+            });
+            previewActionsEl.appendChild(explorerBtn);
+
+            const downloadBtn = document.createElement('button');
+            downloadBtn.className = 'endgal-preview-action';
+            downloadBtn.title = 'Download original image';
+            downloadBtn.innerHTML = '<span class="endgal-preview-action-icon">⇩</span><span class="endgal-preview-action-label">Download</span>';
+            downloadBtn.disabled = !hasDownload;
+            downloadBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                downloadCurrentPreview();
+            });
+            previewActionsEl.appendChild(downloadBtn);
+
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'endgal-preview-action endgal-preview-action-close';
+            closeBtn.title = 'Close preview';
+            closeBtn.innerHTML = '<span class="endgal-preview-action-icon">✕</span><span class="endgal-preview-action-label">Close</span>';
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                hidePreview();
+            });
+            previewActionsEl.appendChild(closeBtn);
         }
     }
 
-    function refreshPreviewTags() {
-        const tagsEl = previewOverlay && previewOverlay.querySelector('#endgal_preview_tags');
-        if (!tagsEl) return;
+    function refreshPreviewMetadata() {
         const item = previewList[previewIndex] || null;
+        const parsed = parsePreviewInfotext(item && item.infotextB64 ? b64Decode(item.infotextB64) : '');
+
+        if (previewPromptEl) {
+            previewPromptEl.textContent = parsed.prompt || '(empty)';
+        }
+        if (previewNegativeEl) {
+            previewNegativeEl.textContent = parsed.negative || '(empty)';
+        }
+        if (previewSettingsEl) {
+            previewSettingsEl.textContent = parsed.settings || '(empty)';
+        }
+
+        if (!previewCaptionEl) return;
         const tags = (item && item.tags) || [];
+        previewCaptionEl.innerHTML = '';
         if (!tags.length) {
-            tagsEl.innerHTML = '<span class="endgal-preview-tags-empty">No caption</span>';
+            previewCaptionEl.innerHTML = '<span class="endgal-preview-tags-empty">No caption</span>';
             return;
         }
-        tagsEl.innerHTML = tags
-            .map(t => `<span class="endgal-tag-pill endgal-tag-pill-preview">${t.replace(/_/g, ' ')}</span>`)
-            .join('');
+
+        tags.forEach((t) => {
+            const pill = document.createElement('span');
+            pill.className = 'endgal-tag-pill endgal-tag-pill-preview';
+            pill.textContent = String(t || '').replace(/_/g, ' ');
+            previewCaptionEl.appendChild(pill);
+        });
     }
 
     function queueCurrentPreviewFire() {
@@ -1634,7 +1873,7 @@
         previewIndex = nextIndex;
         previewImage.src = previewList[previewIndex].src;
         refreshPreviewActionButtons();
-        refreshPreviewTags();
+        refreshPreviewMetadata();
         resetTransform();
     }
 
@@ -1860,10 +2099,13 @@
                 previewList.push({
                     src,
                     infotextB64: '',
+                    origUrl: src,
                     endorseAction: '',
                     dislikeAction: '',
                     endorseLabel: '☆',
                     dislikeLabel: '⬇',
+                    quickButtons: [],
+                    tags: [],
                 });
                 previewIndex = previewList.length - 1;
             }
@@ -1871,8 +2113,13 @@
             if (!previewImage) return;
             previewImage.src = previewList[previewIndex].src;
             refreshPreviewActionButtons();
-            refreshPreviewTags();
+            refreshPreviewMetadata();
             resetTransform();
+            updatePreviewViewportHeightVar();
+            if (document && document.body) {
+                previewBodyOverflowBefore = document.body.style.overflow || '';
+                document.body.style.overflow = 'hidden';
+            }
             overlay.classList.add('show');
         },
     };

@@ -9,6 +9,8 @@ import io
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 import urllib.parse
 
@@ -612,6 +614,28 @@ def _apply_removebg(path: str) -> tuple[bool, str]:
     return True, f"Removebg saved: {_html.escape(fullfn)}"
 
 
+def _open_in_explorer(path: str) -> tuple[bool, str]:
+    target = os.path.abspath(str(path or "").strip())
+    if not target:
+        return False, "Open in Explorer failed: empty path."
+    if not os.path.exists(target):
+        return False, "Open in Explorer failed: file not found."
+
+    try:
+        if os.name == "nt":
+            # Prefer selecting the file directly in Windows Explorer.
+            subprocess.Popen(["explorer", "/select,", target])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", target])
+        else:
+            directory = target if os.path.isdir(target) else os.path.dirname(target)
+            subprocess.Popen(["xdg-open", directory])
+    except Exception as exc:
+        return False, f"Open in Explorer failed: {exc}."
+
+    return True, f"Opened in Explorer: {_html.escape(target)}"
+
+
 def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False, card_extras_mode: str = "Expanded") -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
@@ -1186,6 +1210,12 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         status_message = f'<div class="endgal-sync-result">Archived {count} unrated image(s).</div>'
     elif t == "removebg":
         ok, status_message = _apply_removebg(data.get("path", ""))
+        if not ok:
+            status_message = f'<div class="endgal-sync-result">{_html.escape(status_message)}</div>'
+        else:
+            status_message = f'<div class="endgal-sync-result">{status_message}</div>'
+    elif t == "open_explorer":
+        ok, status_message = _open_in_explorer(data.get("path", ""))
         if not ok:
             status_message = f'<div class="endgal-sync-result">{_html.escape(status_message)}</div>'
         else:
