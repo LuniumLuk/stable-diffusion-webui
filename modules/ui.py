@@ -1,4 +1,5 @@
 import datetime
+import importlib
 import mimetypes
 import os
 import sys
@@ -261,6 +262,13 @@ def create_ui():
 
     job_queue.register_callbacks()
     job_queue.queue_manager.start()
+
+    try:
+        endorsed_gallery = importlib.import_module("scripts.endorsed_gallery")
+        if hasattr(endorsed_gallery, "register_callbacks"):
+            endorsed_gallery.register_callbacks()
+    except Exception:
+        errors.report("Failed to register Gallery callbacks", exc_info=True)
 
     reload_javascript()
 

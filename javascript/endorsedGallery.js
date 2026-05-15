@@ -1706,6 +1706,19 @@
             });
         },
 
+        copyTextB64: function (textB64, elem) {
+            const text = b64Decode(textB64 || '');
+            navigator.clipboard.writeText(text).then(() => {
+                const target = elem || null;
+                if (target && target.classList) {
+                    target.classList.add('endgal-copied');
+                    setTimeout(() => target.classList.remove('endgal-copied'), 900);
+                }
+            }).catch(err => {
+                console.warn('[endorsedGallery] clipboard write failed:', err);
+            });
+        },
+
         /**
          * Fill the generation tab (txt2img or img2img) with the card's params.
          * target: 'txt2img' | 'img2img'

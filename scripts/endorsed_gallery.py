@@ -376,28 +376,36 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
         else 'disabled title="No composer config available for this image"'
     )
     composer_btn_class = "endgal-btn-send2img endgal-btn-composer" + ("" if has_config else " endgal-btn-disabled")
+    composer_btn_title = "Send to Composer and restore full state" if has_config else "No composer config available for this image"
+
+    date_overlay = f'<div class="endgal-date endgal-date-overlay">{_html.escape(date)}</div>' if date else ""
+
+    thumb_action_stack = (
+        '<div class="endgal-thumb-actions">'
+        f'<button class="{composer_btn_class} endgal-act-compose" '
+        f'data-icon="🧩" '
+        f'data-hint="Composer" '
+        f'title="{_html.escape(composer_btn_title)}" '
+        f'{composer_btn_attrs}>🧩</button>'
+        f'<button class="endgal-btn-send2img endgal-act-i2i" data-icon="🖼" data-hint="Send to img2img" '
+        f'title="send to img2img" '
+        f'onclick="endorsedGallery.sendTo(\'\', \'img2img\', \'{path_b64}\')">🖼</button>'
+        f'<button class="endgal-btn-send2img endgal-act-extras" data-icon="✨" data-hint="Send to extras" '
+        f'title="send to extras" '
+        f'onclick="endorsedGallery.sendToExtras(\'{path_b64}\')">✨</button>'
+        '</div>'
+    )
 
     details_open = _extras_details_open_attr(card_extras_mode)
 
     return f"""
 <div class="endgal-card endgal-composed-card">
-  <div class="endgal-thumb">{thumb_html}</div>
+  <div class="endgal-thumb">{thumb_html}{date_overlay}{thumb_action_stack}</div>
     <details class="endgal-card-extra"{details_open}>
-        <summary class="endgal-card-extra-summary">Details &amp; Quick Actions</summary>
+                <summary class="endgal-card-extra-summary">Details</summary>
         <div class="endgal-body">
             <div class="endgal-prompt">{_html.escape(fname)}{config_badge}</div>
             <div class="endgal-date">{_html.escape(date)}</div>
-        </div>
-        <div class="endgal-actions">
-            <button class="{composer_btn_class}"
-                title="{'Send to Composer and restore full state' if has_config else 'No composer config available for this image'}"
-                {composer_btn_attrs}>&#8594; Composer</button>
-            <button class="endgal-btn-send2img"
-                title="send to img2img"
-                onclick="endorsedGallery.sendTo('', 'img2img', '{path_b64}')">img2img</button>
-            <button class="endgal-btn-send2img"
-                title="send to extras"
-                onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
         </div>
     </details>
 </div>
@@ -704,6 +712,52 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
 
     details_open = _extras_details_open_attr(card_extras_mode)
 
+    def _split_infotext_sections(info_text: str, prompt_fallback: str, negative_fallback: str):
+        prompt_text = (prompt_fallback or "").strip()
+        negative_text = (negative_fallback or "").strip()
+        settings_text = ""
+
+        full = str(info_text or "").strip()
+        if full:
+            neg_match = re.search(r"(?i)\bNegative\s+prompt\s*:\s*", full)
+            steps_match = re.search(r"(?i)(?:^|[\n,]\s*)(Steps\s*:)", full)
+
+            steps_start = steps_match.start(1) if steps_match else -1
+
+            if neg_match:
+                prompt_chunk = full[:neg_match.start()].strip().rstrip(",")
+                if prompt_chunk:
+                    prompt_text = prompt_chunk
+
+                neg_start = neg_match.end()
+                neg_end = steps_start if steps_start >= 0 and steps_start > neg_start else len(full)
+                negative_chunk = full[neg_start:neg_end].strip().rstrip(",")
+                if negative_chunk:
+                    negative_text = negative_chunk
+
+                if steps_start >= 0:
+                    settings_text = full[steps_start:].lstrip(", ").strip()
+            else:
+                if steps_start >= 0:
+                    prompt_chunk = full[:steps_start].strip().rstrip(",")
+                    if prompt_chunk:
+                        prompt_text = prompt_chunk
+                    settings_text = full[steps_start:].lstrip(", ").strip()
+                else:
+                    prompt_text = full
+
+        if not settings_text:
+            settings_text = str(info_text or "").strip()
+
+        if not prompt_text:
+            prompt_text = "(empty)"
+        if not negative_text:
+            negative_text = "(empty)"
+        if not settings_text:
+            settings_text = "(empty)"
+
+        return prompt_text, negative_text, settings_text
+
     steps = str(record.get("steps", ""))
     cfg_scale = str(record.get("cfg_scale", ""))
     seed_short = seed[:3] + "..." + seed[-3:] if len(seed) > 8 else seed
@@ -742,30 +796,56 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         + "".join(hires_stage_capsules)
     )
 
+    prompt_full, negative_full, settings_full = _split_infotext_sections(infotext, prompt, record.get("negative_prompt", ""))
+    prompt_b64 = _b64(prompt_full)
+    negative_b64 = _b64(negative_full)
+    settings_b64 = _b64(settings_full)
+
+    info_overlay = (
+        f'<div class="endgal-thumb-meta-overlay">'
+        f'  <div class="endgal-capsules endgal-capsules-overlay">{settings_capsules}</div>'
+        f'  <div class="endgal-date endgal-date-overlay">{_html.escape(date)}</div>'
+        f'</div>'
+    )
+
+    corner_action_stack = (
+        '<div class="endgal-thumb-corner-actions">'
+        f'<button class="{endorse_class} endgal-act-endorse" data-hint="Toggle endorse" title="toggle endorse" onclick="endorsedGallery.action(\'{endorse_action_b64}\')">{endorse_label}</button>'
+        f'<button class="{archive_class} endgal-act-archive" data-hint="{_html.escape(archive_title)}" title="{archive_title}" onclick="endorsedGallery.action(\'{archive_action}\')">{archive_label}</button>'
+        f'<button class="{dislike_class} endgal-act-dislike" data-hint="Toggle dislike" title="toggle dislike" onclick="endorsedGallery.action(\'{dislike_action_b64}\')">{dislike_label}</button>'
+        '</div>'
+    )
+
+    thumb_action_stack = (
+        '<div class="endgal-thumb-actions">'
+        f'<button class="endgal-btn-send2img endgal-act-t2i" data-icon="📝" data-hint="Send to txt2img" title="send to txt2img" onclick="endorsedGallery.sendTo(\'{infotext_b64}\', \'txt2img\')">📝</button>'
+        f'<button class="endgal-btn-send2img endgal-act-fire" data-icon="🔥" data-hint="Queue fire jobs" title="queue txt2img override jobs from fire config" onclick="endorsedGallery.queueTxt2ImgFire(\'{infotext_b64}\')">🔥</button>'
+        f'<button class="endgal-btn-send2img endgal-act-i2i" data-icon="🖼" data-hint="Send to img2img" title="send to img2img" onclick="endorsedGallery.sendTo(\'{infotext_b64}\', \'img2img\', \'{path_b64}\')">🖼</button>'
+        f'<button class="endgal-btn-send2img endgal-act-removebg" data-icon="✂" data-hint="Remove background" title="remove background" onclick="endorsedGallery.action(\'{_b64(json.dumps({"type": "removebg", **payload}))}\')">✂</button>'
+        f'<button class="endgal-btn-send2img endgal-act-extras" data-icon="✨" data-hint="Send to extras" title="send to extras" onclick="endorsedGallery.sendToExtras(\'{path_b64}\')">✨</button>'
+        '</div>'
+    )
+
     return f"""
 <div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
-  <div class="endgal-thumb">{thumb_html}</div>
+    <div class="endgal-thumb">{thumb_html}{corner_action_stack}{info_overlay}{thumb_action_stack}</div>
     <details class="endgal-card-extra"{details_open}>
-        <summary class="endgal-card-extra-summary">Details &amp; Quick Actions</summary>
+        <summary class="endgal-card-extra-summary">Details</summary>
         <div class="endgal-body">
             <div class="endgal-prompt oneline">{_html.escape(prompt)}</div>
-            <div class="endgal-capsules">{settings_capsules}</div>
-            <div class="endgal-date">{_html.escape(date)}</div>
             {tags_section}
             <details class="endgal-details">
-                <summary>Params</summary>
-                <pre class="endgal-infotext">{_html.escape(infotext)}</pre>
+                <summary>Prompt</summary>
+                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{prompt_b64}', this)">{_html.escape(prompt_full)}</pre>
             </details>
-        </div>
-        <div class="endgal-actions">
-            <button class="{endorse_class}" title="toggle endorse" onclick="endorsedGallery.action('{endorse_action_b64}')">{endorse_label}</button>
-            <button class="endgal-btn-send2img" title="send to txt2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'txt2img')">t2i</button>
-            <button class="endgal-btn-send2img" title="queue txt2img override jobs from fire config" onclick="endorsedGallery.queueTxt2ImgFire('{infotext_b64}')">🔥</button>
-            <button class="endgal-btn-send2img" title="send to img2img" onclick="endorsedGallery.sendTo('{infotext_b64}', 'img2img', '{path_b64}')">i2i</button>
-            <button class="endgal-btn-send2img" title="remove background" onclick="endorsedGallery.action('{_b64(json.dumps({"type": "removebg", **payload}))}')">removebg</button>
-            <button class="endgal-btn-send2img" title="send to extras" onclick="endorsedGallery.sendToExtras('{path_b64}')">extras</button>
-            <button class="{archive_class}" title="{archive_title}" onclick="endorsedGallery.action('{archive_action}')">{archive_label}</button>
-            <button class="{dislike_class}" title="toggle dislike" onclick="endorsedGallery.action('{dislike_action_b64}')">{dislike_label}</button>
+            <details class="endgal-details">
+                <summary>Negative prompt</summary>
+                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{negative_b64}', this)">{_html.escape(negative_full)}</pre>
+            </details>
+            <details class="endgal-details">
+                <summary>Settings</summary>
+                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{settings_b64}', this)">{_html.escape(settings_full)}</pre>
+            </details>
         </div>
     </details>
 </div>
@@ -1226,80 +1306,80 @@ def on_ui_tabs():
                 label="",
                 elem_id="endgal_mode_radio",
             )
+            with gr.Row(elem_id="endgal_primary_actions", variant="compact"):
+                refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
+                archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
 
-        with gr.Row(elem_id="endgal_controls_row"):
-            search_box = gr.Textbox(
-                value="",
-                placeholder="",
-                label="",
-                elem_id="endgal_search_box",
-                scale=5,
-            )
-            with gr.Column(scale=2, min_width=360):
-                with gr.Row(elem_id="endgal_action_btn_group", variant="compact"):
-                    refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
-                    sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm")
-                    archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
+        with gr.Accordion("Advanced Gallery Settings", open=False, elem_id="endgal_advanced_controls"):
+            with gr.Row(elem_id="endgal_controls_row"):
+                search_box = gr.Textbox(
+                    value="",
+                    placeholder="",
+                    label="Search",
+                    elem_id="endgal_search_box",
+                    scale=6,
+                )
 
-        with gr.Row(elem_id="endgal_settings_row"):
-            page_size = gr.Dropdown(
-                choices=["24", "48", "96"],
-                value=str(PAGE_SIZE_DEFAULT),
-                label="Page Size",
-                elem_id="endgal_page_size",
-                scale=1,
-                filterable=False,
-            )
-            date_filter = gr.Dropdown(
-                choices=["All time", "1 day", "2 days", "1 week"],
-                value="1 day",
-                label="Date",
-                elem_id="endgal_date_filter",
-                scale=1,
-                filterable=False,
-            )
-            thumb_size = gr.Dropdown(
-                choices=["Small", "Medium", "Large"],
-                value="Medium",
-                label="Thumb Size",
-                elem_id="endgal_thumb_size",
-                scale=1,
-                filterable=False,
-            )
-            with gr.Column(scale=2, min_width=280):
-                with gr.Row(elem_id="endgal_extras_refresh_pair", variant="compact"):
-                    card_extras_mode = gr.Dropdown(
-                        choices=["Expanded", "Folded"],
-                        value="Expanded",
-                        label="Card Extras",
-                        elem_id="endgal_card_extras_mode",
-                        scale=1,
-                        filterable=False,
-                    )
-                    auto_refresh_interval = gr.Dropdown(
-                        choices=["Off", "10s", "20s", "30s", "60s"],
-                        value="10s",
-                        label="Auto Refresh",
-                        elem_id="endgal_auto_refresh_interval",
-                        scale=1,
-                        filterable=False,
-                    )
+            with gr.Row(elem_id="endgal_settings_row"):
+                page_size = gr.Dropdown(
+                    choices=["24", "48", "96"],
+                    value=str(PAGE_SIZE_DEFAULT),
+                    label="Page Size",
+                    elem_id="endgal_page_size",
+                    scale=1,
+                    filterable=False,
+                )
+                date_filter = gr.Dropdown(
+                    choices=["All time", "1 day", "2 days", "1 week"],
+                    value="1 day",
+                    label="Date",
+                    elem_id="endgal_date_filter",
+                    scale=1,
+                    filterable=False,
+                )
+                thumb_size = gr.Dropdown(
+                    choices=["Small", "Medium", "Large"],
+                    value="Medium",
+                    label="Thumb Size",
+                    elem_id="endgal_thumb_size",
+                    scale=1,
+                    filterable=False,
+                )
+                with gr.Column(scale=2, min_width=280):
+                    with gr.Row(elem_id="endgal_extras_refresh_pair", variant="compact"):
+                        card_extras_mode = gr.Dropdown(
+                            choices=["Expanded", "Folded"],
+                            value="Folded",
+                            label="Card Extras",
+                            elem_id="endgal_card_extras_mode",
+                            scale=1,
+                            filterable=False,
+                        )
+                        auto_refresh_interval = gr.Dropdown(
+                            choices=["Off", "10s", "20s", "30s", "60s"],
+                            value="10s",
+                            label="Auto Refresh",
+                            elem_id="endgal_auto_refresh_interval",
+                            scale=1,
+                            filterable=False,
+                        )
+                sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm", scale=1)
 
-        with gr.Row(elem_id="endgal_hires_preset_row"):
-            hires_override_config = gr.Textbox(
-                value=_load_fire_override_config(),
-                lines=2,
-                label="Queue Fire Config (one override set per line, comma-separated key:value)",
-                placeholder="steps: 14\nsteps: 18, cfg scale: 6.5\nhires steps: 10, denoising strength: 0.4",
-                elem_id="endgal_hires_override_config",
-                scale=8,
-            )
-            rebuild_fire_suggest_btn = gr.Button(
-                "Rebuild Suggest DB",
-                elem_id="endgal_rebuild_fire_suggest_btn",
-                size="sm",
-                scale=1,
-            )
+            with gr.Row(elem_id="endgal_hires_preset_row"):
+                hires_override_config = gr.Textbox(
+                    value=_load_fire_override_config(),
+                    lines=2,
+                    label="Queue Fire Config (one override set per line, comma-separated key:value)",
+                    placeholder="steps: 14\nsteps: 18, cfg scale: 6.5\nhires steps: 10, denoising strength: 0.4",
+                    elem_id="endgal_hires_override_config",
+                    scale=8,
+                )
+                rebuild_fire_suggest_btn = gr.Button(
+                    "Rebuild Suggest DB",
+                    elem_id="endgal_rebuild_fire_suggest_btn",
+                    size="sm",
+                    scale=1,
+                )
 
         with gr.Row(elem_id="endgal_pager_row"):
             prev_btn = gr.Button("Prev", elem_id="endgal_prev_btn", size="sm")
@@ -1514,5 +1594,19 @@ def on_image_saved(params):
         pass
 
 
-script_callbacks.on_ui_tabs(on_ui_tabs)
-script_callbacks.on_image_saved(on_image_saved)
+def register_callbacks():
+    ui_tab_name = "endorsed_gallery_tab"
+    image_saved_name = "endorsed_gallery_image_saved"
+
+    ui_tab_callbacks = script_callbacks.callback_map.get("callbacks_ui_tabs", [])
+    ui_tab_registered = any(getattr(cb, "name", "") == ui_tab_name for cb in ui_tab_callbacks)
+    if not ui_tab_registered:
+        script_callbacks.on_ui_tabs(on_ui_tabs, name=ui_tab_name)
+
+    image_saved_callbacks = script_callbacks.callback_map.get("callbacks_image_saved", [])
+    image_saved_registered = any(getattr(cb, "name", "") == image_saved_name for cb in image_saved_callbacks)
+    if not image_saved_registered:
+        script_callbacks.on_image_saved(on_image_saved, name=image_saved_name)
+
+
+register_callbacks()
