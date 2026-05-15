@@ -424,13 +424,13 @@ def render_queue_html() -> str:
         err = f'<br><small class="jq-error">{html.escape(str(j.error))}</small>' if j.error else ""
         rows.append(
             f'<tr class="jq-row jq-s-{j.status}" data-task-id="{html.escape(j.task_id)}" data-job-type="{html.escape(j.job_type)}">'
-            f'<td><code class="jq-id">{j.id}</code></td>'
-            f'<td>{html.escape(j.job_type)}</td>'
-            f'<td class="jq-lbl">{lbl}{err}</td>'
-            f'<td>{icon} {j.status}</td>'
-            f'<td>{_fmt_time(j.created_at)}</td>'
-            f'<td>{_fmt_time(j.finished_at) or "-"}</td>'
-            f'<td class="jq-actions">{_row_action_buttons(j)}</td>'
+            f'<td data-label="ID"><code class="jq-id">{j.id}</code></td>'
+            f'<td data-label="Type">{html.escape(j.job_type)}</td>'
+            f'<td class="jq-lbl" data-label="Prompt">{lbl}{err}</td>'
+            f'<td data-label="Status">{icon} {j.status}</td>'
+            f'<td data-label="Created">{_fmt_time(j.created_at)}</td>'
+            f'<td data-label="Finished">{_fmt_time(j.finished_at) or "-"}</td>'
+            f'<td class="jq-actions" data-label="Actions">{_row_action_buttons(j)}</td>'
             "</tr>"
         )
 
@@ -498,6 +498,7 @@ def on_ui_tabs():
 
         with gr.Row():
             refresh_btn = gr.Button("Refresh", elem_id="jq_refresh_btn", scale=1)
+            interrupt_current_btn = gr.Button("Interrupt Current Job", elem_id="jq_interrupt_current_btn", scale=1)
             pause_btn = gr.Button("Pause Queue", elem_id="jq_pause_btn", scale=1)
             resume_btn = gr.Button("Resume Queue", elem_id="jq_resume_btn", scale=1)
             clear_done_btn = gr.Button("Clear Completed/Failed", scale=1)
@@ -537,6 +538,15 @@ def on_ui_tabs():
             queue_manager.resume()
             return render_queue_html(), '<span style="color:var(--body-text-color-subdued,#94a3b8)">Queue resumed.</span>'
 
+        def do_interrupt_current():
+            active_job = bool(getattr(shared.state, "job", ""))
+            active_count = int(getattr(shared.state, "job_count", 0) or 0)
+            if not active_job and active_count <= 0:
+                return render_queue_html(), '<span style="color:var(--body-text-color-subdued,#94a3b8)">No running job to interrupt.</span>'
+
+            shared.state.interrupt()
+            return render_queue_html(), '<span style="color:var(--error-text-color,#ef4444)">Interrupt requested for current running job.</span>'
+
         def do_remove(job_id: str):
             job_id = job_id.strip()
             if not job_id:
@@ -546,6 +556,7 @@ def on_ui_tabs():
             return render_queue_html(), '<span style="color:var(--success-text-color,green)">Removed (if it existed and was not running).</span>'
 
         refresh_btn.click(fn=do_refresh, inputs=[], outputs=[queue_html_out], show_progress="hidden")
+        interrupt_current_btn.click(fn=do_interrupt_current, inputs=[], outputs=[queue_html_out, remove_status], show_progress="hidden")
         pause_btn.click(fn=do_pause, inputs=[], outputs=[queue_html_out, remove_status])
         resume_btn.click(fn=do_resume, inputs=[], outputs=[queue_html_out, remove_status])
         clear_done_btn.click(fn=do_clear_done, inputs=[], outputs=[queue_html_out])

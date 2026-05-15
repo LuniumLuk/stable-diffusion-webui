@@ -197,6 +197,19 @@ function notifyGenerationEvent(tabname, imageCount, phase, source) {
         kind: phase === 'finish' ? 'success' : 'info',
         duration: phase === 'finish' ? 4200 : 3200,
     });
+
+    try {
+        window.dispatchEvent(new CustomEvent('webui:generation', {
+            detail: {
+                tabname: typeLabel,
+                imageCount: count,
+                phase: phase === 'finish' ? 'finish' : 'start',
+                source: source === 'queue' ? 'queue' : 'manual',
+            },
+        }));
+    } catch (_e) {
+        // no-op
+    }
 }
 
 function submit() {

@@ -1933,6 +1933,113 @@
         });
     }
 
+    function getSelectedGalleryModeText() {
+        const host = gradioApp().querySelector('#endgal_mode_radio');
+        if (!host) return '';
+
+        const checked = host.querySelector('input[type="radio"]:checked');
+        if (checked) {
+            const label = checked.closest('label');
+            const text = (label && label.textContent) ? label.textContent.trim() : '';
+            if (text) return text;
+        }
+
+        const hidden = host.querySelector('input[type="hidden"]');
+        if (hidden && typeof hidden.value === 'string' && hidden.value.trim()) {
+            return hidden.value.trim();
+        }
+
+        return (host.textContent || '').trim();
+    }
+
+    function isGalleryTabVisible() {
+        const panel = gradioApp().getElementById('tab_endorsed_gallery');
+        return Boolean(panel && panel.style.display !== 'none');
+    }
+
+    function isUnratedModeActive() {
+        const mode = getSelectedGalleryModeText();
+        return mode.includes('Unrated');
+    }
+
+    function getAutoRefreshIntervalSeconds() {
+        const host = gradioApp().querySelector('#endgal_auto_refresh_interval');
+        if (!host) return 10;
+
+        const candidates = [];
+        const hidden = host.querySelector('input[type="hidden"]');
+        if (hidden && typeof hidden.value === 'string') candidates.push(hidden.value.trim());
+
+        const textInput = host.querySelector('input[type="text"]');
+        if (textInput && typeof textInput.value === 'string') candidates.push(textInput.value.trim());
+
+        candidates.push((host.textContent || '').trim());
+
+        for (const raw of candidates) {
+            if (!raw) continue;
+            const lower = raw.toLowerCase();
+            if (lower.includes('off')) return 0;
+            const m = raw.match(/(\d+)/);
+            if (m) {
+                const secs = Number(m[1]) || 0;
+                if (secs > 0) return secs;
+            }
+        }
+
+        return 10;
+    }
+
+    let autoRefreshTimer = null;
+    let lastAutoRefreshAt = 0;
+    function requestUnratedAutoRefresh(reason) {
+        if (!isGalleryTabVisible() || !isUnratedModeActive()) return;
+
+        const now = Date.now();
+        if (now - lastAutoRefreshAt < 1200) return;
+
+        if (autoRefreshTimer) {
+            clearTimeout(autoRefreshTimer);
+            autoRefreshTimer = null;
+        }
+
+        autoRefreshTimer = setTimeout(() => {
+            autoRefreshTimer = null;
+            if (!isGalleryTabVisible() || !isUnratedModeActive()) return;
+            const refreshBtn = gradioApp().querySelector('#endgal_refresh_btn');
+            if (refreshBtn) {
+                lastAutoRefreshAt = Date.now();
+                refreshBtn.click();
+            }
+        }, reason === 'tab-switch' ? 150 : 320);
+    }
+
+    function setupUnratedAutoRefreshOnImageCompleted() {
+        if (window.__endgalAutoRefreshBound) return;
+        window.__endgalAutoRefreshBound = true;
+
+        window.addEventListener('webui:generation', (event) => {
+            const detail = event && event.detail ? event.detail : null;
+            if (!detail || detail.phase !== 'finish') return;
+            requestUnratedAutoRefresh('image-completed');
+        });
+    }
+
+    function setupUnratedPeriodicAutoRefresh() {
+        if (window.__endgalPeriodicAutoRefreshBound) return;
+        window.__endgalPeriodicAutoRefreshBound = true;
+
+        setInterval(() => {
+            if (!isGalleryTabVisible() || !isUnratedModeActive()) return;
+
+            const seconds = getAutoRefreshIntervalSeconds();
+            if (seconds <= 0) return;
+
+            const now = Date.now();
+            if (now - lastAutoRefreshAt < (seconds * 1000)) return;
+            requestUnratedAutoRefresh('periodic');
+        }, 1000);
+    }
+
     // Wait for Gradio to finish rendering before attaching listeners
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
@@ -1944,6 +2051,8 @@
             setTimeout(setupFireConfigAssist, 1200);
             setTimeout(setupFireConfigAssist, 2500);
             setTimeout(onTabSwitch, 1500);
+            setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
+            setTimeout(setupUnratedPeriodicAutoRefresh, 700);
         });
     } else {
         ensureTxt2ImgSwitchGuard();
@@ -1954,6 +2063,8 @@
         setTimeout(setupFireConfigAssist, 1200);
         setTimeout(setupFireConfigAssist, 2500);
         setTimeout(onTabSwitch, 1500);
+        setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
+        setTimeout(setupUnratedPeriodicAutoRefresh, 700);
     }
 
 })();

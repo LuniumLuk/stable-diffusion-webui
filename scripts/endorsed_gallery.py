@@ -1219,20 +1219,29 @@ def get_keyword_insights_html(mode: str = "", query: str = "", date_filter: str 
 
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
-        with gr.Row(elem_id="endgal_controls_row"):
+        with gr.Row(elem_id="endgal_mode_row"):
             mode_radio = gr.Radio(
                 choices=["⭐ Endorsed", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",
             )
+
+        with gr.Row(elem_id="endgal_controls_row"):
             search_box = gr.Textbox(
                 value="",
                 placeholder="",
                 label="",
                 elem_id="endgal_search_box",
-                scale=2,
+                scale=5,
             )
+            with gr.Column(scale=2, min_width=360):
+                with gr.Row(elem_id="endgal_action_btn_group", variant="compact"):
+                    refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
+                    sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm")
+                    archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
+
+        with gr.Row(elem_id="endgal_settings_row"):
             page_size = gr.Dropdown(
                 choices=["24", "48", "96"],
                 value=str(PAGE_SIZE_DEFAULT),
@@ -1257,17 +1266,24 @@ def on_ui_tabs():
                 scale=1,
                 filterable=False,
             )
-            card_extras_mode = gr.Dropdown(
-                choices=["Expanded", "Folded"],
-                value="Expanded",
-                label="Card Extras",
-                elem_id="endgal_card_extras_mode",
-                scale=1,
-                filterable=False,
-            )
-            refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
-            sync_btn = gr.Button("Sync All", elem_id="endgal_sync_btn", size="sm")
-            archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
+            with gr.Column(scale=2, min_width=280):
+                with gr.Row(elem_id="endgal_extras_refresh_pair", variant="compact"):
+                    card_extras_mode = gr.Dropdown(
+                        choices=["Expanded", "Folded"],
+                        value="Expanded",
+                        label="Card Extras",
+                        elem_id="endgal_card_extras_mode",
+                        scale=1,
+                        filterable=False,
+                    )
+                    auto_refresh_interval = gr.Dropdown(
+                        choices=["Off", "10s", "20s", "30s", "60s"],
+                        value="10s",
+                        label="Auto Refresh",
+                        elem_id="endgal_auto_refresh_interval",
+                        scale=1,
+                        filterable=False,
+                    )
 
         with gr.Row(elem_id="endgal_hires_preset_row"):
             hires_override_config = gr.Textbox(
