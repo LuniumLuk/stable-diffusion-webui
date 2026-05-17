@@ -648,6 +648,24 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         import datetime
         date = datetime.datetime.fromtimestamp(record["file_mtime"]).strftime("%Y-%m-%d %H:%M")
 
+    # Normalize to a compact, readable timestamp for details panel display.
+    display_time = ""
+    ts = _record_timestamp(record)
+    if ts is not None:
+        try:
+            display_time = datetime.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            display_time = ""
+    if not display_time and date:
+        txt = str(date).strip()
+        txt = txt.replace("T", " ")
+        txt = txt.split("+")[0].strip()
+        txt = txt.split(".")[0].strip()
+        if len(txt) >= 16:
+            display_time = txt[:16]
+        elif txt:
+            display_time = txt
+
     thumb = _get_thumb(path) if path else ""
     preview_url = _get_preview_thumb(path) if path else ""
     orig_url = _file_url(path)
@@ -786,6 +804,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     steps = str(record.get("steps", ""))
     cfg_scale = str(record.get("cfg_scale", ""))
     seed_short = seed[:3] + "..." + seed[-3:] if len(seed) > 8 else seed
+    parsed_params = infotext_utils.parse_generation_parameters(infotext, []) if infotext else {}
 
     def infotext_param(key: str) -> str:
         pat = re.compile(
@@ -797,29 +816,67 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
             return ""
         return (m.group(2) or m.group(3) or "").strip()
 
+    def param_value(key: str) -> str:
+        if parsed_params:
+            v = parsed_params.get(key, "")
+            if v is None:
+                v = ""
+            txt = str(v).strip()
+            if txt:
+                return txt
+            # Case-insensitive fallback over parsed keys.
+            key_lc = key.lower()
+            for k, vv in parsed_params.items():
+                if str(k).strip().lower() == key_lc:
+                    txt2 = str(vv or "").strip()
+                    if txt2:
+                        return txt2
+        return infotext_param(key)
+
     hires_stage_capsules = []
-    hires_stages_raw = infotext_param("Hires stages")
-    if hires_stages_raw:
-        for stage in [s.strip() for s in hires_stages_raw.split(",") if s.strip()]:
+    hires_stages_raw = param_value("Hires stages")
+    hires_scale = param_value("Hires upscale")
+    hires_steps_value = param_value("Hires steps")
+    denoising_value = param_value("Denoising strength")
+    enable_hires_value = param_value("Enable Hires fix").strip().lower()
+
+    has_hires = bool(_parse_hires_info(infotext).get("has_hires"))
+    if not has_hires and enable_hires_value in ("true", "1", "yes", "on"):
+        has_hires = True
+    if not has_hires and (hires_stages_raw or hires_scale or hires_steps_value):
+        has_hires = True
+
+    hires_detail_capsules = []
+    if has_hires and hires_steps_value:
+        hires_detail_capsules.append(
+            f'<span class="endgal-capsule endgal-capsule-hires">HSteps: {_html.escape(hires_steps_value)}</span>'
+        )
+    if has_hires and denoising_value:
+        hires_detail_capsules.append(
+            f'<span class="endgal-capsule endgal-capsule-hires">Denoise: {_html.escape(denoising_value)}</span>'
+        )
+
+    # Keep legacy hires capsule only as a fallback when detailed hires values are unavailable.
+    if not hires_detail_capsules:
+        if hires_stages_raw:
+            for stage in [s.strip() for s in hires_stages_raw.split(",") if s.strip()]:
+                hires_stage_capsules.append(
+                    f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(stage)}</span>'
+                )
+        elif hires_scale and hires_steps_value:
             hires_stage_capsules.append(
-                f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(stage)}</span>'
-            )
-    else:
-        hires_scale = infotext_param("Hires upscale")
-        hires_steps = infotext_param("Hires steps")
-        if hires_scale and hires_steps:
-            hires_stage_capsules.append(
-                f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(hires_scale)}/{_html.escape(hires_steps)}</span>'
+                f'<span class="endgal-capsule endgal-capsule-hires">H:{_html.escape(hires_scale)}/{_html.escape(hires_steps_value)}</span>'
             )
 
     seed_capsule_style = _seed_capsule_style(seed)
 
-    settings_capsules = (
-        f'<span class="endgal-capsule endgal-capsule-steps">Steps: {_html.escape(steps)}</span>'
-        f'<span class="endgal-capsule endgal-capsule-cfg">CFG: {_html.escape(cfg_scale)}</span>'
-        f'<span class="endgal-capsule endgal-capsule-seed"{seed_capsule_style}>Seed: {_html.escape(seed_short)}</span>'
-        + "".join(hires_stage_capsules)
-    )
+    settings_capsules = "".join([
+        f'<span class="endgal-capsule endgal-capsule-steps">Steps: {_html.escape(steps)}</span>',
+        f'<span class="endgal-capsule endgal-capsule-cfg">CFG: {_html.escape(cfg_scale)}</span>',
+        *hires_detail_capsules,
+        f'<span class="endgal-capsule endgal-capsule-seed"{seed_capsule_style}>Seed: {_html.escape(seed_short)}</span>',
+        *hires_stage_capsules,
+    ])
 
     prompt_full, negative_full, settings_full = _split_infotext_sections(infotext, prompt, record.get("negative_prompt", ""))
     prompt_b64 = _b64(prompt_full)
@@ -829,8 +886,12 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     info_overlay = (
         f'<div class="endgal-thumb-meta-overlay">'
         f'  <div class="endgal-capsules endgal-capsules-overlay">{settings_capsules}</div>'
-        f'  <div class="endgal-date endgal-date-overlay">{_html.escape(date)}</div>'
         f'</div>'
+    )
+
+    details_time_html = (
+        f'<span class="endgal-card-extra-summary-time">{_html.escape(display_time)}</span>'
+        if display_time else ""
     )
 
     corner_action_stack = (
@@ -855,7 +916,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
 <div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
     <div class="endgal-thumb">{thumb_html}{corner_action_stack}{info_overlay}{thumb_action_stack}</div>
     <details class="endgal-card-extra"{details_open}>
-        <summary class="endgal-card-extra-summary">Details</summary>
+        <summary class="endgal-card-extra-summary">Details{details_time_html}</summary>
         <div class="endgal-body">
             <div class="endgal-prompt oneline">{_html.escape(prompt)}</div>
             {tags_section}
