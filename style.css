@@ -2575,12 +2575,20 @@ body.resizing .resize-handle {
 #endgal_preview_panel {
     width: min(96vw, 1920px);
     height: min(1080px, calc((var(--endgal-preview-vh, 1vh) * 100) - 48px));
-    display: grid;
-    grid-template-rows: minmax(0, 1fr);
-    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(170px, 220px);
-    gap: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     position: relative;
     overflow: hidden;
+}
+
+#endgal_preview_content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .endgal-preview-panel-col {
@@ -2589,7 +2597,6 @@ body.resizing .resize-handle {
     border-radius: 10px;
     padding: 12px;
     min-height: 0;
-    overflow: auto;
 }
 
 .endgal-preview-panel-col h3 {
@@ -2599,7 +2606,7 @@ body.resizing .resize-handle {
     letter-spacing: 0.02em;
 }
 
-#endgal_preview_left pre {
+#endgal_preview_info pre {
     margin: 0 0 12px;
     padding: 8px 9px;
     border-radius: 8px;
@@ -2610,39 +2617,30 @@ body.resizing .resize-handle {
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 22vh;
-    overflow: auto;
+    overflow: visible;
 }
 
-#endgal_preview_left {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
+#endgal_preview_info {
+    display: block;
+    min-height: max-content;
+    align-self: stretch;
+}
+
+#endgal_preview_actions_wrap {
+    flex: 0 0 auto;
     overflow: hidden;
 }
 
-#endgal_preview_left h3 {
-    flex: 0 0 auto;
-}
-
-#endgal_preview_left pre {
-    flex: 0 1 auto;
-}
-
-#endgal_preview_right {
-    overflow-x: hidden;
-}
-
-#endgal_preview_left pre.endgal-preview-copyable {
+#endgal_preview_info pre.endgal-preview-copyable {
     cursor: copy;
 }
 
-#endgal_preview_left pre.endgal-preview-copyable:hover {
+#endgal_preview_info pre.endgal-preview-copyable:hover {
     border-color: rgba(125, 211, 252, 0.85);
     box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.35) inset;
 }
 
-#endgal_preview_left pre.endgal-preview-copied {
+#endgal_preview_info pre.endgal-preview-copied {
     border-color: rgba(74, 222, 128, 0.9);
     box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.5) inset;
 }
@@ -2652,6 +2650,7 @@ body.resizing .resize-handle {
     grid-template-columns: 58px minmax(0, 1fr) 58px;
     align-items: center;
     min-width: 0;
+    min-height: min(62vh, 720px);
 }
 
 #endgal_preview_image_stage {
@@ -2703,15 +2702,18 @@ body.resizing .resize-handle {
 
 #endgal_preview_actions {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     gap: 8px;
     min-height: 0;
+    max-height: 34vh;
     overflow: auto;
 }
 
 .endgal-preview-action {
     min-height: 40px;
-    width: 100%;
+    width: auto;
+    flex: 1 1 190px;
+    max-width: 100%;
     border: 1px solid rgba(148, 163, 184, 0.45);
     border-radius: 8px;
     background: rgba(15, 23, 42, 0.82);
@@ -2863,10 +2865,7 @@ body.resizing .resize-handle {
     gap: 4px;
     padding: 6px 0;
     border-radius: 8px;
-    flex: 1 1 auto;
-    min-height: 0;
-    max-height: none;
-    overflow-y: auto;
+    overflow: visible;
 }
 .endgal-tag-pill-preview {
     font-size: 11px;
@@ -2883,11 +2882,26 @@ body.resizing .resize-handle {
     font-style: italic;
 }
 
+@media (min-width: 1280px) {
+    #endgal_preview_content {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
+        align-items: stretch;
+    }
+
+    #endgal_preview_center {
+        min-height: min(72vh, 860px);
+    }
+
+    #endgal_preview_info {
+        min-height: 100%;
+    }
+}
+
 @media (max-width: 1200px) {
     #endgal_preview_panel {
         width: min(98vw, 1100px);
         height: min(1000px, calc((var(--endgal-preview-vh, 1vh) * 100) - 48px));
-        grid-template-columns: minmax(250px, 320px) minmax(0, 1fr) minmax(160px, 200px);
     }
 }
 
@@ -2900,23 +2914,16 @@ body.resizing .resize-handle {
     #endgal_preview_panel {
         width: min(98vw, 860px);
         height: min(1000px, calc((var(--endgal-preview-vh, 1vh) * 100) - 24px));
-        grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, 1fr) auto auto;
         gap: 10px;
     }
 
     #endgal_preview_center {
         grid-template-columns: 48px minmax(0, 1fr) 48px;
-        min-height: 42vh;
-    }
-
-    #endgal_preview_left pre {
-        max-height: 18vh;
+        min-height: min(52vh, 600px);
     }
 
     #endgal_preview_actions {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
+        max-height: 38vh;
     }
 }
 .endgal-insights-empty {

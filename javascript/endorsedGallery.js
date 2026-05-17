@@ -12,6 +12,29 @@
 (function () {
     'use strict';
 
+    // --- Reversed order toggle state ---
+    const REVERSE_UNRATED_KEY = 'endgal_reverse_unrated';
+    function getReverseUnrated() {
+        try { return localStorage.getItem(REVERSE_UNRATED_KEY) === '1'; } catch { return false; }
+    }
+    function setReverseUnrated(val) {
+        try { localStorage.setItem(REVERSE_UNRATED_KEY, val ? '1' : '0'); } catch {}
+    }
+    function setupReverseUnratedSync() {
+        const el = gradioApp().querySelector('#endgal_reverse_unrated input[type="checkbox"]');
+        if (!el) return;
+        // Restore persisted state into the Gradio checkbox
+        el.checked = getReverseUnrated();
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        if (el.__endgalSynced) return;
+        el.__endgalSynced = true;
+        el.addEventListener('change', () => {
+            setReverseUnrated(el.checked);
+            const refreshBtn = gradioApp().querySelector('#endgal_refresh_btn');
+            if (refreshBtn) refreshBtn.click();
+        });
+    }
+
     const FIRE_CANONICAL_KEYS = [
         'Prompt',
         'Negative prompt',
@@ -1377,24 +1400,26 @@
         previewOverlay.id = 'endgal_preview_overlay';
         previewOverlay.innerHTML = [
             '<div id="endgal_preview_panel">',
-            '  <div id="endgal_preview_left" class="endgal-preview-panel-col">',
-            '    <h3>Prompt</h3>',
-            '    <pre id="endgal_preview_prompt"></pre>',
-            '    <h3>Negative prompt</h3>',
-            '    <pre id="endgal_preview_negative"></pre>',
-            '    <h3>Settings</h3>',
-            '    <pre id="endgal_preview_settings"></pre>',
-            '    <h3>Captions</h3>',
-            '    <div id="endgal_preview_tags"></div>',
-            '  </div>',
-            '  <div id="endgal_preview_center">',
-            '    <button id="endgal_preview_prev" class="endgal-preview-nav" aria-label="Previous image">‹</button>',
-            '    <div id="endgal_preview_image_stage">',
-            '      <img id="endgal_preview_image" alt="preview" />',
+            '  <div id="endgal_preview_content">',
+            '    <div id="endgal_preview_center">',
+            '      <button id="endgal_preview_prev" class="endgal-preview-nav" aria-label="Previous image">‹</button>',
+            '      <div id="endgal_preview_image_stage">',
+            '        <img id="endgal_preview_image" alt="preview" />',
+            '      </div>',
+            '      <button id="endgal_preview_next" class="endgal-preview-nav" aria-label="Next image">›</button>',
             '    </div>',
-            '    <button id="endgal_preview_next" class="endgal-preview-nav" aria-label="Next image">›</button>',
+            '    <div id="endgal_preview_info" class="endgal-preview-panel-col">',
+            '      <h3>Prompt</h3>',
+            '      <pre id="endgal_preview_prompt"></pre>',
+            '      <h3>Negative prompt</h3>',
+            '      <pre id="endgal_preview_negative"></pre>',
+            '      <h3>Settings</h3>',
+            '      <pre id="endgal_preview_settings"></pre>',
+            '      <h3>Captions</h3>',
+            '      <div id="endgal_preview_tags"></div>',
+            '    </div>',
             '  </div>',
-            '  <div id="endgal_preview_right" class="endgal-preview-panel-col">',
+            '  <div id="endgal_preview_actions_wrap" class="endgal-preview-panel-col">',
             '    <h3>Quick actions</h3>',
             '    <div id="endgal_preview_actions"></div>',
             '  </div>',
@@ -1686,7 +1711,9 @@
     }
 
     function buildPreviewList() {
-        const imgs = Array.from(gradioApp().querySelectorAll('#endgal_html .endgal-thumb img'));
+        let imgs = Array.from(gradioApp().querySelectorAll('#endgal_html .endgal-thumb img'));
+        // Reverse only in unrated mode and if toggle is on
+        if (isUnratedModeActive() && getReverseUnrated()) imgs = imgs.reverse();
         previewList = imgs
             .map(el => ({
                 element: el,
@@ -1748,6 +1775,12 @@
                         e.stopPropagation();
                         if (sourceBtn && sourceBtn.isConnected) {
                             sourceBtn.click();
+                            // If this is endorse/dislike, also step to next image.
+                            if (btn.classList.contains('endgal-preview-action-endorse')) {
+                                setTimeout(() => triggerPreviewAction('like'), 0);
+                            } else if (btn.classList.contains('endgal-preview-action-dislike')) {
+                                setTimeout(() => triggerPreviewAction('dislike'), 0);
+                            }
                             return;
                         }
 
@@ -1912,6 +1945,10 @@
             executeAction(actionDataB64, { recordHistory: true, clearRedo: true });
         },
 
+        refreshGallery: function () {
+            const refreshBtn = gradioApp().querySelector('#endgal_refresh_btn');
+            if (refreshBtn) refreshBtn.click();
+        },
         undo: function () {
             const entry = actionUndoStack.pop();
             if (!entry) return;
@@ -2313,6 +2350,8 @@
             setTimeout(onTabSwitch, 1500);
             setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
             setTimeout(setupUnratedPeriodicAutoRefresh, 700);
+            setTimeout(setupReverseUnratedSync, 1500);
+            setTimeout(setupReverseUnratedSync, 3000);
         });
     } else {
         ensureTxt2ImgSwitchGuard();
@@ -2325,6 +2364,8 @@
         setTimeout(onTabSwitch, 1500);
         setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
         setTimeout(setupUnratedPeriodicAutoRefresh, 700);
+        setTimeout(setupReverseUnratedSync, 1500);
+        setTimeout(setupReverseUnratedSync, 3000);
     }
 
 })();

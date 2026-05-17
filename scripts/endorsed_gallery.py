@@ -1411,6 +1411,13 @@ def on_ui_tabs():
                     scale=1,
                 )
 
+            with gr.Row(elem_id="endgal_reverse_row"):
+                reverse_unrated = gr.Checkbox(
+                    label="Show images in reversed order (Unrated only)",
+                    value=False,
+                    elem_id="endgal_reverse_unrated",
+                )
+
         with gr.Row(elem_id="endgal_pager_row"):
             prev_btn = gr.Button("Prev", elem_id="endgal_prev_btn", size="sm")
             next_btn = gr.Button("Next", elem_id="endgal_next_btn", size="sm")
@@ -1628,15 +1635,14 @@ def register_callbacks():
     ui_tab_name = "endorsed_gallery_tab"
     image_saved_name = "endorsed_gallery_image_saved"
 
-    ui_tab_callbacks = script_callbacks.callback_map.get("callbacks_ui_tabs", [])
-    ui_tab_registered = any(getattr(cb, "name", "") == ui_tab_name for cb in ui_tab_callbacks)
-    if not ui_tab_registered:
-        script_callbacks.on_ui_tabs(on_ui_tabs, name=ui_tab_name)
+    # Remove any accumulated duplicate registrations (caused by UI reloads), then register fresh.
+    ui_tab_list = script_callbacks.callback_map.get("callbacks_ui_tabs", [])
+    ui_tab_list[:] = [cb for cb in ui_tab_list if ui_tab_name not in getattr(cb, "name", "")]
+    script_callbacks.on_ui_tabs(on_ui_tabs, name=ui_tab_name)
 
-    image_saved_callbacks = script_callbacks.callback_map.get("callbacks_image_saved", [])
-    image_saved_registered = any(getattr(cb, "name", "") == image_saved_name for cb in image_saved_callbacks)
-    if not image_saved_registered:
-        script_callbacks.on_image_saved(on_image_saved, name=image_saved_name)
+    img_saved_list = script_callbacks.callback_map.get("callbacks_image_saved", [])
+    img_saved_list[:] = [cb for cb in img_saved_list if image_saved_name not in getattr(cb, "name", "")]
+    script_callbacks.on_image_saved(on_image_saved, name=image_saved_name)
 
 
 register_callbacks()
