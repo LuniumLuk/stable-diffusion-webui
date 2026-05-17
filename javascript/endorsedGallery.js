@@ -23,15 +23,15 @@
     function setupReverseUnratedSync() {
         const el = gradioApp().querySelector('#endgal_reverse_unrated input[type="checkbox"]');
         if (!el) return;
-        // Restore persisted state into the Gradio checkbox
-        el.checked = getReverseUnrated();
-        el.dispatchEvent(new Event('input', { bubbles: true }));
         if (el.__endgalSynced) return;
         el.__endgalSynced = true;
+        // Restore persisted state without synthetic change dispatch.
+        // Synthetic startup events can hit stale Gradio callback maps after UI edits.
+        const stored = getReverseUnrated();
+        el.checked = stored;
+        // Save future changes to localStorage
         el.addEventListener('change', () => {
             setReverseUnrated(el.checked);
-            const refreshBtn = gradioApp().querySelector('#endgal_refresh_btn');
-            if (refreshBtn) refreshBtn.click();
         });
     }
 
@@ -159,6 +159,10 @@
     function updatePreviewViewportHeightVar() {
         const vh = Math.max(1, window.innerHeight || 1) * 0.01;
         document.documentElement.style.setProperty('--endgal-preview-vh', `${vh}px`);
+    }
+
+    function isPreviewOpen() {
+        return Boolean(previewOverlay && previewOverlay.classList.contains('show'));
     }
 
     // ---------------------------------------------------------------------------
@@ -1712,8 +1716,6 @@
 
     function buildPreviewList() {
         let imgs = Array.from(gradioApp().querySelectorAll('#endgal_html .endgal-thumb img'));
-        // Reverse only in unrated mode and if toggle is on
-        if (isUnratedModeActive() && getReverseUnrated()) imgs = imgs.reverse();
         previewList = imgs
             .map(el => ({
                 element: el,
@@ -2170,8 +2172,8 @@
 
         const endHint = app.querySelector('#endgal_end_hint');
         if (endHint) {
-            // End of gallery hint is present - close preview and scroll hint into view
-            hidePreview();
+            // Keep preview frozen while browsing; do not auto-close on background gallery updates.
+            if (isPreviewOpen()) return;
             setTimeout(() => {
                 endHint.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }, 100);
@@ -2182,6 +2184,8 @@
     function setupEndOfGalleryMonitor() {
         const galleryContainer = gradioApp().querySelector('#endgal_html');
         if (!galleryContainer) return;
+        if (galleryContainer.__endgalMonitored) return; // already wired up
+        galleryContainer.__endgalMonitored = true;
 
         const observer = new MutationObserver(() => {
             checkAndHandleEndOfGallery();
@@ -2191,13 +2195,6 @@
             childList: true,
             subtree: true,
         });
-    }
-
-    // Start monitoring when document is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupEndOfGalleryMonitor);
-    } else {
-        setupEndOfGalleryMonitor();
     }
 
     // ---------------------------------------------------------------------------
@@ -2270,7 +2267,8 @@
         const textInput = host.querySelector('input[type="text"]');
         if (textInput && typeof textInput.value === 'string') candidates.push(textInput.value.trim());
 
-        candidates.push((host.textContent || '').trim());
+        const selected = host.querySelector('[aria-selected="true"]');
+        if (selected && selected.textContent) candidates.push(selected.textContent.trim());
 
         for (const raw of candidates) {
             if (!raw) continue;
@@ -2283,13 +2281,16 @@
             }
         }
 
-        return 10;
+        // If we cannot confidently parse the current selection, fail safe to Off.
+        return 0;
     }
 
     let autoRefreshTimer = null;
     let lastAutoRefreshAt = 0;
     function requestUnratedAutoRefresh(reason) {
         if (!isGalleryTabVisible() || !isUnratedModeActive()) return;
+        if (isPreviewOpen()) return;
+        if (getAutoRefreshIntervalSeconds() <= 0) return;
 
         const now = Date.now();
         if (now - lastAutoRefreshAt < 1200) return;
@@ -2350,6 +2351,8 @@
             setTimeout(onTabSwitch, 1500);
             setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
             setTimeout(setupUnratedPeriodicAutoRefresh, 700);
+            setTimeout(setupEndOfGalleryMonitor, 1200);
+            setTimeout(setupEndOfGalleryMonitor, 3000);
             setTimeout(setupReverseUnratedSync, 1500);
             setTimeout(setupReverseUnratedSync, 3000);
         });
@@ -2364,6 +2367,8 @@
         setTimeout(onTabSwitch, 1500);
         setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
         setTimeout(setupUnratedPeriodicAutoRefresh, 700);
+        setTimeout(setupEndOfGalleryMonitor, 1200);
+        setTimeout(setupEndOfGalleryMonitor, 3000);
         setTimeout(setupReverseUnratedSync, 1500);
         setTimeout(setupReverseUnratedSync, 3000);
     }

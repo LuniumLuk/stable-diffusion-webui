@@ -44,6 +44,7 @@ _THUMB_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_thumbs")
 _PREVIEW_CACHE_DIR = os.path.join(_ROOT_DIR, "cache", "gallery_previews")
 _FIRE_CONFIG_FILE = os.path.join(_ROOT_DIR, "config_states", "endgal_fire_config.txt")
 _FIRE_CONFIG_DEFAULT = "steps: 14"
+_reverse_unrated_enabled = False
 
 
 def _normalize_fire_keyword(token: str) -> str:
@@ -1052,7 +1053,7 @@ def _thumb_size_css_class(thumb_size: str) -> str:
     return "endgal-thumb-medium"
 
 
-def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter: str, thumb_size: str, card_extras_mode: str):
+def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter: str, thumb_size: str, card_extras_mode: str, reverse_unrated: bool = False):
     total, rows = _fetch_mode_records(mode, query, page, page_size, date_filter)
     pages = max(1, (total + int(page_size) - 1) // int(page_size))
     page = max(1, min(int(page), pages))
@@ -1091,6 +1092,9 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     tags_map = endorsement_db.get_tags_for_items(valid_keys)
     archived_keys = endorsement_db.get_archived_item_keys(valid_keys) if hasattr(endorsement_db, "get_archived_item_keys") else set()
 
+    if "Unrated" in mode and reverse_unrated:
+        rows = list(reversed(rows))
+
     cards = []
     for rec, item_key in zip(rows, item_keys):
         path = rec.get("path") or rec.get("image_path", "")
@@ -1106,14 +1110,23 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     return header + grid, page_info, page, is_last_page
 
 
+def _current_reverse_unrated() -> bool:
+    return bool(_reverse_unrated_enabled)
+
+
+def _set_reverse_unrated(value) -> None:
+    global _reverse_unrated_enabled
+    _reverse_unrated_enabled = bool(value)
+
+
 def _reset_to_first_page(mode, query, page_size, date_filter, thumb_size, card_extras_mode):
-    html, info, page, is_last = render_gallery(mode, query, 1, int(page_size or PAGE_SIZE_DEFAULT), date_filter, thumb_size, card_extras_mode)
+    html, info, page, is_last = render_gallery(mode, query, 1, int(page_size or PAGE_SIZE_DEFAULT), date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
     return html, info, info, page
 
 
 def _goto_prev_page(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode):
     new_page = max(1, int(page or 1) - 1)
-    html, info, page, is_last = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT), date_filter, thumb_size, card_extras_mode)
+    html, info, page, is_last = render_gallery(mode, query, new_page, int(page_size or PAGE_SIZE_DEFAULT), date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
     return html, info, info, page
 
 
@@ -1127,15 +1140,20 @@ def _goto_next_page(mode, query, page, page_size, date_filter, thumb_size, card_
     
     # If already on last page, don't go further but signal end-of-gallery
     if current_page >= pages:
-        html, info, page, is_last = render_gallery(mode, query, current_page, page_size_int, date_filter, thumb_size, card_extras_mode)
+        html, info, page, is_last = render_gallery(mode, query, current_page, page_size_int, date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
         # Add end-of-gallery hint to info
         hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
         html_with_hint = html + hint_html
         return html_with_hint, info, info, page
     
     new_page = current_page + 1
-    html, info, page, is_last = render_gallery(mode, query, new_page, page_size_int, date_filter, thumb_size, card_extras_mode)
+    html, info, page, is_last = render_gallery(mode, query, new_page, page_size_int, date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
     return html, info, info, page
+
+
+def _set_reverse_unrated_and_reset(mode, query, page_size, date_filter, thumb_size, card_extras_mode, reverse_unrated):
+    _set_reverse_unrated(reverse_unrated)
+    return _reset_to_first_page(mode, query, page_size, date_filter, thumb_size, card_extras_mode)
 
 
 def handle_gallery_action(action_json: str, mode: str, query: str, page: int, page_size: int, date_filter: str, thumb_size: str, card_extras_mode: str):
@@ -1221,7 +1239,7 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         else:
             status_message = f'<div class="endgal-sync-result">{status_message}</div>'
 
-    html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode)
+    html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
     
     # If gallery became empty after action (e.g., endorsed last image and filter changed), show hint
     if '<div class="endgal-empty">' in html:
@@ -1490,7 +1508,7 @@ def on_ui_tabs():
 
         def do_sync(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
             msg = sync_all_to_db()
-            html, info, page, is_last = render_gallery(mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode)
+            html, info, page, is_last = render_gallery(mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
             return f'<div class="endgal-sync-result">{_html.escape(msg)}</div>', html, info, info, page
 
         def do_archive_unrated(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
@@ -1508,6 +1526,11 @@ def on_ui_tabs():
         mode_radio.change(
             fn=_reset_to_first_page,
             inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode],
+            outputs=[gallery_html, page_info, page_info_bottom, page_state],
+        )
+        reverse_unrated.change(
+            fn=_set_reverse_unrated_and_reset,
+            inputs=[mode_radio, search_box, page_size, date_filter, thumb_size, card_extras_mode, reverse_unrated],
             outputs=[gallery_html, page_info, page_info_bottom, page_state],
         )
         search_box.submit(
