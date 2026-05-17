@@ -1088,6 +1088,7 @@
             'endgal_date_filter',
             'endgal_thumb_size',
             'endgal_card_extras_mode',
+            'endgal_auto_refresh_interval',
         ];
 
         function patchDropdownInput(host) {
@@ -2256,37 +2257,79 @@
         return mode.includes('Unrated');
     }
 
+    function parseAutoRefreshSeconds(raw) {
+        const text = String(raw || '').trim();
+        if (!text) return null;
+
+        const lower = text.toLowerCase();
+        if (lower === 'off' || lower.includes('off')) return 0;
+
+        const m = text.match(/(\d+)\s*s?/i);
+        if (!m) return null;
+
+        const secs = Number(m[1]) || 0;
+        return secs > 0 ? secs : 0;
+    }
+
     function getAutoRefreshIntervalSeconds() {
         const host = gradioApp().querySelector('#endgal_auto_refresh_interval');
         if (!host) return 10;
 
         const candidates = [];
+
+        const select = host.querySelector('select');
+        if (select) {
+            if (typeof select.value === 'string') candidates.push(select.value.trim());
+            const selectedOpt = select.options && select.selectedIndex >= 0
+                ? select.options[select.selectedIndex]
+                : null;
+            if (selectedOpt) {
+                candidates.push(String(selectedOpt.value || '').trim());
+                candidates.push(String(selectedOpt.textContent || '').trim());
+            }
+        }
+
         const hidden = host.querySelector('input[type="hidden"]');
         if (hidden && typeof hidden.value === 'string') candidates.push(hidden.value.trim());
 
         const textInput = host.querySelector('input[type="text"]');
         if (textInput && typeof textInput.value === 'string') candidates.push(textInput.value.trim());
 
-        const selected = host.querySelector('[aria-selected="true"]');
-        if (selected && selected.textContent) candidates.push(selected.textContent.trim());
+        const single = host.querySelector('.single-select');
+        if (single && single.textContent) candidates.push(single.textContent.trim());
 
-        for (const raw of candidates) {
-            if (!raw) continue;
-            const lower = raw.toLowerCase();
-            if (lower.includes('off')) return 0;
-            const m = raw.match(/(\d+)/);
-            if (m) {
-                const secs = Number(m[1]) || 0;
-                if (secs > 0) return secs;
+        const selectedAria = host.querySelector('[aria-selected="true"]');
+        if (selectedAria) {
+            if (selectedAria.textContent) candidates.push(selectedAria.textContent.trim());
+            if (selectedAria.dataset && selectedAria.dataset.value) {
+                candidates.push(String(selectedAria.dataset.value).trim());
             }
         }
 
-        // If we cannot confidently parse the current selection, fail safe to Off.
-        return 0;
+        const selectedItem = host.querySelector('.options .item.selected');
+        if (selectedItem) {
+            if (selectedItem.textContent) candidates.push(selectedItem.textContent.trim());
+            if (selectedItem.dataset && selectedItem.dataset.value) {
+                candidates.push(String(selectedItem.dataset.value).trim());
+            }
+        }
+
+        if (host.dataset && host.dataset.value) {
+            candidates.push(String(host.dataset.value).trim());
+        }
+
+        for (const raw of candidates) {
+            const secs = parseAutoRefreshSeconds(raw);
+            if (secs !== null) return secs;
+        }
+
+        // Keep default behavior usable even if Gradio DOM shape changes.
+        return 10;
     }
 
     let autoRefreshTimer = null;
     let lastAutoRefreshAt = 0;
+    let periodicLastIntervalSeconds = null;
     function requestUnratedAutoRefresh(reason) {
         if (!isGalleryTabVisible() || !isUnratedModeActive()) return;
         if (isPreviewOpen()) return;
@@ -2332,8 +2375,14 @@
             const seconds = getAutoRefreshIntervalSeconds();
             if (seconds <= 0) return;
 
+            if (periodicLastIntervalSeconds !== seconds) {
+                periodicLastIntervalSeconds = seconds;
+                lastAutoRefreshAt = Date.now();
+                return;
+            }
+
             const now = Date.now();
-            if (now - lastAutoRefreshAt < (seconds * 1000)) return;
+            if ((now - lastAutoRefreshAt) < (seconds * 1000)) return;
             requestUnratedAutoRefresh('periodic');
         }, 1000);
     }

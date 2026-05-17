@@ -938,16 +938,6 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
 """
 
 
-def _load_image_for_apply(path: str):
-    try:
-        if not path or not os.path.exists(path):
-            return None
-        with Image.open(path) as img:
-            return img.convert("RGBA")
-    except Exception:
-        return None
-
-
 def _date_filter_to_since_ts(date_filter: str):
     value = (date_filter or "").strip().lower()
     if value in ("", "all", "all time"):
@@ -1516,12 +1506,8 @@ def on_ui_tabs():
         action_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_action_btn")
 
         infotext_for_apply = gr.Textbox(value="", visible=False, elem_id="endorsed_gallery_infotext_apply")
-        image_path_for_apply = gr.Textbox(value="", visible=False, elem_id="endorsed_gallery_image_path_apply")
-        image_for_apply = gr.Image(value=None, visible=False, type="pil", elem_id="endorsed_gallery_image_apply")
-        load_image_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_load_image_btn")
         apply_txt2img_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_apply_txt2img_btn")
         apply_img2img_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_apply_img2img_btn")
-        apply_extras_btn = gr.Button("", visible=False, elem_id="endorsed_gallery_apply_extras_btn")
         save_fire_cfg_btn = gr.Button("", visible=False, elem_id="endgal_fire_config_save_btn")
         fire_cfg_save_state = gr.Textbox(value="", visible=False, elem_id="endgal_fire_config_save_state")
         fire_value_suggestions_json = gr.Textbox(
@@ -1538,21 +1524,6 @@ def on_ui_tabs():
                     source_text_component=infotext_for_apply,
                 )
             )
-
-        infotext_utils.register_paste_params_button(
-            infotext_utils.ParamBinding(
-                paste_button=apply_extras_btn,
-                tabname="extras",
-                source_image_component=image_for_apply,
-            )
-        )
-
-        load_image_btn.click(
-            fn=_load_image_for_apply,
-            inputs=[image_path_for_apply],
-            outputs=[image_for_apply],
-            show_progress=False,
-        )
 
         save_fire_cfg_btn.click(
             fn=_save_fire_override_config,

@@ -181,10 +181,6 @@ function generationImageCount(tabname, argsLike) {
 }
 
 function notifyGenerationEvent(tabname, imageCount, phase, source) {
-    if (!window.webuiBanner || typeof window.webuiBanner.show !== 'function') {
-        return;
-    }
-
     var typeLabel = tabname === 'img2img' ? 'img2img' : 'txt2img';
     var count = Math.max(1, Number(imageCount) || 1);
     var sourceLabel = source === 'queue' ? 'Queued ' : '';
@@ -192,11 +188,13 @@ function notifyGenerationEvent(tabname, imageCount, phase, source) {
         ? sourceLabel + typeLabel + ' finished: ' + count + ' image' + (count === 1 ? '' : 's')
         : sourceLabel + typeLabel + ' started: ' + count + ' image' + (count === 1 ? '' : 's');
 
-    window.webuiBanner.show(message, {
-        key: 'job-' + typeLabel + '-' + phase + '-' + source,
-        kind: phase === 'finish' ? 'success' : 'info',
-        duration: phase === 'finish' ? 4200 : 3200,
-    });
+    if (window.webuiBanner && typeof window.webuiBanner.show === 'function') {
+        window.webuiBanner.show(message, {
+            key: 'job-' + typeLabel + '-' + phase + '-' + source,
+            kind: phase === 'finish' ? 'success' : 'info',
+            duration: phase === 'finish' ? 4200 : 3200,
+        });
+    }
 
     try {
         window.dispatchEvent(new CustomEvent('webui:generation', {
