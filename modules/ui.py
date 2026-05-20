@@ -457,6 +457,13 @@ def create_ui():
 
             toprow.prompt.submit(**txt2img_args)
             toprow.submit.click(**txt2img_args)
+            output_panel.button_quick_generate.click(
+                fn=wrap_gradio_gpu_call(guarded_txt2img, extra_outputs=[None, '', '']),
+                _js="submit_txt2img_quick",
+                inputs=txt2img_inputs,
+                outputs=txt2img_outputs,
+                show_progress=False,
+            )
 
             toprow.queue_btn.click(
                 fn=job_queue.add_to_queue_txt2img,

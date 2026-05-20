@@ -1977,6 +1977,17 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
 
     def sample(self, conditioning, unconditional_conditioning, seeds, subseeds, subseed_strength, prompts):
         x = self.rng.next()
+        restore_attention_optimization = False
+
+        try:
+            import modules.sd_hijack as sd_hijack
+
+            current_optimizer = sd_hijack.current_optimizer.name if sd_hijack.current_optimizer is not None else None
+            if opts.img2img_force_sdp_attention and current_optimizer not in (None, "sdp", "sdp-no-mem", "xformers"):
+                sd_hijack.model_hijack.apply_optimizations("sdp - scaled dot product")
+                restore_attention_optimization = True
+        except Exception as e:
+            print(f"Failed to switch attention optimization for img2img pass: {e}")
 
         if self.initial_noise_multiplier != 1.0:
             self.extra_generation_params["Noise multiplier"] = self.initial_noise_multiplier
@@ -1990,22 +2001,31 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
                 c=conditioning,
                 uc=unconditional_conditioning
             )
-        samples = self.sampler.sample_img2img(self, self.init_latent, x, conditioning, unconditional_conditioning, image_conditioning=self.image_conditioning)
+        try:
+            samples = self.sampler.sample_img2img(self, self.init_latent, x, conditioning, unconditional_conditioning, image_conditioning=self.image_conditioning)
 
-        if self.mask is not None:
-            blended_samples = samples * self.nmask + self.init_latent * self.mask
+            if self.mask is not None:
+                blended_samples = samples * self.nmask + self.init_latent * self.mask
 
-            if self.scripts is not None:
-                mba = scripts.MaskBlendArgs(samples, self.nmask, self.init_latent, self.mask, blended_samples)
-                self.scripts.on_mask_blend(self, mba)
-                blended_samples = mba.blended_latent
+                if self.scripts is not None:
+                    mba = scripts.MaskBlendArgs(samples, self.nmask, self.init_latent, self.mask, blended_samples)
+                    self.scripts.on_mask_blend(self, mba)
+                    blended_samples = mba.blended_latent
 
-            samples = blended_samples
+                samples = blended_samples
 
-        del x
-        devices.torch_gc()
+            del x
+            devices.torch_gc()
 
-        return samples
+            return samples
+        finally:
+            if restore_attention_optimization:
+                try:
+                    import modules.sd_hijack as sd_hijack
+                    sd_hijack.model_hijack.apply_optimizations(opts.cross_attention_optimization)
+                except Exception as e:
+                    print(f"Failed to restore attention optimization after img2img pass: {e}")
 
     def get_token_merging_ratio(self, for_hr=False):
-        return self.token_merging_ratio or ("token_merging_ratio" in self.override_settings and opts.token_merging_ratio) or opts.token_merging_ratio_img2img or opts.token_merging_ratio
+        img2img_fallback_ratio = opts.token_merging_ratio_hr if opts.img2img_use_hr_token_merging_fallback else 0
+        return self.token_merging_ratio or ("token_merging_ratio" in self.override_settings and opts.token_merging_ratio) or opts.token_merging_ratio_img2img or img2img_fallback_ratio or opts.token_merging_ratio

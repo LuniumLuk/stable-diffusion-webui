@@ -226,6 +226,7 @@ class OutputPanel:
     infotext = None
     html_log = None
     button_upscale = None
+    button_quick_generate = None
 
 
 def create_output_panel(tabname, outdir, toprow=None):
@@ -250,6 +251,10 @@ def create_output_panel(tabname, outdir, toprow=None):
             toprow.create_inline_toprow_image()
 
         with gr.Column(variant='panel', elem_id=f"{tabname}_results_panel"):
+            if tabname == "txt2img":
+                with gr.Row(elem_id="txt2img_quick_generate_row"):
+                    res.button_quick_generate = gr.Button("Quick Generate", elem_id="txt2img_quick_generate", variant='secondary')
+
             with gr.Group(elem_id=f"{tabname}_gallery_container"):
                 res.gallery = gr.Gallery(label='Output', show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None)
 

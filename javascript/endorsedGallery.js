@@ -1830,6 +1830,25 @@
             });
             previewActionsEl.appendChild(downloadBtn);
 
+            const censorBtn = document.createElement('button');
+            censorBtn.className = 'endgal-preview-action';
+            censorBtn.title = 'Open in Censor panel';
+            const censorOrigUrl = item && (item.origUrl || item.src) ? (item.origUrl || item.src) : '';
+            censorBtn.disabled = !censorOrigUrl;
+            censorBtn.innerHTML = '<span class="endgal-preview-action-icon">🖊</span><span class="endgal-preview-action-label">To Censor</span>';
+            censorBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!censorOrigUrl) return;
+                switchToTabByName('censor');
+                setTimeout(() => {
+                    if (window.censorPanel && window.censorPanel.openUrl) {
+                        window.censorPanel.openUrl(censorOrigUrl);
+                    }
+                }, 150);
+                hidePreview();
+            });
+            previewActionsEl.appendChild(censorBtn);
+
             const closeBtn = document.createElement('button');
             closeBtn.className = 'endgal-preview-action endgal-preview-action-close';
             closeBtn.title = 'Close preview';

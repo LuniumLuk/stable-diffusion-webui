@@ -446,6 +446,12 @@
 
     updateLineWidthUI();
     refreshCanvasCssSize();
+
+    // Expose per-instance API so external callers can push a URL into this panel.
+    if (!window.censorPanel) window.censorPanel = {};
+    window.censorPanel.openUrl = function (url) {
+      if (url) loadImageFromSrc(url);
+    };
   }
 
   window.censor_export_png = function () {

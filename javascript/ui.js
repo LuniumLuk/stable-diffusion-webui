@@ -143,10 +143,15 @@ function showSubmitInterruptingPlaceholder(tabname) {
 
 function setGenerateButtonsShown(show) {
     var txt2imgGenerate = gradioApp().getElementById('txt2img_generate');
+    var txt2imgQuickGenerate = gradioApp().getElementById('txt2img_quick_generate');
     var img2imgGenerate = gradioApp().getElementById('img2img_generate');
 
     if (txt2imgGenerate) {
         txt2imgGenerate.style.display = show ? '' : 'none';
+    }
+
+    if (txt2imgQuickGenerate) {
+        txt2imgQuickGenerate.style.display = show ? '' : 'none';
     }
 
     if (img2imgGenerate) {
@@ -236,6 +241,17 @@ function submit_txt2img_upscale() {
     var res = submit(...arguments);
 
     res[2] = selected_gallery_index();
+
+    return res;
+}
+
+function submit_txt2img_quick() {
+    var res = submit(...arguments);
+
+    // Override outgoing args only: keep UI controls untouched.
+    res[4] = 1;   // batch_count (n_iter)
+    res[5] = 1;   // batch_size
+    res[9] = false; // enable_hr
 
     return res;
 }
