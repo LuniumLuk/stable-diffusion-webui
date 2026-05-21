@@ -38,6 +38,7 @@
     const FIRE_CANONICAL_KEYS = [
         'Prompt',
         'Negative prompt',
+        'Hires stage',
         'Enable Hires fix',
         'Steps',
         'Sampler',
@@ -61,6 +62,9 @@
         neg: 'Negative prompt',
         negative: 'Negative prompt',
         'negative prompt': 'Negative prompt',
+        'hires stage': 'Hires stage',
+        'hires_stage': 'Hires stage',
+        'hr stage': 'Hires stage',
         'enable hires fix': 'Enable Hires fix',
         'hires fix': 'Enable Hires fix',
         'enable hr fix': 'Enable Hires fix',
@@ -119,6 +123,10 @@
             'Latent (bicubic antialiased)',
             'Lanczos',
             'ESRGAN_4x',
+        ],
+        'Hires stage': [
+            '"scale: 1.15, steps: 8; scale: 1.45, denoise: 0.55"',
+            '"scale: 1.2, cfg: 5.5, steps: 10; scale: 1.6, cfg: 6, denoise: 0.5"',
         ],
         'Schedule type': [
             'Automatic',
@@ -462,6 +470,9 @@
 
     function getAllValueChoicesForKey(canonicalKey) {
         const key = String(canonicalKey || '');
+        if (key === 'Hires stage') {
+            return uniqStrings([...(FIRE_VALUE_SUGGEST_DEFAULTS['Hires stage'] || [])]);
+        }
         if (key === 'Prompt' || key === 'Negative prompt') {
             return getDbValueSuggestionsForKey(key);
         }
@@ -690,15 +701,6 @@
         if (!key) return { ok: true };
         if (!raw) return { ok: false, reason: `empty value for '${key}'` };
 
-        const lower = raw.toLowerCase();
-        const enumChoices = getAllValueChoicesForKey(key);
-        if (enumChoices.length) {
-            const matched = enumChoices.some((x) => x.toLowerCase() === lower);
-            return matched
-                ? { ok: true, normalized: enumChoices.find((x) => x.toLowerCase() === lower) || raw }
-                : { ok: false, reason: `invalid value '${raw}' for '${key}'` };
-        }
-
         function asNumber() {
             const n = Number(raw);
             return Number.isFinite(n) ? n : null;
@@ -708,6 +710,86 @@
             if (!/^-?\d+$/.test(raw)) return null;
             const n = Number(raw);
             return Number.isFinite(n) ? n : null;
+        }
+
+        function parseHiresStageConfigValue(quotedRaw) {
+            const s = String(quotedRaw || '');
+            if (s.length < 2 || s[0] !== '"' || s[s.length - 1] !== '"') {
+                return { ok: false, reason: `Hires stage must be wrapped in double quotes` };
+            }
+
+            const inner = s.slice(1, -1).trim();
+            if (!inner) {
+                return { ok: false, reason: `Hires stage cannot be empty` };
+            }
+            if (/\r|\n/.test(inner)) {
+                return { ok: false, reason: `Hires stage in Fire Config must use ';' to separate stages` };
+            }
+
+            const stageChunks = inner.split(';').map((x) => x.trim()).filter(Boolean);
+            if (!stageChunks.length) {
+                return { ok: false, reason: `Hires stage must contain at least one stage` };
+            }
+
+            for (let i = 0; i < stageChunks.length; i += 1) {
+                const line = stageChunks[i];
+                const parts = line.split(',').map((x) => x.trim()).filter(Boolean);
+                if (!parts.length) {
+                    return { ok: false, reason: `Hires stage stage #${i + 1} is empty` };
+                }
+
+                const stage = {};
+                for (let p = 0; p < parts.length; p += 1) {
+                    const item = parts[p];
+                    const idx = item.indexOf(':');
+                    if (idx <= 0) {
+                        return { ok: false, reason: `Hires stage stage #${i + 1} has invalid item '${item}'` };
+                    }
+                    const k = item.slice(0, idx).trim().toLowerCase();
+                    const v = item.slice(idx + 1).trim();
+                    const num = Number(v);
+
+                    if (k === 'scale') {
+                        if (!Number.isFinite(num) || num <= 1.0) {
+                            return { ok: false, reason: `Hires stage scale must be > 1 (stage #${i + 1})` };
+                        }
+                        stage.scale = num;
+                    } else if (k === 'cfg') {
+                        if (!Number.isFinite(num)) {
+                            return { ok: false, reason: `Hires stage cfg must be numeric (stage #${i + 1})` };
+                        }
+                    } else if (k === 'steps') {
+                        if (!Number.isFinite(num) || Math.round(num) < 0) {
+                            return { ok: false, reason: `Hires stage steps must be integer >= 0 (stage #${i + 1})` };
+                        }
+                    } else if (k === 'denoise') {
+                        if (!Number.isFinite(num) || num < 0 || num > 1) {
+                            return { ok: false, reason: `Hires stage denoise must be between 0 and 1 (stage #${i + 1})` };
+                        }
+                    } else {
+                        return { ok: false, reason: `Hires stage unknown key '${k}' (stage #${i + 1})` };
+                    }
+                }
+
+                if (!Number.isFinite(stage.scale)) {
+                    return { ok: false, reason: `Hires stage requires scale in each stage (stage #${i + 1})` };
+                }
+            }
+
+            return { ok: true };
+        }
+
+        if (key === 'Hires stage') {
+            return parseHiresStageConfigValue(raw);
+        }
+
+        const lower = raw.toLowerCase();
+        const enumChoices = getAllValueChoicesForKey(key);
+        if (enumChoices.length) {
+            const matched = enumChoices.some((x) => x.toLowerCase() === lower);
+            return matched
+                ? { ok: true, normalized: enumChoices.find((x) => x.toLowerCase() === lower) || raw }
+                : { ok: false, reason: `invalid value '${raw}' for '${key}'` };
         }
 
         if (key === 'Steps') {
@@ -1212,7 +1294,8 @@
         let updated = String(infotext || '').trim();
         (overrides || []).forEach((entry) => {
             if (!entry || !entry.key) return;
-            updated = upsertInfotextParam(updated, entry.key, entry.value);
+            const key = entry.key === 'Hires stage' ? 'Hires stage config' : entry.key;
+            updated = upsertInfotextParam(updated, key, entry.value);
         });
         return updated;
     }

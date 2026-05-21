@@ -1259,6 +1259,13 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                         stage["steps"] = max(0, int(round(float(value))))
                     except Exception:
                         continue
+                elif key == "denoise":
+                    try:
+                        denoise = float(value)
+                        if 0.0 <= denoise <= 1.0:
+                            stage["denoise"] = denoise
+                    except Exception:
+                        continue
 
             scale = stage.get("scale")
             if scale is None or scale <= 1.0:
@@ -1268,6 +1275,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 "scale": float(scale),
                 "cfg": stage.get("cfg"),
                 "steps": stage.get("steps"),
+                "denoise": stage.get("denoise"),
             })
 
         return parsed
@@ -1301,6 +1309,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 "target_height": target_h,
                 "steps": stage.get("steps") if stage.get("steps") is not None else default_steps,
                 "cfg": stage.get("cfg"),
+                "denoise": stage.get("denoise"),
                 "scale": stage.get("scale"),
                 "is_final": False,
             })
@@ -1312,6 +1321,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 "target_height": final_h,
                 "steps": default_steps,
                 "cfg": None,
+                "denoise": None,
                 "scale": None,
                 "is_final": True,
             })
@@ -1407,7 +1417,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 for stage in self.hr_stage_plan:
                     target_scale = stage["target_width"] / self.width
                     cfg_used = stage["cfg"] if stage["cfg"] is not None else self.cfg_scale
-                    plan_parts.append(f"{round(prev_scale, 3)}->{round(target_scale, 3)} cfg={cfg_used} steps={stage['steps']}")
+                    denoise_used = stage["denoise"] if stage["denoise"] is not None else self.denoising_strength
+                    plan_parts.append(f"{round(prev_scale, 3)}->{round(target_scale, 3)} cfg={cfg_used} steps={stage['steps']} denoise={denoise_used}")
                     prev_scale = target_scale
                 self.extra_generation_params["Hires stage plan"] = "; ".join(plan_parts)
 
@@ -1548,6 +1559,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             return recovered
 
         original_cfg_scale = self.cfg_scale
+        original_denoising_strength = self.denoising_strength
 
         try:
             for stage_index, stage in enumerate(stage_plan):
@@ -1558,6 +1570,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 target_height = stage["target_height"]
                 stage_steps = stage["steps"]
                 stage_cfg = original_cfg_scale if stage["cfg"] is None else stage["cfg"]
+                stage_denoise = original_denoising_strength if stage["denoise"] is None else stage["denoise"]
 
                 if self.latent_scale_mode is not None:
                     if stage_index == 0:
@@ -1612,6 +1625,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 self.hr_upscale_to_x = target_width
                 self.hr_upscale_to_y = target_height
                 self.cfg_scale = stage_cfg
+                self.denoising_strength = stage_denoise
                 self.hr_c = None
                 self.hr_uc = None
 
@@ -1671,6 +1685,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             return decoded_samples
         finally:
             self.cfg_scale = original_cfg_scale
+            self.denoising_strength = original_denoising_strength
             sd_models.apply_token_merging(self.sd_model, self.get_token_merging_ratio())
             self.sampler = None
             devices.torch_gc()
