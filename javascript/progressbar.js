@@ -120,7 +120,11 @@ function ensureGlobalGpuProgressBar() {
 
 function renderGlobalStatusResponse(res) {
     ensureGlobalGpuProgressBar();
-    if (!res || (!res.active && !res.queued_count)) {
+    var queuePanelQueued = res ? Math.max(0, Number(res.queue_panel_queued_count) || 0) : 0;
+    var queuedFallback = res ? Math.max(0, Number(res.queued_count) || 0) : 0;
+    var effectiveQueued = queuePanelQueued > 0 ? queuePanelQueued : queuedFallback;
+
+    if (!res || (!res.active && !effectiveQueued)) {
         globalGpuProgress.root.style.display = 'none';
         globalGpuProgress.fill.style.width = '0%';
         globalGpuProgress.fill.textContent = '';
@@ -152,8 +156,8 @@ function renderGlobalStatusResponse(res) {
         if (res.eta !== null && res.eta !== undefined && res.eta > 0) {
             parts.push('ETA ' + formatTime(res.eta));
         }
-    } else if (res.queued_count > 0) {
-        parts.push('Queued: ' + res.queued_count);
+    } else if (effectiveQueued > 0) {
+        parts.push('Queued: ' + effectiveQueued);
     }
 
     if (res.vram_total_gb > 0) {
@@ -165,7 +169,7 @@ function renderGlobalStatusResponse(res) {
     if (globalGpuProgress.meta) {
         var finished = Math.max(0, Number(res.finished_images) || 0);
         var total = Math.max(0, Number(res.total_images) || 0);
-        var queued = Math.max(0, Number(res.queued_count) || 0);
+        var queued = effectiveQueued;
         globalGpuProgress.meta.textContent = 'Done ' + finished + '  |  Total ' + total + '  |  Queue ' + queued;
         globalGpuProgress.meta.style.display = 'flex';
     }

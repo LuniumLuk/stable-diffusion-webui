@@ -92,6 +92,16 @@ def global_status_api():
     state_job_count = int(shared.state.job_count or 0)
     active = state_job_count > 0 or (current_task is not None)
     queued_count = len(pending_tasks)
+    queue_panel_queued_count = 0
+    try:
+        # Keep capsule queue count aligned with Queue tab numbers.
+        from modules import job_queue as job_queue_module
+
+        queue_panel_queued_count = sum(
+            1 for job in job_queue_module.queue_manager.get_snapshot() if getattr(job, "status", "") == "queued"
+        )
+    except Exception:
+        queue_panel_queued_count = 0
 
     progress = 0.0
     eta = None
@@ -137,6 +147,7 @@ def global_status_api():
     return {
         "active": active,
         "queued_count": queued_count,
+        "queue_panel_queued_count": queue_panel_queued_count,
         "finished_images": finished_images,
         "total_images": total_images,
         "progress": round(progress, 4),
