@@ -272,6 +272,36 @@
         return true;
     }
 
+    /**
+     * Force-set a Gradio slider (number + optional range input) by its elem_id.
+     * Uses the native HTMLInputElement value setter so Svelte/React state updates.
+     */
+    function setGradioSlider(elemId, numValue) {
+        const host = gradioApp().querySelector(`#${elemId}`);
+        if (!host) return false;
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+        ).set;
+        let updated = false;
+        // Update the visible number input (Gradio renders this for the text field of a slider)
+        const numInput = host.querySelector('input[type="number"]');
+        if (numInput) {
+            nativeSetter.call(numInput, String(numValue));
+            numInput.dispatchEvent(new Event('input', { bubbles: true }));
+            numInput.dispatchEvent(new Event('change', { bubbles: true }));
+            updated = true;
+        }
+        // Also sync the range track if present
+        const rangeInput = host.querySelector('input[type="range"]');
+        if (rangeInput) {
+            nativeSetter.call(rangeInput, String(numValue));
+            rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
+            rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
+            updated = true;
+        }
+        return updated;
+    }
+
     /** Click a Gradio button element by its elem_id. */
     function clickGradioBtn(elemId, delay = 80) {
         setTimeout(() => {
@@ -951,6 +981,23 @@
             }
         }
 
+        let _fireConfigSaveTimer = null;
+        function schedulePersistFireConfigToServer() {
+            if (_fireConfigSaveTimer) clearTimeout(_fireConfigSaveTimer);
+            _fireConfigSaveTimer = setTimeout(() => {
+                _fireConfigSaveTimer = null;
+                clickGradioBtn('endgal_fire_config_save_btn', 0);
+            }, 800);
+        }
+
+        function flushPersistFireConfigToServer() {
+            if (_fireConfigSaveTimer) {
+                clearTimeout(_fireConfigSaveTimer);
+                _fireConfigSaveTimer = null;
+            }
+            clickGradioBtn('endgal_fire_config_save_btn', 0);
+        }
+
         function applyValidationState() {
             const result = validateFireOverrideConfig(textarea.value || '');
             host.classList.toggle('endgal-fire-config-invalid', !result.valid);
@@ -1096,6 +1143,7 @@
 
         textarea.addEventListener('input', () => {
             persistFireConfig(textarea.value || '');
+            schedulePersistFireConfigToServer();
             syncHighlight();
             renderHints();
             applyValidationState();
@@ -1138,7 +1186,9 @@
         });
 
         const savedRaw = loadSavedFireConfig();
-        if (!String(textarea.value || '').trim() && String(savedRaw || '').trim()) {
+        if (String(savedRaw || '').trim()) {
+            // Always prefer localStorage — it is updated on every keystroke so it is
+            // always at least as fresh as the server-side file.
             textarea.value = savedRaw;
             textarea.dispatchEvent(new Event('input', { bubbles: true }));
         }
@@ -2163,10 +2213,24 @@
                 return;
             }
 
+            const totalJobs = overrideSets.length;
+
+            // Flush the fire config to the server-side file immediately so the latest
+            // config is persisted even if the textarea hasn't lost focus yet.
+            clickGradioBtn('endgal_fire_config_save_btn', 0);
+
+            if (window.webuiBanner) {
+                const msg = totalJobs === 1
+                    ? 'Fire: queuing 1 job\u2026'
+                    : `Fire: queuing ${totalJobs} jobs\u2026`;
+                window.webuiBanner.show(msg, { kind: 'info', duration: totalJobs * 650 + 1800 });
+            }
+
             suppressTxt2imgSwitch = true;
             try {
                 for (let i = 0; i < overrideSets.length; i += 1) {
-                    const infotext = applyInfotextOverrides(baseInfotext, overrideSets[i]);
+                    const currentSet = overrideSets[i];
+                    const infotext = applyInfotextOverrides(baseInfotext, currentSet);
                     if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
                         console.warn('[endorsedGallery] infotext_apply textbox not found');
                         return;
@@ -2182,11 +2246,27 @@
                     }
 
                     await sleep(320);
+
+                    // Force-set batch_count and batch_size sliders directly.
+                    // The infotext paste round-trip may not reliably update these sliders
+                    // (batch_count was previously absent from txt2img_paste_fields; belt-and-suspenders).
+                    const batchCountEntry = currentSet.find((e) => e.key === 'Batch count');
+                    const batchSizeEntry = currentSet.find((e) => e.key === 'Batch size');
+                    if (batchCountEntry) setGradioSlider('txt2img_batch_count', Number(batchCountEntry.value));
+                    if (batchSizeEntry) setGradioSlider('txt2img_batch_size', Number(batchSizeEntry.value));
+
                     queueBtn.click();
                     await sleep(260);
                 }
             } finally {
                 suppressTxt2imgSwitch = false;
+            }
+
+            if (window.webuiBanner) {
+                const msg = totalJobs === 1
+                    ? 'Fire: 1 job queued'
+                    : `Fire: ${totalJobs} jobs queued`;
+                window.webuiBanner.show(msg, { kind: 'success', duration: 3500 });
             }
         },
 

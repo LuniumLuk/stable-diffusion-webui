@@ -355,7 +355,7 @@ def create_ui():
                                         label="Stage config",
                                         elem_id="txt2img_hr_stage_config",
                                         lines=4,
-                                        placeholder="scale: 1.1, cfg: 5.5, steps: 10, denoise: 0.65\nscale: 1.25, cfg: 0, steps: 20\nscale: 1.5",
+                                        placeholder="scale: 1.1, cfg: 5.5, steps: 10;\nscale: 1.25, cfg: 0, steps: 20;\nscale: 1.5;",
                                     )
 
                                 with FormRow(elem_id="txt2img_hires_fix_row3", variant="compact", visible=opts.hires_fix_show_sampler) as hr_sampler_container:

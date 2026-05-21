@@ -1466,7 +1466,7 @@ def on_ui_tabs():
 
             with gr.Row(elem_id="endgal_hires_preset_row"):
                 hires_override_config = gr.Textbox(
-                    value=_load_fire_override_config(),
+                    value=_load_fire_override_config,
                     lines=2,
                     label="Queue Fire Config (one override set per line, comma-separated key:value)",
                     placeholder="steps: 14\nsteps: 18, cfg scale: 6.5\nhires steps: 10, denoising strength: 0.4",
