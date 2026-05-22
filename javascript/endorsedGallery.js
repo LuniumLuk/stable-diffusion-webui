@@ -2452,9 +2452,11 @@
         return secs > 0 ? secs : 0;
     }
 
+    let autoRefreshIntervalSecondsCache = 0;
+
     function getAutoRefreshIntervalSeconds() {
         const host = gradioApp().querySelector('#endgal_auto_refresh_interval');
-        if (!host) return 0;
+        if (!host) return autoRefreshIntervalSecondsCache;
 
         const candidates = [];
 
@@ -2504,11 +2506,14 @@
 
         for (const raw of candidates) {
             const secs = parseAutoRefreshSeconds(raw);
-            if (secs !== null) return secs;
+            if (secs !== null) {
+                autoRefreshIntervalSecondsCache = secs;
+                return secs;
+            }
         }
 
-        // Fail safe to Off when we cannot confidently resolve selection.
-        return 0;
+        // Keep last known valid interval when dropdown DOM is in transition.
+        return autoRefreshIntervalSecondsCache;
     }
 
     function ensureRefreshCountdownNode() {
@@ -2623,7 +2628,27 @@
 
             host.dataset.endgalAutoRefreshSyncBound = '1';
 
-            const onMaybeChanged = () => {
+            const onMaybeChanged = (event) => {
+                const target = event && event.target ? event.target : null;
+                if (target) {
+                    const directCandidates = [
+                        target.value,
+                        target.dataset && target.dataset.value,
+                        target.textContent,
+                    ];
+
+                    for (const raw of directCandidates) {
+                        const secs = parseAutoRefreshSeconds(raw);
+                        if (secs !== null) {
+                            autoRefreshIntervalSecondsCache = secs;
+                            break;
+                        }
+                    }
+                }
+
+                // Refresh from current host state too (this can overwrite cache with newer value).
+                getAutoRefreshIntervalSeconds();
+
                 // Re-prime cadence when interval may have changed.
                 periodicLastIntervalSeconds = null;
                 lastAutoRefreshAt = Date.now();

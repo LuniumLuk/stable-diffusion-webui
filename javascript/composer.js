@@ -23,12 +23,16 @@
       brushLastPoint: null,
       viewportX: 0,
       viewportY: 0,
+      viewportScale: 1,
       startClientX: 0,
       startClientY: 0,
       startViewportX: 0,
       startViewportY: 0,
       useColorBackground: false,
       backgroundColor: "#1e293b",
+      paintUndoStack: [],
+      paintRedoStack: [],
+      maxPaintHistory: 80,
     };
 
     const canvas = root.querySelector("#composer_canvas");
@@ -163,7 +167,106 @@
     }
 
     function applyCanvasViewport() {
-      canvas.style.transform = `translate(${state.viewportX}px, ${state.viewportY}px)`;
+      canvas.style.transformOrigin = "0 0";
+      canvas.style.transform = `translate(${state.viewportX}px, ${state.viewportY}px) scale(${state.viewportScale})`;
+    }
+
+    function captureLayerSnapshot(layer) {
+      if (!layer || !layer.img) return null;
+      const editable = ensureEditableLayerCanvas(layer);
+      if (!editable) return null;
+
+      return {
+        layerId: layer.id,
+        dataUrl: editable.toDataURL("image/png"),
+      };
+    }
+
+    async function restoreLayerSnapshot(snapshot) {
+      if (!snapshot || !snapshot.layerId || !snapshot.dataUrl) return false;
+      const layer = state.layers.find((x) => x.id === snapshot.layerId);
+      if (!layer) return false;
+
+      const img = await loadImageFromDataUrl(snapshot.dataUrl);
+      if (!img) return false;
+
+      const restored = document.createElement("canvas");
+      restored.width = Math.max(1, img.width);
+      restored.height = Math.max(1, img.height);
+      restored.getContext("2d").drawImage(img, 0, 0);
+      updateLayerImageSource(layer, restored);
+      return true;
+    }
+
+    function pushPaintUndoSnapshot(layer) {
+      const snap = captureLayerSnapshot(layer);
+      if (!snap) return;
+
+      state.paintUndoStack.push(snap);
+      if (state.paintUndoStack.length > state.maxPaintHistory) {
+        state.paintUndoStack.shift();
+      }
+      state.paintRedoStack = [];
+    }
+
+    async function undoPaint() {
+      if (state.paintUndoStack.length === 0) {
+        setStatus("Nothing to undo.");
+        return;
+      }
+
+      const overlay = ensurePaintOverlayLayer();
+      const current = captureLayerSnapshot(overlay);
+      const previous = state.paintUndoStack.pop();
+      if (!previous) {
+        setStatus("Nothing to undo.");
+        return;
+      }
+
+      if (current) {
+        state.paintRedoStack.push(current);
+        if (state.paintRedoStack.length > state.maxPaintHistory) {
+          state.paintRedoStack.shift();
+        }
+      }
+
+      const restored = await restoreLayerSnapshot(previous);
+      if (restored) {
+        draw();
+        setStatus("Undo paint stroke.");
+      } else {
+        setStatus("Undo failed.");
+      }
+    }
+
+    async function redoPaint() {
+      if (state.paintRedoStack.length === 0) {
+        setStatus("Nothing to redo.");
+        return;
+      }
+
+      const overlay = ensurePaintOverlayLayer();
+      const current = captureLayerSnapshot(overlay);
+      const next = state.paintRedoStack.pop();
+      if (!next) {
+        setStatus("Nothing to redo.");
+        return;
+      }
+
+      if (current) {
+        state.paintUndoStack.push(current);
+        if (state.paintUndoStack.length > state.maxPaintHistory) {
+          state.paintUndoStack.shift();
+        }
+      }
+
+      const restored = await restoreLayerSnapshot(next);
+      if (restored) {
+        draw();
+        setStatus("Redo paint stroke.");
+      } else {
+        setStatus("Redo failed.");
+      }
     }
 
     function getLayerSize(layer) {
@@ -926,6 +1029,7 @@
           renderLayerList();
 
           if (state.tool === "brush") {
+            pushPaintUndoSnapshot(layer);
             state.dragMode = "brush";
             state.brushLastPoint = imageLocal;
             strokeOnLayer(layer, imageLocal, imageLocal);
@@ -1067,6 +1171,7 @@
           canvasWrap.classList.remove("panning");
         }
       } else if (state.dragMode === "line" && layer && state.linePreview && state.linePreview.layerId === layer.id) {
+        pushPaintUndoSnapshot(layer);
         strokeOnLayer(layer, state.linePreview.start, state.linePreview.end);
         state.linePreview = null;
       } else if (state.dragMode === "crop" && state.cropPreview) {
@@ -1095,13 +1200,50 @@
       evt.preventDefault();
     });
 
-    window.addEventListener("keydown", (evt) => {
-      if (!state.lockToSelected || state.active < 0) return;
+    canvas.addEventListener("wheel", (evt) => {
+      evt.preventDefault();
 
+      const zoomStep = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const nextScale = Math.min(6, Math.max(0.25, state.viewportScale * zoomStep));
+      if (Math.abs(nextScale - state.viewportScale) < 0.0001) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const anchorX = evt.clientX - rect.left;
+      const anchorY = evt.clientY - rect.top;
+      const worldX = (anchorX - state.viewportX) / state.viewportScale;
+      const worldY = (anchorY - state.viewportY) / state.viewportScale;
+
+      state.viewportScale = nextScale;
+      state.viewportX = anchorX - worldX * nextScale;
+      state.viewportY = anchorY - worldY * nextScale;
+      applyCanvasViewport();
+      setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
+    }, { passive: false });
+
+    window.addEventListener("keydown", (evt) => {
       const target = evt.target;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
+
+      const key = evt.key.toLowerCase();
+      if ((evt.ctrlKey || evt.metaKey) && key === "z") {
+        evt.preventDefault();
+        if (evt.shiftKey) {
+          redoPaint();
+        } else {
+          undoPaint();
+        }
+        return;
+      }
+
+      if ((evt.ctrlKey || evt.metaKey) && key === "y") {
+        evt.preventDefault();
+        redoPaint();
+        return;
+      }
+
+      if (!state.lockToSelected || state.active < 0) return;
 
       if (state.lockEditBackground) {
         setActiveToBackground();
@@ -1109,8 +1251,6 @@
 
       const layer = state.layers[state.active];
       if (!canEditLayer(layer)) return;
-
-      const key = evt.key.toLowerCase();
       const moveStep = evt.shiftKey ? 20 : 8;
       let changed = false;
 
@@ -1145,18 +1285,16 @@
       const fileInput = bgUploadWrap.querySelector('input[type="file"]');
       if (!fileInput || fileInput.dataset.composerBound === "1") return;
 
-      fileInput.dataset.composerBound = "1";
-      fileInput.addEventListener("change", async () => {
-        const f = fileInput.files && fileInput.files[0];
-        if (!f) return;
+      const loadBackgroundFromFile = async (file) => {
+        if (!file || !String(file.type || "").startsWith("image/")) return;
 
-        const img = await loadImageFromFile(f);
+        const img = await loadImageFromFile(file);
         canvas.width = img.width;
         canvas.height = img.height;
         state.useColorBackground = false;
 
         const existingBgIndex = state.layers.findIndex((x) => x.isBackground);
-        const bgLayer = makeLayerFromImage(img, f.name, true);
+        const bgLayer = makeLayerFromImage(img, file.name || "Background", true);
         if (existingBgIndex >= 0) {
           state.layers[existingBgIndex] = bgLayer;
           state.active = existingBgIndex;
@@ -1173,9 +1311,37 @@
         fitCanvasToParent();
         renderLayerList();
         draw();
-        setStatus(`Background loaded: ${f.name} (${canvas.width}x${canvas.height})`);
+        setStatus(`Background loaded: ${file.name} (${canvas.width}x${canvas.height})`);
+      };
+
+      fileInput.dataset.composerBound = "1";
+      fileInput.addEventListener("change", async () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+
+        await loadBackgroundFromFile(f);
         clearUploadWidget(bgUploadWrap);
       });
+
+      if (bgUploadWrap.dataset.composerDropBound !== "1") {
+        bgUploadWrap.dataset.composerDropBound = "1";
+        bgUploadWrap.addEventListener("dragover", (evt) => {
+          evt.preventDefault();
+        });
+        bgUploadWrap.addEventListener("drop", async (evt) => {
+          evt.preventDefault();
+
+          const files = evt.dataTransfer ? Array.from(evt.dataTransfer.files || []) : [];
+          const imageFile = files.find((f) => String(f.type || "").startsWith("image/"));
+          if (!imageFile) {
+            setStatus("Drop an image file to set background.");
+            return;
+          }
+
+          await loadBackgroundFromFile(imageFile);
+          clearUploadWidget(bgUploadWrap);
+        });
+      }
     }
 
     function bindCharsInput() {
