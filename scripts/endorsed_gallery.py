@@ -1456,7 +1456,7 @@ def on_ui_tabs():
                         )
                         auto_refresh_interval = gr.Dropdown(
                             choices=["Off", "10s", "20s", "30s", "60s"],
-                            value="10s",
+                            value="Off",
                             label="Auto Refresh",
                             elem_id="endgal_auto_refresh_interval",
                             scale=1,

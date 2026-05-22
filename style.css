@@ -2011,6 +2011,30 @@ body.resizing .resize-handle {
     min-width: 102px;
 }
 
+#endgal_refresh_btn {
+    position: relative;
+    overflow: visible;
+}
+
+#endgal_refresh_countdown.endgal-refresh-countdown {
+    position: absolute;
+    top: -13px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--body-text-color-subdued, #9ca3af);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+    white-space: nowrap;
+}
+
+#endgal_refresh_countdown.endgal-refresh-countdown.show {
+    opacity: 0.9;
+}
+
 #endgal_sync_btn    { background: #1e3a5f; border-color: #38bdf8; }
 #endgal_sync_btn:hover { background: #0c4a6e; }
 #endgal_archive_unrated_btn { min-width: 142px; }

@@ -1220,7 +1220,6 @@
             'endgal_date_filter',
             'endgal_thumb_size',
             'endgal_card_extras_mode',
-            'endgal_auto_refresh_interval',
         ];
 
         function patchDropdownInput(host) {
@@ -2455,49 +2454,52 @@
 
     function getAutoRefreshIntervalSeconds() {
         const host = gradioApp().querySelector('#endgal_auto_refresh_interval');
-        if (!host) return 10;
+        if (!host) return 0;
 
         const candidates = [];
 
-        const select = host.querySelector('select');
-        if (select) {
-            if (typeof select.value === 'string') candidates.push(select.value.trim());
-            const selectedOpt = select.options && select.selectedIndex >= 0
-                ? select.options[select.selectedIndex]
-                : null;
-            if (selectedOpt) {
-                candidates.push(String(selectedOpt.value || '').trim());
-                candidates.push(String(selectedOpt.textContent || '').trim());
-            }
+        function pushCandidate(value) {
+            const text = String(value == null ? '' : value).trim();
+            if (!text) return;
+            candidates.push(text);
         }
 
-        const hidden = host.querySelector('input[type="hidden"]');
-        if (hidden && typeof hidden.value === 'string') candidates.push(hidden.value.trim());
-
-        const textInput = host.querySelector('input[type="text"]');
-        if (textInput && typeof textInput.value === 'string') candidates.push(textInput.value.trim());
-
-        const single = host.querySelector('.single-select');
-        if (single && single.textContent) candidates.push(single.textContent.trim());
-
+        // Prefer values from the currently rendered selected state first.
         const selectedAria = host.querySelector('[aria-selected="true"]');
         if (selectedAria) {
-            if (selectedAria.textContent) candidates.push(selectedAria.textContent.trim());
-            if (selectedAria.dataset && selectedAria.dataset.value) {
-                candidates.push(String(selectedAria.dataset.value).trim());
-            }
+            pushCandidate(selectedAria.dataset && selectedAria.dataset.value);
+            pushCandidate(selectedAria.textContent);
         }
 
         const selectedItem = host.querySelector('.options .item.selected');
         if (selectedItem) {
-            if (selectedItem.textContent) candidates.push(selectedItem.textContent.trim());
-            if (selectedItem.dataset && selectedItem.dataset.value) {
-                candidates.push(String(selectedItem.dataset.value).trim());
-            }
+            pushCandidate(selectedItem.dataset && selectedItem.dataset.value);
+            pushCandidate(selectedItem.textContent);
         }
 
-        if (host.dataset && host.dataset.value) {
-            candidates.push(String(host.dataset.value).trim());
+        const hidden = host.querySelector('input[type="hidden"]');
+        if (hidden) pushCandidate(hidden.value);
+
+        const textInput = host.querySelector('input[type="text"]');
+        if (textInput) pushCandidate(textInput.value);
+
+        const single = host.querySelector('.single-select');
+        if (single) pushCandidate(single.textContent);
+
+        if (host.dataset) pushCandidate(host.dataset.value);
+
+        const select = host.querySelector('select');
+        if (select) {
+            const selectedOpt = select.options && select.selectedIndex >= 0
+                ? select.options[select.selectedIndex]
+                : null;
+            if (selectedOpt) {
+                pushCandidate(selectedOpt.value);
+                pushCandidate(selectedOpt.textContent);
+            }
+            // Keep this as lowest-priority fallback because on some Gradio builds
+            // select.value can stay at the initial default while UI selection changes.
+            pushCandidate(select.value);
         }
 
         for (const raw of candidates) {
@@ -2505,8 +2507,43 @@
             if (secs !== null) return secs;
         }
 
-        // Keep default behavior usable even if Gradio DOM shape changes.
-        return 10;
+        // Fail safe to Off when we cannot confidently resolve selection.
+        return 0;
+    }
+
+    function ensureRefreshCountdownNode() {
+        const host = gradioApp().querySelector('#endgal_refresh_btn');
+        if (!host) return null;
+
+        let node = host.querySelector('#endgal_refresh_countdown');
+        if (node) return node;
+
+        node = document.createElement('div');
+        node.id = 'endgal_refresh_countdown';
+        node.className = 'endgal-refresh-countdown';
+        node.setAttribute('aria-live', 'polite');
+        node.textContent = '';
+        host.appendChild(node);
+        return node;
+    }
+
+    function renderRefreshCountdown() {
+        const node = ensureRefreshCountdownNode();
+        if (!node) return;
+
+        const intervalSeconds = getAutoRefreshIntervalSeconds();
+        const enabled = intervalSeconds > 0 && isGalleryTabVisible() && isUnratedModeActive();
+
+        if (!enabled) {
+            node.classList.remove('show');
+            node.textContent = '';
+            return;
+        }
+
+        const nextAt = lastAutoRefreshAt + (intervalSeconds * 1000);
+        const remainingSeconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+        node.textContent = `↻ ${remainingSeconds}s`;
+        node.classList.add('show');
     }
 
     let autoRefreshTimer = null;
@@ -2532,6 +2569,7 @@
             if (refreshBtn) {
                 lastAutoRefreshAt = Date.now();
                 refreshBtn.click();
+                renderRefreshCountdown();
             }
         }, reason === 'tab-switch' ? 150 : 320);
     }
@@ -2555,18 +2593,73 @@
             if (!isGalleryTabVisible() || !isUnratedModeActive()) return;
 
             const seconds = getAutoRefreshIntervalSeconds();
-            if (seconds <= 0) return;
+            if (seconds <= 0) {
+                renderRefreshCountdown();
+                return;
+            }
 
             if (periodicLastIntervalSeconds !== seconds) {
                 periodicLastIntervalSeconds = seconds;
                 lastAutoRefreshAt = Date.now();
+                renderRefreshCountdown();
                 return;
             }
+
+            renderRefreshCountdown();
 
             const now = Date.now();
             if ((now - lastAutoRefreshAt) < (seconds * 1000)) return;
             requestUnratedAutoRefresh('periodic');
         }, 1000);
+    }
+
+    function setupAutoRefreshDropdownSync() {
+        if (window.__endgalAutoRefreshDropdownSyncBound) return;
+        window.__endgalAutoRefreshDropdownSyncBound = true;
+
+        const bindHost = () => {
+            const host = gradioApp().querySelector('#endgal_auto_refresh_interval');
+            if (!host || host.dataset.endgalAutoRefreshSyncBound === '1') return;
+
+            host.dataset.endgalAutoRefreshSyncBound = '1';
+
+            const onMaybeChanged = () => {
+                // Re-prime cadence when interval may have changed.
+                periodicLastIntervalSeconds = null;
+                lastAutoRefreshAt = Date.now();
+                renderRefreshCountdown();
+            };
+
+            host.addEventListener('change', onMaybeChanged, true);
+            host.addEventListener('input', onMaybeChanged, true);
+            host.addEventListener('click', onMaybeChanged, true);
+            host.addEventListener('keydown', onMaybeChanged, true);
+
+            const hostObserver = new MutationObserver(() => {
+                onMaybeChanged();
+            });
+
+            hostObserver.observe(host, {
+                attributes: true,
+                childList: true,
+                subtree: true,
+            });
+
+            onMaybeChanged();
+        };
+
+        bindHost();
+
+        const app = gradioApp();
+        if (!app) return;
+        const appObserver = new MutationObserver(() => {
+            bindHost();
+        });
+
+        appObserver.observe(app, {
+            childList: true,
+            subtree: true,
+        });
     }
 
     // Wait for Gradio to finish rendering before attaching listeners
@@ -2582,6 +2675,7 @@
             setTimeout(onTabSwitch, 1500);
             setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
             setTimeout(setupUnratedPeriodicAutoRefresh, 700);
+            setTimeout(setupAutoRefreshDropdownSync, 800);
             setTimeout(setupEndOfGalleryMonitor, 1200);
             setTimeout(setupEndOfGalleryMonitor, 3000);
             setTimeout(setupReverseUnratedSync, 1500);
@@ -2598,6 +2692,7 @@
         setTimeout(onTabSwitch, 1500);
         setTimeout(setupUnratedAutoRefreshOnImageCompleted, 600);
         setTimeout(setupUnratedPeriodicAutoRefresh, 700);
+        setTimeout(setupAutoRefreshDropdownSync, 800);
         setTimeout(setupEndOfGalleryMonitor, 1200);
         setTimeout(setupEndOfGalleryMonitor, 3000);
         setTimeout(setupReverseUnratedSync, 1500);
