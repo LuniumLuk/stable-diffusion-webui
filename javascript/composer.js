@@ -1262,6 +1262,7 @@
       setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
     }, { passive: false });
 
+
     window.addEventListener("keydown", (evt) => {
       const target = evt.target;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -1269,6 +1270,44 @@
       }
 
       const key = evt.key.toLowerCase();
+
+      // --- Tool hotkeys ---
+      if (!evt.ctrlKey && !evt.metaKey && !evt.altKey) {
+        if (key === "b") {
+          setTool("brush");
+          evt.preventDefault();
+          return;
+        } else if (key === "l") {
+          setTool("line");
+          evt.preventDefault();
+          return;
+        } else if (key === "i") {
+          setTool("picker");
+          evt.preventDefault();
+          return;
+        } else if (key === "c") {
+          setTool("crop");
+          evt.preventDefault();
+          return;
+        } else if (key === "a") {
+          // Brush size smaller
+          if (state.tool === "brush") {
+            state.brushSize = Math.max(1, state.brushSize - 1);
+            updateToolUi();
+            evt.preventDefault();
+            return;
+          }
+        } else if (key === "d") {
+          // Brush size bigger
+          if (state.tool === "brush") {
+            state.brushSize = Math.min(512, state.brushSize + 1);
+            updateToolUi();
+            evt.preventDefault();
+            return;
+          }
+        }
+      }
+
       if ((evt.ctrlKey || evt.metaKey) && key === "z") {
         evt.preventDefault();
         if (evt.shiftKey) {

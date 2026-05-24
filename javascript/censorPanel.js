@@ -14,7 +14,12 @@
     const shapeSelect = root.querySelector("#censor_line_shape");
     const saveBtn = root.querySelector("#censor_save_btn");
     const saveStatus = root.querySelector("#censor_save_status");
-    if (!canvas || !wrap || !dropHint || !widthSlider || !widthValue || !overwriteWidthBtn || !shapeSelect || !saveBtn || !saveStatus) return;
+    const brushTypeSelect = root.querySelector("#censor_brush_type");
+    const lineSettings = root.querySelector("#censor_line_settings");
+    const mosaicSettings = root.querySelector("#censor_mosaic_settings");
+    const mosaicBlockSlider = root.querySelector("#censor_mosaic_block_size");
+    const mosaicBlockValue = root.querySelector("#censor_mosaic_block_size_value");
+    if (!canvas || !wrap || !dropHint || !widthSlider || !widthValue || !overwriteWidthBtn || !shapeSelect || !saveBtn || !saveStatus || !brushTypeSelect || !lineSettings || !mosaicSettings || !mosaicBlockSlider || !mosaicBlockValue) return;
 
     const ctx = canvas.getContext("2d");
     const storedWidth = Number(window.localStorage?.getItem(storageKeyWidth) || widthSlider.value || 18);
@@ -27,9 +32,12 @@
       hasImage: false,
       lineWidth: Number(widthSlider.value) || 18,
       lineShape: shapeSelect.value || "round",
+      brushType: brushTypeSelect.value || "line",
+      mosaicBlockSize: Number(mosaicBlockSlider.value) || 16,
       pendingStart: null,
       segments: [],
       redoSegments: [],
+      mosaics: [],
       baseImage: null,
       scale: 1,
       panX: 0,
@@ -41,6 +49,7 @@
       isPanning: false,
       displayW: canvas.clientWidth,
       displayH: canvas.clientHeight,
+      mosaicDrag: null,
     };
 
     root.dataset.censorReady = "1";
@@ -101,6 +110,14 @@
 
       targetCtx.clearRect(0, 0, canvas.width, canvas.height);
       targetCtx.drawImage(state.baseImage, 0, 0, canvas.width, canvas.height);
+      // Draw mosaic regions first (in image coordinates, before transform)
+      targetCtx.save();
+      targetCtx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
+      state.mosaics.forEach((mosaic) => {
+        applyMosaic(targetCtx, mosaic.x, mosaic.y, mosaic.w, mosaic.h, mosaic.blockSize);
+      });
+      targetCtx.restore();
+      // Draw line segments (after transform)
       state.segments.forEach((seg) => {
         targetCtx.save();
         targetCtx.strokeStyle = "#000000";
@@ -115,6 +132,32 @@
       });
     }
 
+    // Mosaic effect: pixelate a region
+    function applyMosaic(ctx, x, y, w, h, blockSize) {
+      const imgData = ctx.getImageData(x, y, w, h);
+      for (let yy = 0; yy < h; yy += blockSize) {
+        for (let xx = 0; xx < w; xx += blockSize) {
+          const i = ((yy * w) + xx) * 4;
+          const r = imgData.data[i];
+          const g = imgData.data[i + 1];
+          const b = imgData.data[i + 2];
+          for (let by = 0; by < blockSize; by++) {
+            for (let bx = 0; bx < blockSize; bx++) {
+              const px = xx + bx;
+              const py = yy + by;
+              if (px < w && py < h) {
+                const idx = ((py * w) + px) * 4;
+                imgData.data[idx] = r;
+                imgData.data[idx + 1] = g;
+                imgData.data[idx + 2] = b;
+              }
+            }
+          }
+        }
+      }
+      ctx.putImageData(imgData, x, y);
+    }
+
     function redraw() {
       if (!state.baseImage) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -122,9 +165,58 @@
       }
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // 1. Create an offscreen canvas to composite the image and mosaics
+      let off = document.createElement('canvas');
+      off.width = canvas.width;
+      off.height = canvas.height;
+      let offCtx = off.getContext('2d');
+      // Draw base image
+      if (state.baseImage) offCtx.drawImage(state.baseImage, 0, 0, canvas.width, canvas.height);
+      // Draw permanent mosaics
+      state.mosaics.forEach((mosaic) => {
+        applyMosaic(offCtx, mosaic.x, mosaic.y, mosaic.w, mosaic.h, mosaic.blockSize);
+      });
+      // Draw live mosaic preview (if dragging)
+      if (state.mosaicDrag) {
+        const x = Math.round(Math.min(state.mosaicDrag.x0, state.mosaicDrag.x1));
+        const y = Math.round(Math.min(state.mosaicDrag.y0, state.mosaicDrag.y1));
+        const w = Math.round(Math.abs(state.mosaicDrag.x1 - state.mosaicDrag.x0));
+        const h = Math.round(Math.abs(state.mosaicDrag.y1 - state.mosaicDrag.y0));
+        if (w > 2 && h > 2) {
+          applyMosaic(offCtx, x, y, w, h, state.mosaicBlockSize);
+        }
+      }
+      // 2. Draw the composited result to the main canvas with pan/zoom
       ctx.save();
       ctx.setTransform(state.scale, 0, 0, state.scale, state.panX, state.panY);
-      drawScene(ctx);
+      ctx.drawImage(off, 0, 0);
+      // Draw line segments
+      state.segments.forEach((seg) => {
+        ctx.save();
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = seg.width;
+        ctx.lineCap = seg.shape || "round";
+        ctx.lineJoin = seg.shape === "round" ? "round" : "miter";
+        ctx.beginPath();
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+        ctx.stroke();
+        ctx.restore();
+      });
+      // Draw mosaic preview rectangle (if dragging)
+      if (state.mosaicDrag) {
+        ctx.save();
+        ctx.strokeStyle = "#ff9800";
+        ctx.lineWidth = 2 / state.scale;
+        ctx.setLineDash([6 / state.scale, 6 / state.scale]);
+        ctx.strokeRect(
+          Math.min(state.mosaicDrag.x0, state.mosaicDrag.x1),
+          Math.min(state.mosaicDrag.y0, state.mosaicDrag.y1),
+          Math.abs(state.mosaicDrag.x1 - state.mosaicDrag.x0),
+          Math.abs(state.mosaicDrag.y1 - state.mosaicDrag.y0)
+        );
+        ctx.restore();
+      }
       ctx.restore();
 
       if (state.pendingStart) {
@@ -182,38 +274,101 @@
     function handleCanvasClick(evt) {
       if (!state.hasImage) return;
       evt.preventDefault();
-
       const p = getCanvasPoint(evt);
-      if (!state.pendingStart) {
-        state.pendingStart = p;
+      if (state.brushType === "line") {
+        if (!state.pendingStart) {
+          state.pendingStart = p;
+          redraw();
+          return;
+        }
+        state.segments.push({
+          x1: state.pendingStart.x,
+          y1: state.pendingStart.y,
+          x2: p.x,
+          y2: p.y,
+          width: state.lineWidth,
+          shape: state.lineShape,
+        });
+        state.pendingStart = null;
+        state.redoSegments = [];
+        redraw();
+      }
+    }
+
+    // Mosaic brush: click and drag to select region
+    function onMosaicMouseDown(evt) {
+      if (!state.hasImage) return;
+      if (evt.button !== 0) return; // left click only
+      evt.preventDefault();
+      const p = getCanvasPoint(evt);
+      state.mosaicDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    }
+    function onMosaicMouseMove(evt) {
+      if (!state.mosaicDrag) return;
+      const p = getCanvasPoint(evt);
+      state.mosaicDrag.x1 = p.x;
+      state.mosaicDrag.y1 = p.y;
+      redraw();
+    }
+    function onMosaicMouseUp(evt) {
+      if (!state.mosaicDrag) return;
+      const x = Math.round(Math.min(state.mosaicDrag.x0, state.mosaicDrag.x1));
+      const y = Math.round(Math.min(state.mosaicDrag.y0, state.mosaicDrag.y1));
+      const w = Math.round(Math.abs(state.mosaicDrag.x1 - state.mosaicDrag.x0));
+      const h = Math.round(Math.abs(state.mosaicDrag.y1 - state.mosaicDrag.y0));
+      if (w > 2 && h > 2) {
+        state.mosaics.push({ x, y, w, h, blockSize: state.mosaicBlockSize });
+        state.redoSegments = [];
+      }
+      state.mosaicDrag = null;
+      redraw();
+    }
+    // Brush type selector logic
+    function updateBrushUI() {
+      if (state.brushType === "line") {
+        lineSettings.style.display = "";
+        mosaicSettings.style.display = "none";
+      } else {
+        lineSettings.style.display = "none";
+        mosaicSettings.style.display = "";
+      }
+    }
+    brushTypeSelect.addEventListener("change", () => {
+      state.brushType = brushTypeSelect.value;
+      updateBrushUI();
+      redraw();
+    });
+    mosaicBlockSlider.addEventListener("input", () => {
+      state.mosaicBlockSize = Number(mosaicBlockSlider.value) || 16;
+      mosaicBlockValue.textContent = `${state.mosaicBlockSize} px`;
+    });
+    updateBrushUI();
+
+    function undo() {
+      // Undo for lines
+      if (state.segments.length > 0) {
+        state.redoSegments.push({ type: 'line', value: state.segments.pop() });
+        state.pendingStart = null;
         redraw();
         return;
       }
-
-      state.segments.push({
-        x1: state.pendingStart.x,
-        y1: state.pendingStart.y,
-        x2: p.x,
-        y2: p.y,
-        width: state.lineWidth,
-        shape: state.lineShape,
-      });
-      state.pendingStart = null;
-      state.redoSegments = [];
-      redraw();
-    }
-
-    function undo() {
-      if (state.segments.length === 0) return;
-      state.redoSegments.push(state.segments.pop());
-      state.pendingStart = null;
-      redraw();
+      // Undo for mosaics
+      if (state.mosaics.length > 0) {
+        state.redoSegments.push({ type: 'mosaic', value: state.mosaics.pop() });
+        redraw();
+        return;
+      }
     }
 
     function redo() {
       if (state.redoSegments.length === 0) return;
-      state.segments.push(state.redoSegments.pop());
-      state.pendingStart = null;
+      const last = state.redoSegments.pop();
+      if (last.type === 'line') {
+        state.segments.push(last.value);
+        state.pendingStart = null;
+      } else if (last.type === 'mosaic') {
+        state.mosaics.push(last.value);
+      }
       redraw();
     }
 
@@ -240,6 +395,7 @@
         refreshCanvasCssSize();
         state.baseImage = img;
         state.segments = [];
+        state.mosaics = [];
         state.redoSegments = [];
         state.pendingStart = null;
         state.scale = 1;
@@ -357,7 +513,22 @@
       overwriteExistingLineWidth();
     });
 
-    canvas.addEventListener("click", handleCanvasClick);
+    // Brush event listeners
+    function setBrushListeners() {
+      canvas.removeEventListener("click", handleCanvasClick);
+      canvas.removeEventListener("mousedown", onMosaicMouseDown);
+      document.removeEventListener("mousemove", onMosaicMouseMove);
+      document.removeEventListener("mouseup", onMosaicMouseUp);
+      if (state.brushType === "line") {
+        canvas.addEventListener("click", handleCanvasClick);
+      } else if (state.brushType === "mosaic") {
+        canvas.addEventListener("mousedown", onMosaicMouseDown);
+        document.addEventListener("mousemove", onMosaicMouseMove);
+        document.addEventListener("mouseup", onMosaicMouseUp);
+      }
+    }
+    brushTypeSelect.addEventListener("change", setBrushListeners);
+    setBrushListeners();
     canvas.addEventListener("contextmenu", (evt) => evt.preventDefault());
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("mousedown", onPanStart);

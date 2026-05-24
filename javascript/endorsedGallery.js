@@ -2383,7 +2383,36 @@
         if (galleryContainer.__endgalMonitored) return; // already wired up
         galleryContainer.__endgalMonitored = true;
 
+        // --- Scroll fix state ---
+        let lastThumbCount = 0;
+        let lastScrollTop = 0;
+
+        // Helper to count thumbs
+        function getThumbCount() {
+            return galleryContainer.querySelectorAll('.endgal-thumb').length;
+        }
+
+        // Save initial state
+        lastThumbCount = getThumbCount();
+        lastScrollTop = galleryContainer.scrollTop;
+
         const observer = new MutationObserver(() => {
+            // Save scroll before any DOM change
+            const prevScrollTop = lastScrollTop;
+            const prevThumbCount = lastThumbCount;
+
+            // After DOM change
+            const newThumbCount = getThumbCount();
+            // If new image(s) added: scroll to top
+            if (newThumbCount > prevThumbCount) {
+                galleryContainer.scrollTop = 0;
+            } else {
+                // Always restore previous scroll position (prevents scroll to bottom)
+                galleryContainer.scrollTop = prevScrollTop;
+            }
+            lastThumbCount = newThumbCount;
+            lastScrollTop = galleryContainer.scrollTop;
+
             checkAndHandleEndOfGallery();
         });
 

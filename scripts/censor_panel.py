@@ -140,17 +140,29 @@ CENSOR_HTML = """
 
 <div id="censor_panel_root">
     <div id="censor_controls">
-        <label for="censor_line_width">Line thickness</label>
-        <input id="censor_line_width" type="range" min="1" max="96" step="1" value="18" />
-        <div id="censor_line_width_value">18 px</div>
-        <button id="censor_overwrite_width_btn" type="button">Overwrite Existing Line Width</button>
-        <label for="censor_line_shape">Line ending shape</label>
-        <select id="censor_line_shape">
-            <option value="round" selected>Round</option>
-            <option value="square">Rectangle</option>
-            <option value="butt">Flat</option>
+        <label for="censor_brush_type">Brush type</label>
+        <select id="censor_brush_type">
+            <option value="line" selected>Line</option>
+            <option value="mosaic">Mosaic</option>
         </select>
-        <div id="censor_hint">Two left clicks draw one black line segment. Right mouse drag moves the image. Ctrl+Z undo, Ctrl+Y redo.</div>
+        <div id="censor_line_settings">
+            <label for="censor_line_width">Line thickness</label>
+            <input id="censor_line_width" type="range" min="1" max="96" step="1" value="18" />
+            <div id="censor_line_width_value">18 px</div>
+            <button id="censor_overwrite_width_btn" type="button">Overwrite Existing Line Width</button>
+            <label for="censor_line_shape">Line ending shape</label>
+            <select id="censor_line_shape">
+                <option value="round" selected>Round</option>
+                <option value="square">Rectangle</option>
+                <option value="butt">Flat</option>
+            </select>
+        </div>
+        <div id="censor_mosaic_settings" style="display:none">
+            <label for="censor_mosaic_block_size">Mosaic block size</label>
+            <input id="censor_mosaic_block_size" type="range" min="4" max="64" step="1" value="16" />
+            <div id="censor_mosaic_block_size_value">16 px</div>
+        </div>
+        <div id="censor_hint">Select a brush. For Line: two left clicks draw a segment. For Mosaic: click and drag to pixelate. Right mouse drag moves the image. Ctrl+Z undo, Ctrl+Y redo.</div>
         <div id="censor_save_panel">
             <button id="censor_save_btn" type="button">Save to outputs/censored</button>
             <div id="censor_save_status">Ready.</div>
