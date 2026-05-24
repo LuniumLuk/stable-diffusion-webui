@@ -1962,6 +1962,20 @@
             });
             previewActionsEl.appendChild(downloadBtn);
 
+            const composerBtn = document.createElement('button');
+            composerBtn.className = 'endgal-preview-action';
+            composerBtn.title = 'Open in Composer as background';
+            const composerPath = getCurrentPreviewPath();
+            composerBtn.disabled = !composerPath;
+            composerBtn.innerHTML = '<span class="endgal-preview-action-icon">🧩</span><span class="endgal-preview-action-label">To Composer</span>';
+            composerBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!composerPath) return;
+                window.endorsedGallery.sendToComposer(b64Encode(composerPath), b64Encode(''));
+                hidePreview();
+            });
+            previewActionsEl.appendChild(composerBtn);
+
             const censorBtn = document.createElement('button');
             censorBtn.className = 'endgal-preview-action';
             censorBtn.title = 'Open in Censor panel';

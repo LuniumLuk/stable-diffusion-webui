@@ -826,6 +826,47 @@
       layer.src = canvasEl.toDataURL("image/png");
     }
 
+    function imageLocalToWorld(layer, point) {
+      const displayLocal = imageLocalToDisplayLocal(layer, point);
+      const worldOffset = rotateLocalToWorld(layer, displayLocal);
+      return {
+        x: layer.x + worldOffset.x,
+        y: layer.y + worldOffset.y,
+      };
+    }
+
+    function buildBackgroundClipPolygon() {
+      const bgIndex = getBackgroundIndex();
+      if (bgIndex < 0) return null;
+      const bg = state.layers[bgIndex];
+      if (!bg || !bg.img) return null;
+
+      const { w, h } = getLayerSize(bg);
+      const corners = [
+        { x: -w / 2, y: -h / 2 },
+        { x: w / 2, y: -h / 2 },
+        { x: w / 2, y: h / 2 },
+        { x: -w / 2, y: h / 2 },
+      ];
+
+      return corners.map((p) => imageLocalToWorld(bg, p));
+    }
+
+    function applyBackgroundClipIfNeeded(editCtx, layer) {
+      if (!editCtx || !layer || !layer.isPaintOverlay) return;
+
+      const poly = buildBackgroundClipPolygon();
+      if (!poly || poly.length < 3) return;
+
+      editCtx.beginPath();
+      editCtx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) {
+        editCtx.lineTo(poly[i].x, poly[i].y);
+      }
+      editCtx.closePath();
+      editCtx.clip();
+    }
+
     function strokeOnLayer(layer, startLocal, endLocal) {
       const editCanvas = ensureEditableLayerCanvas(layer);
       if (!editCanvas) return;
@@ -834,6 +875,7 @@
       const startPx = localToImagePixel(layer, startLocal);
       const endPx = localToImagePixel(layer, endLocal);
       editCtx.save();
+      applyBackgroundClipIfNeeded(editCtx, layer);
       editCtx.strokeStyle = state.drawColor;
       editCtx.lineCap = "round";
       editCtx.lineJoin = "round";
@@ -1608,12 +1650,22 @@
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
+      const img = await new Promise((resolve, reject) => {
+        const probe = new Image();
+        probe.onload = () => resolve(probe);
+        probe.onerror = reject;
+        probe.src = src;
+      });
+      const imageWidth = Math.max(1, Number(img.naturalWidth || img.width || canvas.width || 1));
+      const imageHeight = Math.max(1, Number(img.naturalHeight || img.height || canvas.height || 1));
+      canvas.width = imageWidth;
+      canvas.height = imageHeight;
       const fname = String(imagePath).split(/[\\/]/).pop() || "Gallery Image";
       const minimalPayload = JSON.stringify({
-        width: canvas.width,
-        height: canvas.height,
+        width: imageWidth,
+        height: imageHeight,
         background_color: null,
-        layers: [{ name: fname, src, x: canvas.width / 2, y: canvas.height / 2,
+        layers: [{ name: fname, src, x: imageWidth / 2, y: imageHeight / 2,
                    scale: 1, rot_deg: 0, mirror: false, opacity: 1, is_background: true }],
       });
       await state.restoreFromConfigJson(minimalPayload);
