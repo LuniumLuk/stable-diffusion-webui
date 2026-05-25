@@ -102,6 +102,154 @@
       if (brushSizeValue) {
         brushSizeValue.textContent = `${state.brushSize} px`;
       }
+      // update canvas cursor for active tool
+      try {
+        if (canvas) {
+          if (state.dragMode === "pan_canvas") {
+            canvas.style.cursor = "grabbing";
+          } else {
+            switch (state.tool) {
+              case "move":
+                canvas.style.cursor = "grab";
+                break;
+              case "brush":
+              case "line":
+                canvas.style.cursor = "crosshair";
+                break;
+              case "picker":
+                canvas.style.cursor = "crosshair";
+                break;
+              case "crop":
+                canvas.style.cursor = "crosshair";
+                break;
+              default:
+                canvas.style.cursor = "default";
+            }
+          }
+        }
+      } catch (e) {
+        // ignore cursor errors in odd environments
+      }
+    }
+
+    // Cursor position tracking for preview placement
+    state.cursorClientX = null;
+    state.cursorClientY = null;
+    let _sizePreviewTimeout = null;
+
+    function ensureSizePreviewEl() {
+      // make a unique id for this composer root so multiple composer instances
+      // don't collide
+      const uid = root.dataset.composerUid || (root.dataset.composerUid = crypto.randomUUID());
+      let el = document.querySelector(`.composer-size-preview[data-composer-uid="${uid}"]`);
+      if (el) return el;
+      // container
+      el = document.createElement('div');
+      el.className = 'composer-size-preview';
+      el.setAttribute('data-composer-uid', uid);
+      Object.assign(el.style, {
+        position: 'fixed',
+        pointerEvents: 'none',
+        zIndex: 10000,
+        left: '0px',
+        top: '0px',
+        transform: 'translate(-50%, -50%)',
+        display: 'none',
+      });
+
+      // inner dot
+      const dot = document.createElement('div');
+      dot.className = 'composer-size-preview-dot';
+      Object.assign(dot.style, {
+        border: '2px solid rgba(255,255,255,0.85)',
+        borderRadius: '50%',
+        background: 'rgba(0,0,0,0.12)',
+        boxSizing: 'border-box',
+        transform: 'translate(-50%, -50%)',
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+      });
+      el.appendChild(dot);
+
+      // label
+      const label = document.createElement('div');
+      label.className = 'composer-size-preview-label';
+      Object.assign(label.style, {
+        position: 'absolute',
+        left: '50%',
+        top: 'calc(50% + 8px)',
+        transform: 'translateX(-50%)',
+        color: '#fff',
+        background: 'rgba(0,0,0,0.6)',
+        fontSize: '12px',
+        padding: '2px 6px',
+        borderRadius: '4px',
+        whiteSpace: 'nowrap',
+        pointerEvents: 'none',
+      });
+      el.appendChild(label);
+
+      // store references for quick access
+      el._dot = dot;
+      el._label = label;
+
+      document.body.appendChild(el);
+      return el;
+    }
+
+    function showSizePreview(clientX, clientY) {
+      const el = ensureSizePreviewEl();
+      if (!el) return;
+          // fallback to last-known cursor if event didn't provide coords
+          const rect = canvas.getBoundingClientRect();
+          const x = (clientX || clientX === 0) ? clientX : (state.cursorClientX || (rect.left + rect.width / 2));
+          const y = (clientY || clientY === 0) ? clientY : (state.cursorClientY || (rect.top + rect.height / 2));
+          // Determine the target layer for painting (paint overlay if present,
+          // otherwise the active layer). The stroke width used when drawing is
+          // `state.brushSize / layer.scale` in canvas/internal pixels. Convert
+          // that to CSS pixels for the DOM preview by multiplying with
+          // (rect.width / canvas.width).
+      const paintLayer = state.layers.find((x) => x.isPaintOverlay) || state.layers[state.active] || null;
+      const layerScale = paintLayer ? Math.max(0.05, paintLayer.scale || 1) : 1;
+      const editLineWidth = Math.max(1, state.brushSize / layerScale);
+      const sizeCss = Math.max(1, Math.round(editLineWidth * (rect.width / canvas.width)));
+      // debug logging removed
+      // update inner dot and label
+      if (el._dot) {
+        el._dot.style.width = `${sizeCss}px`;
+        el._dot.style.height = `${sizeCss}px`;
+      } else {
+        el.style.width = `${sizeCss}px`;
+        el.style.height = `${sizeCss}px`;
+      }
+      if (el._label) {
+        el._label.textContent = `${Math.round(state.brushSize)} px`;
+      }
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      el.style.display = 'block';
+      // force reflow so size change is applied immediately
+      // eslint-disable-next-line no-unused-expressions
+      el.offsetWidth;
+      if (_sizePreviewTimeout) clearTimeout(_sizePreviewTimeout);
+      _sizePreviewTimeout = setTimeout(() => {
+        el.style.display = 'none';
+        _sizePreviewTimeout = null;
+      }, 900);
+    }
+
+    function hideSizePreview() {
+      const uid = root.dataset.composerUid;
+      if (!uid) return;
+      const sel = `.composer-size-preview[data-composer-uid="${uid}"]`;
+      const el = document.querySelector(sel);
+      if (!el) return;
+      if (_sizePreviewTimeout) {
+        clearTimeout(_sizePreviewTimeout);
+        _sizePreviewTimeout = null;
+      }
+      el.style.display = 'none';
     }
 
     function setTool(toolName) {
@@ -473,14 +621,23 @@
       const layer = state.layers[state.active];
       if (!layer || preview.layerId !== layer.id) return;
 
+      // Convert image-local points to display-local (layer space) then
+      // account for canvas viewport scaling so the preview line width
+      // matches the apparent size on-screen.
       const startDisplay = imageLocalToDisplayLocal(layer, preview.start);
       const endDisplay = imageLocalToDisplayLocal(layer, preview.end);
+
+      // The actual stroke drawing uses a line width in canvas/internal
+      // pixels equal to `state.brushSize / layer.scale`. Use the same value
+      // here so the preview line thickness matches the final stroke.
+      const adjustedWidth = Math.max(1, state.brushSize / Math.max(0.05, layer.scale || 1));
+      // debug logging removed
 
       ctx.save();
       ctx.translate(layer.x, layer.y);
       ctx.rotate(layer.rot);
       ctx.strokeStyle = state.drawColor;
-      ctx.lineWidth = Math.max(1, uiPxToCanvas(state.brushSize));
+      ctx.lineWidth = adjustedWidth;
       ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(startDisplay.x, startDisplay.y);
@@ -1035,6 +1192,9 @@
     }
 
     canvas.addEventListener("pointerdown", (evt) => {
+      // track last pointer position for preview placement
+      state.cursorClientX = evt.clientX;
+      state.cursorClientY = evt.clientY;
       if (evt.button === 2) {
         evt.preventDefault();
         state.dragMode = "pan_canvas";
@@ -1162,6 +1322,9 @@
     });
 
     canvas.addEventListener("pointermove", (evt) => {
+      // update cursor position used by size preview
+      state.cursorClientX = evt.clientX;
+      state.cursorClientY = evt.clientY;
       if (state.dragMode === "pan_canvas") {
         state.viewportX = state.startViewportX + (evt.clientX - state.startClientX);
         state.viewportY = state.startViewportY + (evt.clientY - state.startClientY);
@@ -1242,22 +1405,62 @@
       evt.preventDefault();
     });
 
-    canvas.addEventListener("wheel", (evt) => {
-      evt.preventDefault();
 
+    canvas.addEventListener("wheel", (evt) => {
+      // Shift + wheel: adjust brush/line size when brush/line tool active
+      if (evt.shiftKey && (state.tool === "brush" || state.tool === "line")) {
+        evt.preventDefault();
+        const step = evt.deltaY < 0 ? 1 : -1;
+        state.brushSize = Math.max(1, Math.min(2048, state.brushSize + step));
+        updateToolUi();
+        setStatus(`${state.tool === "line" ? "Line" : "Brush"} size: ${state.brushSize} px`);
+        showSizePreview(evt.clientX, evt.clientY);
+        return;
+      }
+
+      // Ctrl/Meta + wheel: resize brush size if brush tool is active (legacy behavior)
+      if ((evt.ctrlKey || evt.metaKey) && state.tool === "brush") {
+        evt.preventDefault();
+        const step = evt.deltaY < 0 ? 2 : -2;
+        state.brushSize = Math.max(1, Math.min(512, state.brushSize + step));
+        updateToolUi();
+        setStatus(`Brush size: ${state.brushSize} px`);
+        showSizePreview(evt.clientX, evt.clientY);
+        return;
+      }
+
+      // Default: canvas zoom. Compute anchor in canvas-internal pixels and
+      // convert state.viewportX/Y (CSS pixels) to canvas pixels so math is
+      // correct even after the canvas has been translated.
+      evt.preventDefault();
       const zoomStep = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
       const nextScale = Math.min(6, Math.max(0.25, state.viewportScale * zoomStep));
       if (Math.abs(nextScale - state.viewportScale) < 0.0001) return;
 
       const rect = canvas.getBoundingClientRect();
-      const anchorX = evt.clientX - rect.left;
-      const anchorY = evt.clientY - rect.top;
-      const worldX = (anchorX - state.viewportX) / state.viewportScale;
-      const worldY = (anchorY - state.viewportY) / state.viewportScale;
+      // pointer position in canvas internal pixels
+      const canvasPointerX = (evt.clientX - rect.left) * (canvas.width / rect.width);
+      const canvasPointerY = (evt.clientY - rect.top) * (canvas.height / rect.height);
 
+      // convert viewport CSS px to canvas internal pixels
+      const cssToCanvasX = canvas.width / rect.width;
+      const cssToCanvasY = canvas.height / rect.height;
+      const viewportX_canvas = state.viewportX * cssToCanvasX;
+      const viewportY_canvas = state.viewportY * cssToCanvasY;
+
+      // world coordinates in canvas internal pixels (before zoom)
+      const worldX_canvas = (canvasPointerX - viewportX_canvas) / state.viewportScale;
+      const worldY_canvas = (canvasPointerY - viewportY_canvas) / state.viewportScale;
+
+      // compute new viewport (in canvas pixels) so the world point remains under cursor
+      const newViewportX_canvas = canvasPointerX - worldX_canvas * nextScale;
+      const newViewportY_canvas = canvasPointerY - worldY_canvas * nextScale;
+
+      // convert back to CSS px for storage in state
+      state.viewportX = newViewportX_canvas / cssToCanvasX;
+      state.viewportY = newViewportY_canvas / cssToCanvasY;
       state.viewportScale = nextScale;
-      state.viewportX = anchorX - worldX * nextScale;
-      state.viewportY = anchorY - worldY * nextScale;
+
       applyCanvasViewport();
       setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
     }, { passive: false });
@@ -1273,19 +1476,24 @@
 
       // --- Tool hotkeys ---
       if (!evt.ctrlKey && !evt.metaKey && !evt.altKey) {
-        if (key === "b") {
+        // Tool hotkeys: Q/W/E/R/T or numeric row 1-5 as alternates
+        if (key === "q" || key === "1") {
+          setTool("move");
+          evt.preventDefault();
+          return;
+        } else if (key === "w" || key === "2") {
           setTool("brush");
           evt.preventDefault();
           return;
-        } else if (key === "l") {
+        } else if (key === "e" || key === "3") {
           setTool("line");
           evt.preventDefault();
           return;
-        } else if (key === "i") {
+        } else if (key === "r" || key === "4") {
           setTool("picker");
           evt.preventDefault();
           return;
-        } else if (key === "c") {
+        } else if (key === "t" || key === "5") {
           setTool("crop");
           evt.preventDefault();
           return;
@@ -1294,6 +1502,10 @@
           if (state.tool === "brush") {
             state.brushSize = Math.max(1, state.brushSize - 1);
             updateToolUi();
+            const rect = canvas.getBoundingClientRect();
+            const cx = state.cursorClientX || (rect.left + rect.width / 2);
+            const cy = state.cursorClientY || (rect.top + rect.height / 2);
+            showSizePreview(cx, cy);
             evt.preventDefault();
             return;
           }
@@ -1302,6 +1514,10 @@
           if (state.tool === "brush") {
             state.brushSize = Math.min(512, state.brushSize + 1);
             updateToolUi();
+            const rect = canvas.getBoundingClientRect();
+            const cx = state.cursorClientX || (rect.left + rect.width / 2);
+            const cy = state.cursorClientY || (rect.top + rect.height / 2);
+            showSizePreview(cx, cy);
             evt.preventDefault();
             return;
           }
@@ -1358,6 +1574,13 @@
       if (changed) {
         evt.preventDefault();
         draw();
+      }
+    });
+
+    // Hide preview immediately when Shift is released
+    window.addEventListener('keyup', (evt) => {
+      if (evt.key === 'Shift') {
+        hideSizePreview();
       }
     });
 
@@ -1507,6 +1730,11 @@
       brushSizeInput.addEventListener("input", () => {
         state.brushSize = Math.max(1, Number(brushSizeInput.value) || 18);
         updateToolUi();
+        // show preview at last known cursor or canvas center
+        const rect = canvas.getBoundingClientRect();
+        const cx = state.cursorClientX || (rect.left + rect.width / 2);
+        const cy = state.cursorClientY || (rect.top + rect.height / 2);
+        showSizePreview(cx, cy);
       });
     }
 
