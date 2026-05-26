@@ -24,6 +24,10 @@
       viewportX: 0,
       viewportY: 0,
       viewportScale: 1,
+      viewportScaleMin: 0.25,
+      // Maximum number of CSS pixels a single canvas internal pixel may map to
+      // (adaptive max scale = maxCanvasPixelScreen * canvas.width / clientWidth)
+      maxCanvasPixelScreen: 8,
       startClientX: 0,
       startClientY: 0,
       startViewportX: 0,
@@ -317,6 +321,28 @@
     function applyCanvasViewport() {
       canvas.style.transformOrigin = "0 0";
       canvas.style.transform = `translate(${state.viewportX}px, ${state.viewportY}px) scale(${state.viewportScale})`;
+
+      // Choose filtering strategy:
+      // - When magnifying (viewportScale >= 1) use nearest (pixelated) for crisp zoom-in
+      // - When minifying (viewportScale < 1) use smoothing (area-like) for better downscale
+      try {
+        if (state.viewportScale >= 1) {
+          canvas.style.imageRendering = "pixelated";
+          if (ctx && typeof ctx.imageSmoothingEnabled !== 'undefined') {
+            ctx.imageSmoothingEnabled = false;
+          }
+        } else {
+          canvas.style.imageRendering = "auto";
+          if (ctx && typeof ctx.imageSmoothingEnabled !== 'undefined') {
+            ctx.imageSmoothingEnabled = true;
+            if (typeof ctx.imageSmoothingQuality !== 'undefined') {
+              ctx.imageSmoothingQuality = 'high';
+            }
+          }
+        }
+      } catch (e) {
+        // ignore browser-specific failures
+      }
     }
 
     function captureLayerSnapshot(layer) {
@@ -1434,8 +1460,6 @@
       // correct even after the canvas has been translated.
       evt.preventDefault();
       const zoomStep = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const nextScale = Math.min(6, Math.max(0.25, state.viewportScale * zoomStep));
-      if (Math.abs(nextScale - state.viewportScale) < 0.0001) return;
 
       // Measure pointer position against an untransformed container so
       // CSS transforms on the canvas don't change the measurement used
@@ -1454,6 +1478,14 @@
       const clientHeight = canvas.clientHeight || measureRect.height || 1;
       const cssToCanvasX = canvas.width / clientWidth;
       const cssToCanvasY = canvas.height / clientHeight;
+
+      // Compute adaptive max scale so that one canvas internal pixel maps to at
+      // most `state.maxCanvasPixelScreen` CSS pixels on-screen.
+      const maxScaleAdaptive = (state.maxCanvasPixelScreen * canvas.width) / clientWidth;
+      const minScale = typeof state.viewportScaleMin === 'number' ? state.viewportScaleMin : 0.25;
+      const maxScale = Math.max(0.0001, maxScaleAdaptive);
+      const nextScale = Math.min(maxScale, Math.max(minScale, state.viewportScale * zoomStep));
+      if (Math.abs(nextScale - state.viewportScale) < 0.0001) return;
 
       // debug logging removed
 
