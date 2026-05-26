@@ -470,8 +470,13 @@ def compose_from_payload(payload_json):
                 paste_x = int(round(center_x - layer_img.width / 2))
                 paste_y = int(round(center_y - layer_img.height / 2))
 
+                # Paste the RGBA image into a transparent stage without using
+                # the image as a mask. Using the image as the mask blends the
+                # RGB channels against transparent black first, which causes
+                # the layer alpha to be effectively applied twice when
+                # alpha_composite() is run afterward, producing dark fringes.
                 stage = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-                stage.paste(layer_img, (paste_x, paste_y), layer_img)
+                stage.paste(layer_img, (paste_x, paste_y))
                 canvas = Image.alpha_composite(canvas, stage)
 
         saved_path = _save_composite_png(canvas)

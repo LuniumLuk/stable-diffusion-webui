@@ -1918,6 +1918,7 @@
         mirror: l.mirror,
         opacity: l.opacity,
         is_background: !!l.isBackground,
+        is_paint_overlay: !!l.isPaintOverlay,
       })),
     };
 
