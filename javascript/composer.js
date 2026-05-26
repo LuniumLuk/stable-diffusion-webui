@@ -21,6 +21,12 @@
       cropSelection: null,
       cropPreview: null,
       brushLastPoint: null,
+      // ALT+right-drag resize state
+      altResizeStartClientX: null,
+      altResizeStartBrushSize: null,
+      altResizeAnchorClientX: null,
+      altResizeAnchorClientY: null,
+      altResizeAccumDx: 0,
       viewportX: 0,
       viewportY: 0,
       viewportScale: 1,
@@ -77,6 +83,16 @@
       crop: toolCropBtn,
     };
     const flattenPaintBtn = root.querySelector("#composer_flatten_paint_btn");
+    // Show hover tooltips describing keyboard shortcuts for each tool
+    try {
+      if (toolMoveBtn) toolMoveBtn.title = "Move (Q / 1)";
+      if (toolBrushBtn) toolBrushBtn.title = "Brush (W / B / 2)";
+      if (toolLineBtn) toolLineBtn.title = "Line (E / 3)";
+      if (toolPickerBtn) toolPickerBtn.title = "Picker (R / I / 4)";
+      if (toolCropBtn) toolCropBtn.title = "Crop (T / 5)";
+    } catch (e) {
+      // ignore environments that don't support setting title
+    }
 
     function updateLockModeUi() {
       if (!lockModeBtn) return;
@@ -237,7 +253,7 @@
         cctx.clearRect(0, 0, baseSize, baseSize);
 
         // Draw a small filled dot with a subtle stroke for contrast
-        const radius = 2;
+        const radius = 0.5;
         const cx = baseSize / 2;
         const cy = baseSize / 2;
         cctx.beginPath();
@@ -1435,6 +1451,35 @@
       state.cursorClientY = evt.clientY;
       if (evt.button === 2) {
         evt.preventDefault();
+        // ALT + right-drag: resize brush/line horizontally (left shrink, right expand)
+        if (evt.altKey && (state.tool === "brush" || state.tool === "line")) {
+          state.dragMode = "alt_resize_brush";
+          state.altResizeStartClientX = evt.clientX;
+          state.altResizeStartBrushSize = state.brushSize;
+          state.altResizeAnchorClientX = evt.clientX;
+          state.altResizeAnchorClientY = evt.clientY;
+          state.altResizeAccumDx = 0;
+          try {
+            canvas.setPointerCapture(evt.pointerId);
+          } catch (e) {
+            // ignore pointer capture failures
+          }
+          // Show size preview while resizing
+          showSizePreview(evt.clientX, evt.clientY);
+          updateToolUi();
+          // Hide the system cursor and keep our preview fixed at the anchor
+          try { canvas.style.cursor = 'none'; } catch (e) {}
+          // Request pointer lock so the physical cursor doesn't move and we
+          // receive relative movement via `movementX` for precise control.
+          try {
+            if (canvas.requestPointerLock) canvas.requestPointerLock();
+          } catch (e) {
+            // ignore pointer lock errors
+          }
+          return;
+        }
+
+        // Default: pan canvas
         state.dragMode = "pan_canvas";
         state.startClientX = evt.clientX;
         state.startClientY = evt.clientY;
@@ -1581,6 +1626,35 @@
         return;
       }
 
+      if (state.dragMode === "alt_resize_brush") {
+        // Horizontal movement adjusts brush/line size. When pointer lock is
+        // active we receive relative `movementX` values; otherwise fallback
+        // to absolute clientX delta from the start point.
+        const startSize = state.altResizeStartBrushSize || state.brushSize;
+        let delta = 0;
+        if (document.pointerLockElement === canvas && typeof evt.movementX === 'number') {
+          state.altResizeAccumDx = (state.altResizeAccumDx || 0) + evt.movementX;
+          delta = state.altResizeAccumDx;
+        } else {
+          const startX = state.altResizeStartClientX || evt.clientX;
+          delta = evt.clientX - startX;
+        }
+        // sensitivity: pixels -> brush size, tuned for comfortable control
+        const sensitivity = 0.25;
+        let newSize = Math.round(startSize + delta * sensitivity);
+        newSize = Math.max(1, Math.min(2048, newSize));
+        if (newSize !== state.brushSize) {
+          state.brushSize = newSize;
+          updateToolUi();
+          // Keep preview fixed at the anchor point where ALT+RMB began
+          const anchorX = state.altResizeAnchorClientX || evt.clientX;
+          const anchorY = state.altResizeAnchorClientY || evt.clientY;
+          showSizePreview(anchorX, anchorY);
+          try { setStatus(`${state.tool === "line" ? "Line" : "Brush"} size: ${state.brushSize} px`); } catch (e) {}
+        }
+        return;
+      }
+
       // If picker is the active tool or we're in a picker drag, show color preview
       if (state.tool === "picker" || state.dragMode === "picker") {
         const c = clientToCanvas(evt.clientX, evt.clientY);
@@ -1670,8 +1744,45 @@
         setStatus("Crop selection ready. Click Apply Crop to commit.");
       }
 
+      else if (state.dragMode === "alt_resize_brush") {
+        try { setStatus(`${state.tool === "line" ? "Line" : "Brush"} size: ${state.brushSize} px`); } catch (e) {}
+        try { if (document.pointerLockElement === canvas) document.exitPointerLock(); } catch (e) {}
+        // Synthesize a pointer/mouse move at the anchor so the page behaves
+        // as if the cursor is at the original start position. Note: browsers
+        // do not allow moving the real OS cursor for security reasons, so
+        // this only dispatches events within the page.
+        const anchorX = state.altResizeAnchorClientX;
+        const anchorY = state.altResizeAnchorClientY;
+        if (typeof anchorX === 'number' && typeof anchorY === 'number') {
+          setTimeout(() => {
+            try {
+              // PointerEvent if available
+              let moved = false;
+              try {
+                const pe = new PointerEvent('pointermove', { bubbles: true, clientX: anchorX, clientY: anchorY });
+                canvas.dispatchEvent(pe);
+                moved = true;
+              } catch (e) {
+                // fall back to MouseEvent
+              }
+              if (!moved) {
+                const me = new MouseEvent('mousemove', { bubbles: true, clientX: anchorX, clientY: anchorY });
+                canvas.dispatchEvent(me);
+              }
+            } catch (e) {
+              // ignore synthetic event failures
+            }
+          }, 0);
+        }
+      }
+
       state.dragMode = null;
       state.brushLastPoint = null;
+      state.altResizeStartClientX = null;
+      state.altResizeStartBrushSize = null;
+      state.altResizeAnchorClientX = null;
+      state.altResizeAnchorClientY = null;
+      state.altResizeAccumDx = 0;
 
       // Restore cursor and previews after finishing a pan. If the active
       // tool is brush/line, show the size preview again at release point.
@@ -1700,12 +1811,18 @@
         state._picker_prev_tool = null;
         setTool(prev);
       }
+      // If pointer lock is active (entered for ALT-resize), exit it now.
+      try { if (document.pointerLockElement === canvas) document.exitPointerLock(); } catch (e) {}
       state.dragMode = null;
       state.brushLastPoint = null;
+      state.altResizeStartClientX = null;
+      state.altResizeStartBrushSize = null;
+      state.altResizeAccumDx = 0;
       state.linePreview = null;
       state.cropPreview = null;
       hideColorPreview();
       hideSizePreview();
+      try { updateToolUi(); } catch (e) {}
       draw();
     });
 
@@ -1818,7 +1935,7 @@
           setTool("move");
           evt.preventDefault();
           return;
-        } else if (key === "w" || key === "2") {
+        } else if (key === "w" || key === "b" || key === "2") {
           setTool("brush");
           evt.preventDefault();
           return;
@@ -2184,6 +2301,31 @@
     updateToolUi();
     renderAssetList();
     state.bindUploadInputs = bindUploadInputs;
+
+    // Pointer lock change: handle unexpected pointer lock release (e.g. ESC)
+    document.addEventListener('pointerlockchange', () => {
+      try {
+        if (document.pointerLockElement === canvas) {
+          // locked to canvas - nothing to do
+        } else {
+          // pointer lock released; if we were resizing, cancel and restore UI
+          if (state.dragMode === 'alt_resize_brush') {
+            state.dragMode = null;
+            state.altResizeStartClientX = null;
+            state.altResizeStartBrushSize = null;
+            state.altResizeAnchorClientX = null;
+            state.altResizeAnchorClientY = null;
+            state.altResizeAccumDx = 0;
+            try { updateToolUi(); } catch (e) {}
+            hideSizePreview();
+            draw();
+            try { setStatus('Brush size adjust canceled'); } catch (e) {}
+          }
+        }
+      } catch (e) {
+        // ignore pointer lock handler errors
+      }
+    });
 
     // Load Config button: open hidden file input
     const loadConfigBtn = document.getElementById("composer_load_config_btn");
