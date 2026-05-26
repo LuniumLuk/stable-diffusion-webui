@@ -309,6 +309,8 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                   title="When enabled, canvas edits only affect the selected layer">Lock to Selected: OFF</button>
           <button id="composer_bg_lock_btn"   type="button" class="cmp-toggle-btn"
                   title="When enabled, edits target only the background layer">Edit BG Only: OFF</button>
+          <button id="composer_use_lctrl_zoom_btn" type="button" class="cmp-toggle-btn"
+                  title="When enabled, hold Left Ctrl to zoom the canvas">Use LCtrl To Zoom: OFF</button>
         </div>
       </div>
     </div>

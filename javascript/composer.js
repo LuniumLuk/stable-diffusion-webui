@@ -44,6 +44,10 @@
       paintUndoStack: [],
       paintRedoStack: [],
       maxPaintHistory: 80,
+      // Whether Left Ctrl is required to zoom the canvas (default: false)
+      requireLeftCtrlForZoom: false,
+      // Track left-CTRL state (used to enable canvas zoom on scroll)
+      leftCtrlDown: false,
     };
 
     const canvas = root.querySelector("#composer_canvas");
@@ -83,6 +87,7 @@
       crop: toolCropBtn,
     };
     const flattenPaintBtn = root.querySelector("#composer_flatten_paint_btn");
+    const useLctrlZoomBtn = root.querySelector('#composer_use_lctrl_zoom_btn');
     // Show hover tooltips describing keyboard shortcuts for each tool
     try {
       if (toolMoveBtn) toolMoveBtn.title = "Move (Q / 1)";
@@ -1848,18 +1853,13 @@
         return;
       }
 
-      // Ctrl/Meta + wheel: resize brush size if brush tool is active (legacy behavior)
-      if ((evt.ctrlKey || evt.metaKey) && state.tool === "brush") {
-        evt.preventDefault();
-        const step = evt.deltaY < 0 ? 2 : -2;
-        state.brushSize = Math.max(1, Math.min(512, state.brushSize + step));
-        updateToolUi();
-        setStatus(`Brush size: ${state.brushSize} px`);
-        showSizePreview(evt.clientX, evt.clientY);
-        return;
-      }
+      // Note: legacy Ctrl/Meta wheel behavior was removed so Left Ctrl is
+      // reserved for canvas zoom. Use Shift+wheel to resize brush/line.
 
-      // Default: canvas zoom. Compute anchor in canvas-internal pixels and
+      // Default: canvas zoom. If `requireLeftCtrlForZoom` is true, only
+      // perform zoom when Left Ctrl is held. Otherwise, always allow zoom.
+      if (state.requireLeftCtrlForZoom && !state.leftCtrlDown) return;
+      // Compute anchor in canvas-internal pixels and
       // convert state.viewportX/Y (CSS pixels) to canvas pixels so math is
       // correct even after the canvas has been translated.
       evt.preventDefault();
@@ -2165,6 +2165,22 @@
       });
     }
 
+    if (useLctrlZoomBtn) {
+      useLctrlZoomBtn.addEventListener('click', () => {
+        state.requireLeftCtrlForZoom = !state.requireLeftCtrlForZoom;
+        useLctrlZoomBtn.classList.toggle('active', state.requireLeftCtrlForZoom);
+        useLctrlZoomBtn.textContent = state.requireLeftCtrlForZoom ? 'Use LCtrl To Zoom: ON' : 'Use LCtrl To Zoom: OFF';
+      });
+      // initialize display based on default state
+      if (state.requireLeftCtrlForZoom) {
+        useLctrlZoomBtn.classList.add('active');
+        useLctrlZoomBtn.textContent = 'Use LCtrl To Zoom: ON';
+      } else {
+        useLctrlZoomBtn.classList.remove('active');
+        useLctrlZoomBtn.textContent = 'Use LCtrl To Zoom: OFF';
+      }
+    }
+
     if (restoreBgBtn) {
       restoreBgBtn.addEventListener("click", () => {
         restoreBackgroundTransform();
@@ -2326,6 +2342,19 @@
         // ignore pointer lock handler errors
       }
     });
+
+    // Track left-CTRL key state (we need left-specific detection via location)
+    window.addEventListener('keydown', (e) => {
+      try {
+        if (e.key === 'Control' && e.location === 1) state.leftCtrlDown = true;
+      } catch (err) {}
+    });
+    window.addEventListener('keyup', (e) => {
+      try {
+        if (e.key === 'Control' && e.location === 1) state.leftCtrlDown = false;
+      } catch (err) {}
+    });
+    window.addEventListener('blur', () => { state.leftCtrlDown = false; });
 
     // Load Config button: open hidden file input
     const loadConfigBtn = document.getElementById("composer_load_config_btn");
