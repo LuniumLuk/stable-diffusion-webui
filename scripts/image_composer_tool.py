@@ -349,6 +349,10 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
           </div>
           <input id="composer_brush_size" type="range" min="1" max="96" step="1" value="18"
                  title="Brush / line width" />
+                                <div style="margin-top:8px;">
+                                        <button id="composer_flatten_paint_btn" type="button" class="cmp-sm-btn"
+                                                                        title="Convert the current Top Paint Layer into a normal image layer">Flatten Paint Layer</button>
+                                </div>
         </div>
 
         <div class="cmp-crop-row">

@@ -34,6 +34,7 @@
       startViewportY: 0,
       useColorBackground: false,
       backgroundColor: "#1e293b",
+      _picker_prev_tool: null,
       paintUndoStack: [],
       paintRedoStack: [],
       maxPaintHistory: 80,
@@ -75,6 +76,7 @@
       picker: toolPickerBtn,
       crop: toolCropBtn,
     };
+    const flattenPaintBtn = root.querySelector("#composer_flatten_paint_btn");
 
     function updateLockModeUi() {
       if (!lockModeBtn) return;
@@ -116,9 +118,15 @@
               case "move":
                 canvas.style.cursor = "grab";
                 break;
-              case "brush":
-              case "line":
-                canvas.style.cursor = "crosshair";
+            case "brush":
+            case "line":
+                // Use a small custom cursor (dot) for brush/line so movement
+                // feels native while still showing our size indicator overlay.
+                try {
+                  canvas.style.cursor = ensureBrushCursor(state.drawColor);
+                } catch (e) {
+                  canvas.style.cursor = "crosshair";
+                }
                 break;
               case "picker":
                 canvas.style.cursor = "crosshair";
@@ -202,27 +210,101 @@
       return el;
     }
 
-    function showSizePreview(clientX, clientY) {
+    function hexToRgba(hex, alpha) {
+      if (!hex || typeof hex !== 'string') return null;
+      let c = hex.replace(/^#/, '');
+      if (c.length === 3) c = c.split('').map((ch) => ch + ch).join('');
+      if (c.length !== 6) return null;
+      const r = parseInt(c.slice(0, 2), 16);
+      const g = parseInt(c.slice(2, 4), 16);
+      const b = parseInt(c.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function ensureBrushCursor(color) {
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        const key = `${(color || state.drawColor || '#000000')}|${dpr}`;
+        if (!canvas._brushCursorCache) canvas._brushCursorCache = {};
+        if (canvas._brushCursorCache[key]) return canvas._brushCursorCache[key];
+
+        const baseSize = 32;
+        const cvs = document.createElement('canvas');
+        cvs.width = baseSize * dpr;
+        cvs.height = baseSize * dpr;
+        const cctx = cvs.getContext('2d');
+        cctx.scale(dpr, dpr);
+        cctx.clearRect(0, 0, baseSize, baseSize);
+
+        // Draw a small filled dot with a subtle stroke for contrast
+        const radius = 2;
+        const cx = baseSize / 2;
+        const cy = baseSize / 2;
+        cctx.beginPath();
+        cctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        cctx.fillStyle = color || state.drawColor || '#000000';
+        cctx.fill();
+        cctx.lineWidth = 0.8;
+        cctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        cctx.stroke();
+
+        const dataUrl = cvs.toDataURL('image/png');
+        // Hotspot coordinates should be specified in image pixels; use the
+        // canvas actual pixel dimensions so the hotspot lands in the center
+        // even on high-DPI displays.
+        const hotspotX = Math.floor(cvs.width / 2);
+        const hotspotY = Math.floor(cvs.height / 2);
+        const cursorStr = `url(${dataUrl}) ${hotspotX} ${hotspotY}, auto`;
+        canvas._brushCursorCache[key] = cursorStr;
+        return cursorStr;
+      } catch (e) {
+        return 'crosshair';
+      }
+    }
+
+    function showSizePreview(clientX, clientY, color) {
       const el = ensureSizePreviewEl();
       if (!el) return;
-          // fallback to last-known cursor if event didn't provide coords
-          const rect = canvas.getBoundingClientRect();
-          const x = (clientX || clientX === 0) ? clientX : (state.cursorClientX || (rect.left + rect.width / 2));
-          const y = (clientY || clientY === 0) ? clientY : (state.cursorClientY || (rect.top + rect.height / 2));
-          // Determine the target layer for painting (paint overlay if present,
-          // otherwise the active layer). The stroke width used when drawing is
-          // `state.brushSize / layer.scale` in canvas/internal pixels. Convert
-          // that to CSS pixels for the DOM preview by multiplying with
-          // (rect.width / canvas.width).
+      // fallback to last-known cursor if event didn't provide coords
+      const rect = canvas.getBoundingClientRect();
+      const fallbackX = state.cursorClientX || (rect.left + rect.width / 2);
+      const fallbackY = state.cursorClientY || (rect.top + rect.height / 2);
+      const clientXUsed = (clientX || clientX === 0) ? clientX : fallbackX;
+      const clientYUsed = (clientY || clientY === 0) ? clientY : fallbackY;
+
+      // Map client coordinates to canvas internal coordinates, then map
+      // back to transformed/display CSS coordinates so the preview sits
+      // exactly where the brush stroke will appear on-screen even when
+      // the canvas is panned/scaled.
+      const canvasPt = clientToCanvas(clientXUsed, clientYUsed);
+      let displayX = clientXUsed;
+      let displayY = clientYUsed;
+      if (canvasPt && canvas.width > 0 && canvas.height > 0) {
+        displayX = rect.left + (canvasPt.x / canvas.width) * rect.width;
+        displayY = rect.top + (canvasPt.y / canvas.height) * rect.height;
+      }
+
+      // Determine the target layer for painting (paint overlay if present,
+      // otherwise the active layer). The stroke width used when drawing is
+      // `state.brushSize / layer.scale` in canvas/internal pixels. Convert
+      // that to CSS pixels for the DOM preview by multiplying with
+      // (rect.width / canvas.width).
       const paintLayer = state.layers.find((x) => x.isPaintOverlay) || state.layers[state.active] || null;
       const layerScale = paintLayer ? Math.max(0.05, paintLayer.scale || 1) : 1;
       const editLineWidth = Math.max(1, state.brushSize / layerScale);
       const sizeCss = Math.max(1, Math.round(editLineWidth * (rect.width / canvas.width)));
-      // debug logging removed
-      // update inner dot and label
+
+      // update inner dot and label. Use a semi-transparent fill and colored
+      // border so the circle is visible but not obtrusive.
+      const baseColor = color || state.drawColor || '#ffffff';
       if (el._dot) {
         el._dot.style.width = `${sizeCss}px`;
         el._dot.style.height = `${sizeCss}px`;
+        el._dot.style.border = `2px solid ${baseColor}`;
+        const bg = hexToRgba(baseColor, 0.12) || 'transparent';
+        el._dot.style.background = bg;
+        // keep dot centered inside the container
+        el._dot.style.transform = 'translate(-50%, -50%)';
       } else {
         el.style.width = `${sizeCss}px`;
         el.style.height = `${sizeCss}px`;
@@ -230,17 +312,17 @@
       if (el._label) {
         el._label.textContent = `${Math.round(state.brushSize)} px`;
       }
-      el.style.left = `${x}px`;
-      el.style.top = `${y}px`;
+      el.style.left = `${displayX}px`;
+      el.style.top = `${displayY}px`;
       el.style.display = 'block';
+      // keep visible until explicitly hidden (hide on pointerleave/tool change)
+      if (_sizePreviewTimeout) {
+        clearTimeout(_sizePreviewTimeout);
+        _sizePreviewTimeout = null;
+      }
       // force reflow so size change is applied immediately
       // eslint-disable-next-line no-unused-expressions
       el.offsetWidth;
-      if (_sizePreviewTimeout) clearTimeout(_sizePreviewTimeout);
-      _sizePreviewTimeout = setTimeout(() => {
-        el.style.display = 'none';
-        _sizePreviewTimeout = null;
-      }, 900);
     }
 
     function hideSizePreview() {
@@ -256,6 +338,106 @@
       el.style.display = 'none';
     }
 
+    // Convert client coordinates to canvas internal pixels
+    function clientToCanvas(clientX, clientY) {
+      try {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return {
+          x: (clientX - rect.left) * scaleX,
+          y: (clientY - rect.top) * scaleY,
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function ensureColorPreviewEl() {
+      const uid = root.dataset.composerUid || (root.dataset.composerUid = crypto.randomUUID());
+      let el = document.querySelector(`.composer-color-preview[data-composer-uid="${uid}"]`);
+      if (el) return el;
+
+      el = document.createElement('div');
+      el.className = 'composer-color-preview';
+      el.setAttribute('data-composer-uid', uid);
+      Object.assign(el.style, {
+        position: 'fixed',
+        pointerEvents: 'none',
+        zIndex: 10002,
+        left: '0px',
+        top: '0px',
+        transform: 'translate(-50%, -80%)',
+        display: 'none',
+      });
+
+      const swatch = document.createElement('div');
+      swatch.className = 'composer-color-preview-swatch';
+      Object.assign(swatch.style, {
+        width: '20px',
+        height: '20px',
+        borderRadius: '4px',
+        border: '1px solid rgba(0,0,0,0.6)',
+        boxSizing: 'border-box',
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        marginRight: '6px',
+      });
+
+      const label = document.createElement('div');
+      label.className = 'composer-color-preview-label';
+      Object.assign(label.style, {
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        color: '#fff',
+        fontSize: '12px',
+        background: 'rgba(0,0,0,0.6)',
+        padding: '2px 6px',
+        borderRadius: '4px',
+      });
+
+      el.appendChild(swatch);
+      el.appendChild(label);
+      el._swatch = swatch;
+      el._label = label;
+
+      document.body.appendChild(el);
+      return el;
+    }
+
+    function showColorPreview(clientX, clientY, color) {
+      const el = ensureColorPreviewEl();
+      if (!el) return;
+      if (color) {
+        el._swatch.style.background = color;
+        el._label.textContent = color;
+      } else {
+        el._swatch.style.background = 'transparent';
+        el._label.textContent = '';
+      }
+      el.style.left = `${clientX}px`;
+      el.style.top = `${clientY}px`;
+      el.style.display = 'block';
+    }
+
+    function hideColorPreview() {
+      const uid = root.dataset.composerUid;
+      if (!uid) return;
+      const sel = `.composer-color-preview[data-composer-uid="${uid}"]`;
+      const el = document.querySelector(sel);
+      if (!el) return;
+      el.style.display = 'none';
+    }
+
+    function sampleCurrentCanvasColor(px, py) {
+      try {
+        const data = ctx.getImageData(Math.round(px), Math.round(py), 1, 1).data;
+        return `#${[data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+      } catch (e) {
+        return null;
+      }
+    }
+
     function setTool(toolName) {
       state.tool = toolName;
       if (toolName !== "crop") {
@@ -266,6 +448,36 @@
       }
       updateToolUi();
       draw();
+
+      // Show or hide the brush/line size preview depending on the active tool.
+      try {
+        if (toolName === "brush" || toolName === "line") {
+          const rect = canvas.getBoundingClientRect();
+          const cx = state.cursorClientX || (rect.left + rect.width / 2);
+          const cy = state.cursorClientY || (rect.top + rect.height / 2);
+          showSizePreview(cx, cy);
+        } else {
+          hideSizePreview();
+        }
+      } catch (e) {
+        // ignore preview errors
+      }
+
+      // Show or hide the picker color preview depending on the active tool.
+      try {
+        if (toolName === "picker") {
+          const rect = canvas.getBoundingClientRect();
+          const cx = state.cursorClientX || (rect.left + rect.width / 2);
+          const cy = state.cursorClientY || (rect.top + rect.height / 2);
+          const c = clientToCanvas(cx, cy);
+          const color = c ? sampleCurrentCanvasColor(c.x, c.y) : null;
+          showColorPreview(cx, cy, color);
+        } else {
+          hideColorPreview();
+        }
+      } catch (e) {
+        // ignore preview failures
+      }
     }
 
     function getBackgroundIndex() {
@@ -1231,20 +1443,31 @@
         if (canvasWrap) {
           canvasWrap.classList.add("panning");
         }
-        canvas.setPointerCapture(evt.pointerId);
+        try {
+          canvas.setPointerCapture(evt.pointerId);
+        } catch (e) {
+          // ignore pointer capture failures
+        }
+        // Hide any on-cursor previews while the user is panning with right button
+        hideSizePreview();
+        hideColorPreview();
+        // Update cursor to the panning grip immediately
+        updateToolUi();
         return;
       }
 
       const p = getMousePos(evt);
 
       if (state.tool === "picker") {
-        const color = sampleCanvasColor(p.x, p.y);
-        state.drawColor = color;
-        if (drawColorInput) {
-          drawColorInput.value = color;
+        // Start a short-lived picker drag so we pick on pointerup. If the
+        // picker was activated via the 'I' key we will revert to the
+        // previously-active tool after picking.
+        state.dragMode = "picker";
+        try {
+          canvas.setPointerCapture(evt.pointerId);
+        } catch (e) {
+          // ignore pointer capture failures
         }
-        updateToolUi();
-        setStatus(`Picked color ${color}`);
         return;
       }
 
@@ -1358,6 +1581,24 @@
         return;
       }
 
+      // If picker is the active tool or we're in a picker drag, show color preview
+      if (state.tool === "picker" || state.dragMode === "picker") {
+        const c = clientToCanvas(evt.clientX, evt.clientY);
+        if (c) {
+          const color = sampleCurrentCanvasColor(c.x, c.y);
+          showColorPreview(evt.clientX, evt.clientY, color);
+        } else {
+          hideColorPreview();
+        }
+        // If we're only previewing (not actually dragging another tool), don't proceed to other handlers
+        if (state.tool === "picker" && state.dragMode !== "picker") return;
+      }
+
+      // If brush or line tool is active, show the circular size preview at cursor.
+      if (state.tool === "brush" || state.tool === "line") {
+        showSizePreview(evt.clientX, evt.clientY);
+      }
+
       if (!state.dragMode || state.active < 0) return;
 
       const p = getMousePos(evt);
@@ -1395,11 +1636,29 @@
       draw();
     });
 
-    canvas.addEventListener("pointerup", () => {
+    canvas.addEventListener("pointerup", (evt) => {
       const layer = getActiveLayer();
       if (state.dragMode === "pan_canvas") {
         if (canvasWrap) {
           canvasWrap.classList.remove("panning");
+        }
+      } else if (state.dragMode === "picker") {
+        // Perform the color pick on pointer release so quick taps feel natural.
+        const p = getMousePos(evt);
+        const color = sampleCanvasColor(p.x, p.y);
+        state.drawColor = color;
+        if (drawColorInput) {
+          drawColorInput.value = color;
+        }
+        updateToolUi();
+        setStatus(`Picked color ${color}`);
+
+        // If the picker was temporarily invoked via the 'I' key, return to
+        // the previous tool now.
+        if (state._picker_prev_tool) {
+          const prev = state._picker_prev_tool;
+          state._picker_prev_tool = null;
+          setTool(prev);
         }
       } else if (state.dragMode === "line" && layer && state.linePreview && state.linePreview.layerId === layer.id) {
         pushPaintUndoSnapshot(layer);
@@ -1413,6 +1672,20 @@
 
       state.dragMode = null;
       state.brushLastPoint = null;
+
+      // Restore cursor and previews after finishing a pan. If the active
+      // tool is brush/line, show the size preview again at release point.
+      try {
+        updateToolUi();
+        if (state.tool === "brush" || state.tool === "line") {
+          showSizePreview(evt.clientX, evt.clientY, state.drawColor);
+        } else {
+          hideSizePreview();
+        }
+      } catch (e) {
+        // ignore preview restore failures
+      }
+
       draw();
     });
 
@@ -1420,15 +1693,29 @@
       if (canvasWrap) {
         canvasWrap.classList.remove("panning");
       }
+      // If a temporary picker was active but pointer was cancelled, restore
+      // the previous tool so the UI doesn't get stuck in picker mode.
+      if (state._picker_prev_tool) {
+        const prev = state._picker_prev_tool;
+        state._picker_prev_tool = null;
+        setTool(prev);
+      }
       state.dragMode = null;
       state.brushLastPoint = null;
       state.linePreview = null;
       state.cropPreview = null;
+      hideColorPreview();
+      hideSizePreview();
       draw();
     });
 
     canvas.addEventListener("contextmenu", (evt) => {
       evt.preventDefault();
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+      hideColorPreview();
+      hideSizePreview();
     });
 
 
@@ -1540,6 +1827,16 @@
           evt.preventDefault();
           return;
         } else if (key === "r" || key === "4") {
+          setTool("picker");
+          evt.preventDefault();
+          return;
+        } else if (key === "i") {
+          // Temporary picker: remember previous tool so we can return to it
+          if (state.tool !== "picker") {
+            state._picker_prev_tool = state.tool;
+          } else {
+            state._picker_prev_tool = null;
+          }
           setTool("picker");
           evt.preventDefault();
           return;
@@ -1773,6 +2070,37 @@
     if (drawColorInput) {
       drawColorInput.addEventListener("input", () => {
         state.drawColor = drawColorInput.value || "#ff3366";
+        if (state.tool === "brush" || state.tool === "line") {
+          try {
+            canvas.style.cursor = ensureBrushCursor(state.drawColor);
+          } catch (e) {
+            // ignore
+          }
+        }
+      });
+    }
+
+    if (flattenPaintBtn) {
+      flattenPaintBtn.addEventListener("click", () => {
+        const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+        if (overlayIndex < 0) {
+          setStatus("No paint overlay present.");
+          return;
+        }
+
+        const overlay = state.layers[overlayIndex];
+        // Ensure the layer image is an editable canvas element (preserve pixels)
+        ensureEditableLayerCanvas(overlay);
+
+        // Turn it into a normal layer that can be moved, cropped and reordered.
+        overlay.isPaintOverlay = false;
+        overlay.name = overlay.name || "Paint Layer";
+
+        // Make the converted layer the active selection so the user can act on it immediately.
+        state.active = state.layers.indexOf(overlay);
+        renderLayerList();
+        draw();
+        setStatus("Paint overlay converted to a normal layer.");
       });
     }
 
