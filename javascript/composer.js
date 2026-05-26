@@ -1437,14 +1437,31 @@
       const nextScale = Math.min(6, Math.max(0.25, state.viewportScale * zoomStep));
       if (Math.abs(nextScale - state.viewportScale) < 0.0001) return;
 
-      const rect = canvas.getBoundingClientRect();
+      // Measure pointer position against an untransformed container so
+      // CSS transforms on the canvas don't change the measurement used
+      // for interaction math (this prevents drift during repeated zooms).
+      const measureRect = (canvasWrap && canvasWrap.getBoundingClientRect)
+        ? canvasWrap.getBoundingClientRect()
+        : canvas.getBoundingClientRect();
+
+      // pointer position in CSS pixels relative to the (untransformed) container
+      const pointerCssX = evt.clientX - measureRect.left;
+      const pointerCssY = evt.clientY - measureRect.top;
+
+      // Use the layout (client) size to convert CSS px -> canvas internal pixels.
+      // clientWidth/clientHeight are not affected by CSS transforms.
+      const clientWidth = canvas.clientWidth || measureRect.width || 1;
+      const clientHeight = canvas.clientHeight || measureRect.height || 1;
+      const cssToCanvasX = canvas.width / clientWidth;
+      const cssToCanvasY = canvas.height / clientHeight;
+
+      // debug logging removed
+
       // pointer position in canvas internal pixels
-      const canvasPointerX = (evt.clientX - rect.left) * (canvas.width / rect.width);
-      const canvasPointerY = (evt.clientY - rect.top) * (canvas.height / rect.height);
+      const canvasPointerX = pointerCssX * cssToCanvasX;
+      const canvasPointerY = pointerCssY * cssToCanvasY;
 
       // convert viewport CSS px to canvas internal pixels
-      const cssToCanvasX = canvas.width / rect.width;
-      const cssToCanvasY = canvas.height / rect.height;
       const viewportX_canvas = state.viewportX * cssToCanvasX;
       const viewportY_canvas = state.viewportY * cssToCanvasY;
 
@@ -1462,6 +1479,7 @@
       state.viewportScale = nextScale;
 
       applyCanvasViewport();
+
       setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
     }, { passive: false });
 
