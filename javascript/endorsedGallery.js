@@ -2730,6 +2730,83 @@
         });
     }
 
+    /**
+     * Intercept the "Delete Originals" button to show a confirmation dialog.
+     * This prevents accidental deletion of archived image files.
+     */
+    function setupDeleteOriginalsConfirm() {
+        const btn = gradioApp().querySelector('#endgal_delete_originals_btn');
+        if (!btn || btn.__endgalDelConfirm) return;
+        btn.__endgalDelConfirm = true;
+
+        btn.addEventListener('click', function(e) {
+            const confirmed = window.confirm(
+                'This will permanently delete the original PNG files for ALL archived images.\n' +
+                'Thumbnails and preview caches will be kept.\n\n' +
+                'This action CANNOT be undone. Continue?'
+            );
+            if (!confirmed) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }
+        }, true); // use capture phase to intercept before Gradio
+    }
+
+    /**
+     * Watch the hidden stats HTML component. When populated, show a modal popup
+     * with the gallery statistics. Close on backdrop click or Escape.
+     */
+    function setupStatisticsPopup() {
+        const statsEl = gradioApp().querySelector('#endgal_stats_html');
+        if (!statsEl || statsEl.__endgalStatsPopup) return;
+        statsEl.__endgalStatsPopup = true;
+
+        // Create modal overlay once
+        let overlay = document.getElementById('endgal_stats_overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'endgal_stats_overlay';
+            overlay.className = 'endgal-stats-overlay';
+            overlay.innerHTML = '<div class="endgal-stats-modal"><div class="endgal-stats-close">&times;</div><div class="endgal-stats-body"></div></div>';
+            document.body.appendChild(overlay);
+
+            // Close on backdrop click
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) closeStats();
+            });
+            // Close on X button
+            overlay.querySelector('.endgal-stats-close').addEventListener('click', closeStats);
+            // Close on Escape
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && overlay.classList.contains('show')) closeStats();
+            });
+        }
+
+        function closeStats() {
+            overlay.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+
+        // Watch for content changes
+        const observer = new MutationObserver(function() {
+            // Check for our specific stats wrapper injected by Python backend
+            const wrapper = statsEl.querySelector('.endgal-stats-wrap');
+            if (!wrapper) return;
+            
+            // Move content into modal
+            const body = overlay.querySelector('.endgal-stats-body');
+            body.innerHTML = wrapper.outerHTML;
+            
+            overlay.classList.add('show');
+            document.body.style.overflow = 'hidden';
+            
+            // Clear the hidden component so it can be re-triggered on next click
+            statsEl.innerHTML = '';
+        });
+
+        observer.observe(statsEl, { childList: true, subtree: true, characterData: true });
+    }
+
     // Wait for Gradio to finish rendering before attaching listeners
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
@@ -2748,6 +2825,10 @@
             setTimeout(setupEndOfGalleryMonitor, 3000);
             setTimeout(setupReverseUnratedSync, 1500);
             setTimeout(setupReverseUnratedSync, 3000);
+            setTimeout(setupDeleteOriginalsConfirm, 1500);
+            setTimeout(setupDeleteOriginalsConfirm, 3000);
+            setTimeout(setupStatisticsPopup, 1500);
+            setTimeout(setupStatisticsPopup, 3000);
         });
     } else {
         ensureTxt2ImgSwitchGuard();
@@ -2765,6 +2846,10 @@
         setTimeout(setupEndOfGalleryMonitor, 3000);
         setTimeout(setupReverseUnratedSync, 1500);
         setTimeout(setupReverseUnratedSync, 3000);
+        setTimeout(setupDeleteOriginalsConfirm, 1500);
+        setTimeout(setupDeleteOriginalsConfirm, 3000);
+        setTimeout(setupStatisticsPopup, 1500);
+        setTimeout(setupStatisticsPopup, 3000);
     }
 
 })();

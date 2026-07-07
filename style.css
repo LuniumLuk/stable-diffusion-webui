@@ -2002,7 +2002,8 @@ body.resizing .resize-handle {
 
 #endgal_refresh_btn,
 #endgal_sync_btn,
-#endgal_archive_unrated_btn {
+#endgal_archive_unrated_btn,
+#endgal_delete_originals_btn {
     min-height: 2.35em !important;
 }
 
@@ -2038,6 +2039,106 @@ body.resizing .resize-handle {
 #endgal_sync_btn    { background: #1e3a5f; border-color: #38bdf8; }
 #endgal_sync_btn:hover { background: #0c4a6e; }
 #endgal_archive_unrated_btn { min-width: 142px; }
+#endgal_delete_originals_btn {
+    min-width: 142px;
+    background: #5f1e1e;
+    border-color: #f87171;
+    color: #fca5a5;
+}
+#endgal_delete_originals_btn:hover {
+    background: #7f1d1d;
+    color: #fecaca;
+}
+
+#endgal_stats_html {
+    display: none !important;
+    height: 0;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+}
+
+#endgal_stats_btn {
+    min-width: 120px;
+    background: #1e3a4a;
+    border-color: #60a5fa;
+    color: #93c5fd;
+}
+#endgal_stats_btn:hover {
+    background: #1e3a5f;
+    color: #bfdbfe;
+}
+
+/* --- Statistics popup overlay --- */
+.endgal-stats-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.6);
+    align-items: center;
+    justify-content: center;
+}
+.endgal-stats-overlay.show {
+    display: flex;
+}
+.endgal-stats-modal {
+    background: #1a1a2e;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 0;
+    min-width: 380px;
+    max-width: 520px;
+    width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    position: relative;
+}
+.endgal-stats-close {
+    position: absolute;
+    top: 8px;
+    right: 14px;
+    font-size: 24px;
+    color: #94a3b8;
+    cursor: pointer;
+    line-height: 1;
+    z-index: 2;
+}
+.endgal-stats-close:hover {
+    color: #f1f5f9;
+}
+.endgal-stats-body {
+    padding: 20px 24px;
+}
+
+/* Stats table inside popup */
+.endgal-stats-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin-bottom: 14px;
+    text-align: center;
+}
+.endgal-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.endgal-stats-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #1e293b;
+    font-size: 14px;
+}
+.endgal-stat-label {
+    color: #94a3b8;
+    text-align: left;
+}
+.endgal-stat-value {
+    color: #e2e8f0;
+    text-align: right;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
 
 #endgal_advanced_controls {
     margin-top: 2px;

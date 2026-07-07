@@ -229,6 +229,20 @@ def _get_thumb(path: str) -> str:
         _thumb_cache[cache_key] = url
         return url
     except Exception:
+        # Original file may have been deleted (e.g. archived + originals removed).
+        # Fall back to DB-stored mtime to locate existing cached thumbnail.
+        db_mtime = endorsement_db.get_file_mtime_by_path(path)
+        if db_mtime is not None:
+            cache_key = (path, db_mtime)
+            cached = _thumb_cache.get(cache_key)
+            if cached:
+                return cached
+            _ensure_thumb_cache_dir()
+            thumb_path = _thumb_file(path, db_mtime)
+            if os.path.exists(thumb_path):
+                url = _file_url(thumb_path)
+                _thumb_cache[cache_key] = url
+                return url
         return ""
 
 
@@ -256,6 +270,20 @@ def _get_preview_thumb(path: str) -> str:
         _preview_cache[cache_key] = url
         return url
     except Exception:
+        # Original file may have been deleted (e.g. archived + originals removed).
+        # Fall back to DB-stored mtime to locate existing cached preview.
+        db_mtime = endorsement_db.get_file_mtime_by_path(path)
+        if db_mtime is not None:
+            cache_key = (path, db_mtime)
+            cached = _preview_cache.get(cache_key)
+            if cached:
+                return cached
+            _ensure_thumb_cache_dir()
+            preview_path = _preview_file(path, db_mtime)
+            if os.path.exists(preview_path):
+                url = _file_url(preview_path)
+                _preview_cache[cache_key] = url
+                return url
         return ""
 
 
@@ -669,6 +697,10 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     thumb = _get_thumb(path) if path else ""
     preview_url = _get_preview_thumb(path) if path else ""
     orig_url = _file_url(path)
+    # If the original file was deleted (e.g. archived + originals removed),
+    # clear orig_url so the preview click falls back directly to the thumbnail.
+    if path and not os.path.isfile(path):
+        orig_url = ""
     resolution_label = _resolution_label(record)
     hires_marker = _hires_marker_label(record)
     generation_type_label = _generation_type_label(record, path)
@@ -1277,6 +1309,19 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
     elif t == "archive_all_unrated":
         count = endorsement_db.archive_all_unrated()
         status_message = f'<div class="endgal-sync-result">Archived {count} unrated image(s).</div>'
+    elif t == "delete_archived_originals":
+        result = endorsement_db.delete_archived_originals()
+        deleted = result["deleted"]
+        skipped = result["skipped"]
+        errors = result["errors"]
+        freed_mb = result["freed_bytes"] / (1024 * 1024)
+        parts = [f"Deleted {deleted} original file(s)"]
+        if skipped:
+            parts.append(f"{skipped} already gone")
+        if errors:
+            parts.append(f"{errors} error(s)")
+        parts.append(f"Freed {freed_mb:.1f} MB")
+        status_message = f'<div class="endgal-sync-result">{" · ".join(parts)}. Thumbnails kept.</div>'
     elif t == "removebg":
         ok, status_message = _apply_removebg(data.get("path", ""))
         if not ok:
@@ -1396,6 +1441,102 @@ def get_keyword_insights_html(mode: str = "", query: str = "", date_filter: str 
     yield status_html + f'<div class="endgal-insights-grid">{add_section}{remove_section}</div>'
 
 
+def _format_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    elif n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    elif n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    else:
+        return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _dir_size(dir_path: str) -> tuple[int, int]:
+    """Return (file_count, total_bytes) for all files in a directory tree."""
+    fc = 0
+    tb = 0
+    try:
+        for root, _, files in os.walk(dir_path):
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    tb += os.path.getsize(fp)
+                    fc += 1
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return fc, tb
+
+
+def get_gallery_statistics() -> str:
+    """Return an HTML statistics block for the gallery."""
+    total_gen = endorsement_db.count_generated()
+    endorsed = endorsement_db.count_endorsements("")
+    disliked = endorsement_db.count_disliked("")
+    archived = endorsement_db.count_archived("")
+
+    # Count origin files (still on disk) vs deleted
+    origins_on_disk = 0
+    origins_deleted = 0
+    origins_total_bytes = 0
+    with endorsement_db._get_conn() as conn:
+        rows = conn.execute("SELECT path FROM generated_images WHERE path IS NOT NULL AND path != ''").fetchall()
+        for row in rows:
+            p = row[0]
+            if os.path.isfile(p):
+                origins_on_disk += 1
+                try:
+                    origins_total_bytes += os.path.getsize(p)
+                except OSError:
+                    pass
+            else:
+                origins_deleted += 1
+
+    thumb_count, thumb_bytes = _dir_size(_THUMB_CACHE_DIR)
+    preview_count, preview_bytes = _dir_size(_PREVIEW_CACHE_DIR)
+
+    unrated = max(0, total_gen - endorsed - disliked - archived)
+
+    rows = [
+        ("📸 Total indexed images", str(total_gen)),
+        ("💾 Origin files on disk", f"{origins_on_disk} ({_format_bytes(origins_total_bytes)})"),
+        ("🗑  Deleted originals", str(origins_deleted)),
+        ("🖼  Thumbnail cache", f"{thumb_count} files ({_format_bytes(thumb_bytes)})"),
+        ("🔍 Preview cache", f"{preview_count} files ({_format_bytes(preview_bytes)})"),
+        ("⭐ Endorsed", str(endorsed)),
+        ("👎 Disliked", str(disliked)),
+        ("📦 Archived", str(archived)),
+        ("⬜ Unrated", str(unrated)),
+    ]
+
+    # Also count unique tags
+    tag_count = 0
+    try:
+        with endorsement_db._get_conn() as conn:
+            row = conn.execute("SELECT COUNT(DISTINCT tag) FROM image_tags").fetchone()
+            if row:
+                tag_count = row[0]
+    except Exception:
+        pass
+    if tag_count:
+        rows.append(("🏷  Unique caption tags", str(tag_count)))
+
+    total_cache_bytes = thumb_bytes + preview_bytes
+    rows.append(("📁 Total disk (originals + cache)", _format_bytes(origins_total_bytes + total_cache_bytes)))
+
+    html_rows = "".join(
+        f'<tr><td class="endgal-stat-label">{label}</td><td class="endgal-stat-value">{value}</td></tr>'
+        for label, value in rows
+    )
+
+    return f"""<div class="endgal-stats-wrap">
+<div class="endgal-stats-title">📊 Gallery Statistics</div>
+<table class="endgal-stats-table">{html_rows}</table>
+</div>"""
+
+
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_mode_row"):
@@ -1407,7 +1548,9 @@ def on_ui_tabs():
             )
             with gr.Row(elem_id="endgal_primary_actions", variant="compact"):
                 refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
+                stats_btn = gr.Button("📊 Statistics", elem_id="endgal_stats_btn", size="sm")
                 archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
+                delete_originals_btn = gr.Button("🧹 Delete Originals", elem_id="endgal_delete_originals_btn", size="sm")
 
         with gr.Accordion("Advanced Gallery Settings", open=False, elem_id="endgal_advanced_controls"):
             with gr.Row(elem_id="endgal_controls_row"):
@@ -1515,6 +1658,7 @@ def on_ui_tabs():
             visible=False,
             elem_id="endgal_fire_value_suggestions_json",
         )
+        stats_html = gr.HTML(value="", elem_id="endgal_stats_html")
 
         for btn, tabname in [(apply_txt2img_btn, "txt2img"), (apply_img2img_btn, "img2img")]:
             infotext_utils.register_paste_params_button(
@@ -1623,6 +1767,25 @@ def on_ui_tabs():
             fn=do_archive_unrated,
             inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
+        )
+
+        def do_delete_archived_originals(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
+            action_json = json.dumps({"type": "delete_archived_originals"})
+            status, html, info, info2, page = handle_gallery_action(
+                action_json, mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode
+            )
+            return status, html, info, info2, page
+
+        delete_originals_btn.click(
+            fn=do_delete_archived_originals,
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
+            outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
+        )
+
+        stats_btn.click(
+            fn=get_gallery_statistics,
+            inputs=[],
+            outputs=[stats_html],
         )
 
         action_btn.click(

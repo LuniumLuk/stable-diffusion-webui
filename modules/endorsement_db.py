@@ -1077,6 +1077,18 @@ def get_indexed_path_mtimes() -> dict:
         return {r[0]: r[1] for r in rows}
 
 
+def get_file_mtime_by_path(path: str) -> float | None:
+    """Return the stored file_mtime for a path from generated_images, or None."""
+    if not path:
+        return None
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT file_mtime FROM generated_images WHERE path=? LIMIT 1",
+            (path,),
+        ).fetchone()
+    return row[0] if row else None
+
+
 def count_generated_filtered(query: str = "", exclude_disliked: bool = True,
                             since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
@@ -1195,4 +1207,50 @@ def sync_output_dirs(output_dirs: list, progress_cb=None) -> dict:
         "skipped": skipped,
         "errors": errors,
         "total": total,
+    }
+
+
+def delete_archived_originals() -> dict:
+    """Delete original image files for all archived items, keeping thumbnails/preview caches.
+
+    Returns dict with:
+      - deleted: number of files successfully deleted
+      - skipped: files already gone or not found
+      - errors: files that could not be deleted (permission, etc.)
+      - freed_bytes: total bytes freed
+    """
+    deleted = 0
+    skipped = 0
+    errors = 0
+    freed_bytes = 0
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT g.path
+            FROM archived a
+            JOIN generated_images g ON g.item_key = a.item_key
+            WHERE g.path IS NOT NULL AND g.path != ''
+            """
+        ).fetchall()
+
+    for row in rows:
+        path = row[0]
+        if not path or not os.path.isfile(path):
+            skipped += 1
+            continue
+
+        try:
+            file_size = os.path.getsize(path)
+            os.remove(path)
+            deleted += 1
+            freed_bytes += file_size
+        except OSError:
+            errors += 1
+
+    return {
+        "deleted": deleted,
+        "skipped": skipped,
+        "errors": errors,
+        "freed_bytes": freed_bytes,
     }
