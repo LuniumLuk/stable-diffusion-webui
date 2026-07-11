@@ -30,6 +30,20 @@ endorsement_db.init_db()
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
 
+
+def _format_prompt_html(text: str) -> str:
+    """Return HTML for a prompt string with comment lines (starting with '#')
+    rendered in green italic.  Safe to embed inside a <pre> element."""
+    lines = str(text or "").split("\n")
+    out = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            out.append(f'<span class="prompt-comment">{_html.escape(line)}</span>')
+        else:
+            out.append(_html.escape(line))
+    return "\n".join(out)
+
 THUMB_PX = 192
 PREVIEW_PX = 1024
 PAGE_SIZE_DEFAULT = 48
@@ -954,11 +968,11 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
             {tags_section}
             <details class="endgal-details">
                 <summary>Prompt</summary>
-                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{prompt_b64}', this)">{_html.escape(prompt_full)}</pre>
+                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{prompt_b64}', this)">{_format_prompt_html(prompt_full)}</pre>
             </details>
             <details class="endgal-details">
                 <summary>Negative prompt</summary>
-                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{negative_b64}', this)">{_html.escape(negative_full)}</pre>
+                <pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64('{negative_b64}', this)">{_format_prompt_html(negative_full)}</pre>
             </details>
             <details class="endgal-details">
                 <summary>Settings</summary>

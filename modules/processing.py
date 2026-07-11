@@ -447,6 +447,13 @@ class StableDiffusionProcessing:
         self.all_prompts = [shared.prompt_styles.apply_styles_to_prompt(x, self.styles) for x in self.all_prompts]
         self.all_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_negative_prompts]
 
+        # Preserve the originals (with comment lines) for PNG metadata and gallery
+        # restore, then strip comments so scripts.process() and the model are clean.
+        self.all_prompts_with_comments = list(self.all_prompts)
+        self.all_negative_prompts_with_comments = list(self.all_negative_prompts)
+        self.all_prompts = [strip_prompt_comments(pr) for pr in self.all_prompts]
+        self.all_negative_prompts = [strip_prompt_comments(pr) for pr in self.all_negative_prompts]
+
         self.main_prompt = self.all_prompts[0]
         self.main_negative_prompt = self.all_negative_prompts[0]
 
@@ -891,6 +898,19 @@ def _print_save_result(filepath: str, elapsed: float, image=None):
     print(line)
 
 
+def strip_prompt_comments(text: str) -> str:
+    """Strip comment lines (lines whose first non-whitespace character is '#') from a prompt.
+
+    Called in setup_prompts() so that scripts.process() and the diffusion model
+    always receive clean prompts.  The originals (with comments) are preserved in
+    all_prompts_with_comments / all_negative_prompts_with_comments for PNG metadata
+    and gallery restore.
+    """
+    lines = text.split('\n')
+    filtered = [line for line in lines if not line.lstrip().startswith('#')]
+    return '\n'.join(filtered)
+
+
 def process_images(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None:
         p.scripts.before_process(p)
@@ -1094,8 +1114,12 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             if p.scripts is not None:
                 p.scripts.postprocess_batch(p, x_samples_ddim, batch_number=n)
 
-                p.prompts = p.all_prompts[n * p.batch_size:(n + 1) * p.batch_size]
-                p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
+                # Restore prompts WITH comments so that infotext saved to PNG
+                # metadata (and thus gallery restore) preserves comment lines.
+                _wc = getattr(p, 'all_prompts_with_comments', p.all_prompts)
+                _nwc = getattr(p, 'all_negative_prompts_with_comments', p.all_negative_prompts)
+                p.prompts = _wc[n * p.batch_size:(n + 1) * p.batch_size]
+                p.negative_prompts = _nwc[n * p.batch_size:(n + 1) * p.batch_size]
 
                 batch_params = scripts.PostprocessBatchListArgs(list(x_samples_ddim))
                 p.scripts.postprocess_batch_list(p, batch_params, batch_number=n)
@@ -1799,6 +1823,12 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
 
         self.all_hr_prompts = [shared.prompt_styles.apply_styles_to_prompt(x, self.styles) for x in self.all_hr_prompts]
         self.all_hr_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_hr_negative_prompts]
+
+        # Same comment-preservation pattern as the base class setup_prompts().
+        self.all_hr_prompts_with_comments = list(self.all_hr_prompts)
+        self.all_hr_negative_prompts_with_comments = list(self.all_hr_negative_prompts)
+        self.all_hr_prompts = [strip_prompt_comments(pr) for pr in self.all_hr_prompts]
+        self.all_hr_negative_prompts = [strip_prompt_comments(pr) for pr in self.all_hr_negative_prompts]
 
     def calculate_hr_conds(self, steps_override=None):
         if self.hr_c is not None:

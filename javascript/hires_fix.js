@@ -349,8 +349,10 @@ function onCalcResolutionHires(enable, width, height, hr_scale, hr_resize_x, hr_
 
         function syncHighlightLayout() {
             const cs = window.getComputedStyle(textarea);
-            highlight.style.top = `${textarea.offsetTop}px`;
-            highlight.style.left = `${textarea.offsetLeft}px`;
+            const borderTop  = parseFloat(cs.borderTopWidth)  || 0;
+            const borderLeft = parseFloat(cs.borderLeftWidth) || 0;
+            highlight.style.top  = `${textarea.offsetTop  + borderTop}px`;
+            highlight.style.left = `${textarea.offsetLeft + borderLeft}px`;
             highlight.style.width = `${textarea.clientWidth}px`;
             highlight.style.height = `${textarea.clientHeight}px`;
             highlight.style.paddingTop = cs.paddingTop;
@@ -360,6 +362,7 @@ function onCalcResolutionHires(enable, width, height, hr_scale, hr_resize_x, hr_
             highlight.style.font = cs.font;
             highlight.style.lineHeight = cs.lineHeight;
             highlight.style.letterSpacing = cs.letterSpacing;
+            highlight.style.wordSpacing = cs.wordSpacing;
             highlight.style.textAlign = cs.textAlign;
             highlight.style.tabSize = cs.tabSize;
         }
@@ -538,6 +541,22 @@ function onCalcResolutionHires(enable, width, height, hr_scale, hr_resize_x, hr_
             }, ms);
         });
         window.addEventListener('resize', syncHighlightLayout);
+
+        // Hook the textarea's native value setter so Gradio/Svelte restoring
+        // a value (e.g. "Send to txt2img") immediately refreshes the highlight.
+        (() => {
+            const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            if (!desc || !desc.set) return;
+            Object.defineProperty(textarea, 'value', {
+                get() { return desc.get.call(this); },
+                set(v) {
+                    desc.set.call(this, v);
+                    syncHighlight();
+                    renderHintLine();
+                },
+                configurable: true,
+            });
+        })();
     }
 
     onUiLoaded(installHrStageConfigAssist);

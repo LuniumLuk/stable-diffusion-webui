@@ -2007,15 +2007,36 @@
         }
     }
 
+    /**
+     * Escape text for HTML and wrap lines beginning with '#' in a comment span.
+     * Used for prompt / negative-prompt panels in the image preview overlay.
+     */
+    function _formatPromptWithComments(text) {
+        function escHtml(s) {
+            return String(s || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+        const lines = String(text || '').split('\n');
+        return lines.map(function (line) {
+            var trimmed = line.replace(/^\s+/, '');
+            if (trimmed.charAt(0) === '#') {
+                return '<span class="prompt-comment">' + escHtml(line) + '</span>';
+            }
+            return escHtml(line);
+        }).join('\n');
+    }
+
     function refreshPreviewMetadata() {
         const item = previewList[previewIndex] || null;
         const parsed = parsePreviewInfotext(item && item.infotextB64 ? b64Decode(item.infotextB64) : '');
 
         if (previewPromptEl) {
-            previewPromptEl.textContent = parsed.prompt || '(empty)';
+            previewPromptEl.innerHTML = _formatPromptWithComments(parsed.prompt || '(empty)');
         }
         if (previewNegativeEl) {
-            previewNegativeEl.textContent = parsed.negative || '(empty)';
+            previewNegativeEl.innerHTML = _formatPromptWithComments(parsed.negative || '(empty)');
         }
         if (previewSettingsEl) {
             previewSettingsEl.textContent = parsed.settings || '(empty)';

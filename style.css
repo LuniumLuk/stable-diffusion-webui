@@ -83,6 +83,37 @@
     position: relative;
 }
 
+/* ── Prompt line-comment highlight overlay ──────────────────────────────── */
+.prompt-comment-assist {
+    position: relative;
+}
+
+.prompt-comment-assist textarea {
+    position: relative;
+    z-index: 2;
+    background: transparent !important;
+    color: transparent !important;
+    caret-color: var(--body-text-color, #e5e7eb);
+    text-shadow: none;
+}
+
+.prompt-highlight-backdrop {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--body-text-color, #e5e7eb);
+    font: inherit;
+    box-sizing: border-box;
+}
+
+.prompt-comment {
+    color: #22c55e;
+}
+
+/* ── Hires stage config ─────────────────────────────────────────────────── */
 #txt2img_hr_stage_config.hires-stage-assist textarea {
     position: relative;
     z-index: 2;
