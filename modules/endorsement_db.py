@@ -1248,6 +1248,60 @@ def delete_archived_originals() -> dict:
         except OSError:
             errors += 1
 
+    if deleted > 0 or errors > 0:
+        freed_mb = freed_bytes / (1024 * 1024)
+        print(f"[Gallery] Deleted {deleted} archived original(s), freed {freed_mb:.1f} MB" + (f", {errors} error(s)" if errors else "") + (f", {skipped} already gone" if skipped else ""))
+
+    return {
+        "deleted": deleted,
+        "skipped": skipped,
+        "errors": errors,
+        "freed_bytes": freed_bytes,
+    }
+
+
+def delete_disliked_originals() -> dict:
+    """Delete original image files for all disliked items, keeping thumbnails/preview caches.
+
+    Returns dict with:
+      - deleted: number of files successfully deleted
+      - skipped: files already gone or not found
+      - errors: files that could not be deleted (permission, etc.)
+      - freed_bytes: total bytes freed
+    """
+    deleted = 0
+    skipped = 0
+    errors = 0
+    freed_bytes = 0
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT g.path
+            FROM dislikes d
+            JOIN generated_images g ON g.item_key = d.item_key
+            WHERE g.path IS NOT NULL AND g.path != ''
+            """
+        ).fetchall()
+
+    for row in rows:
+        path = row[0]
+        if not path or not os.path.isfile(path):
+            skipped += 1
+            continue
+
+        try:
+            file_size = os.path.getsize(path)
+            os.remove(path)
+            deleted += 1
+            freed_bytes += file_size
+        except OSError:
+            errors += 1
+
+    if deleted > 0 or errors > 0:
+        freed_mb = freed_bytes / (1024 * 1024)
+        print(f"[Gallery] Deleted {deleted} disliked original(s), freed {freed_mb:.1f} MB" + (f", {errors} error(s)" if errors else "") + (f", {skipped} already gone" if skipped else ""))
+
     return {
         "deleted": deleted,
         "skipped": skipped,

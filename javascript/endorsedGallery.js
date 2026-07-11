@@ -2753,6 +2753,28 @@
     }
 
     /**
+     * Intercept the "Delete Disliked" button to show a confirmation dialog.
+     * This prevents accidental deletion of disliked image files.
+     */
+    function setupDeleteDislikedConfirm() {
+        const btn = gradioApp().querySelector('#endgal_delete_disliked_btn');
+        if (!btn || btn.__endgalDelDislikeConfirm) return;
+        btn.__endgalDelDislikeConfirm = true;
+
+        btn.addEventListener('click', function(e) {
+            const confirmed = window.confirm(
+                'This will permanently delete the original PNG files for ALL disliked images.\n' +
+                'Thumbnails and preview caches will be kept.\n\n' +
+                'This action CANNOT be undone. Continue?'
+            );
+            if (!confirmed) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }
+        }, true); // use capture phase to intercept before Gradio
+    }
+
+    /**
      * Watch the hidden stats HTML component. When populated, show a modal popup
      * with the gallery statistics. Close on backdrop click or Escape.
      */
@@ -2827,6 +2849,8 @@
             setTimeout(setupReverseUnratedSync, 3000);
             setTimeout(setupDeleteOriginalsConfirm, 1500);
             setTimeout(setupDeleteOriginalsConfirm, 3000);
+            setTimeout(setupDeleteDislikedConfirm, 1500);
+            setTimeout(setupDeleteDislikedConfirm, 3000);
             setTimeout(setupStatisticsPopup, 1500);
             setTimeout(setupStatisticsPopup, 3000);
         });
@@ -2848,6 +2872,8 @@
         setTimeout(setupReverseUnratedSync, 3000);
         setTimeout(setupDeleteOriginalsConfirm, 1500);
         setTimeout(setupDeleteOriginalsConfirm, 3000);
+        setTimeout(setupDeleteDislikedConfirm, 1500);
+        setTimeout(setupDeleteDislikedConfirm, 3000);
         setTimeout(setupStatisticsPopup, 1500);
         setTimeout(setupStatisticsPopup, 3000);
     }

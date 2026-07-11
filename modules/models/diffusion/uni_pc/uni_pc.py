@@ -1,6 +1,5 @@
 import torch
 import math
-import tqdm
 
 
 class NoiseScheduleVP:
@@ -759,20 +758,18 @@ class UniPC:
                 vec_t = timesteps[0].expand((x.shape[0]))
                 model_prev_list = [self.model_fn(x, vec_t)]
                 t_prev_list = [vec_t]
-                with tqdm.tqdm(total=steps) as pbar:
-                    # Init the first `order` values by lower order multistep DPM-Solver.
-                    for init_order in range(1, order):
-                        vec_t = timesteps[init_order].expand(x.shape[0])
-                        x, model_x = self.multistep_uni_pc_update(x, model_prev_list, t_prev_list, vec_t, init_order, use_corrector=True)
-                        if model_x is None:
-                            model_x = self.model_fn(x, vec_t)
-                        if self.after_update is not None:
-                            self.after_update(x, model_x)
-                        model_prev_list.append(model_x)
-                        t_prev_list.append(vec_t)
-                        pbar.update()
+                # Init the first `order` values by lower order multistep DPM-Solver.
+                for init_order in range(1, order):
+                    vec_t = timesteps[init_order].expand(x.shape[0])
+                    x, model_x = self.multistep_uni_pc_update(x, model_prev_list, t_prev_list, vec_t, init_order, use_corrector=True)
+                    if model_x is None:
+                        model_x = self.model_fn(x, vec_t)
+                    if self.after_update is not None:
+                        self.after_update(x, model_x)
+                    model_prev_list.append(model_x)
+                    t_prev_list.append(vec_t)
 
-                    for step in range(order, steps + 1):
+                for step in range(order, steps + 1):
                         vec_t = timesteps[step].expand(x.shape[0])
                         if lower_order_final:
                             step_order = min(order, steps + 1 - step)
@@ -796,7 +793,6 @@ class UniPC:
                             if model_x is None:
                                 model_x = self.model_fn(x, vec_t)
                             model_prev_list[-1] = model_x
-                        pbar.update()
         else:
             raise NotImplementedError()
         if denoise_to_zero:

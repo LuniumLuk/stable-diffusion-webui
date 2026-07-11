@@ -16,6 +16,8 @@ import cv2
 from skimage import exposure
 from typing import Any
 
+import time
+
 import modules.sd_hijack
 from modules import devices, prompt_parser, masking, sd_samplers, lowvram, infotext_utils, extra_networks, sd_vae_approx, scripts, sd_samplers_common, sd_unet, errors, rng, profiling
 from modules.rng import slerp # noqa: F401
@@ -231,6 +233,7 @@ class StableDiffusionProcessing:
     sd_vae_hash: str = field(default=None, init=False)
 
     is_api: bool = field(default=False, init=False)
+    _start_time: float = field(default=0.0, init=False)
 
     def __post_init__(self):
         if self.sampler_index is not None:
@@ -826,6 +829,68 @@ def create_infotext(p, all_prompts, all_seeds, all_subseeds, comments=None, iter
     return f"{prompt_text}{negative_prompt_text}\n{generation_params_text}".strip()
 
 
+def _print_task_header(p: StableDiffusionProcessing):
+    """Print task info before generation starts (before any tqdm bars appear)."""
+    # prompt: first 5 comma-separated keywords (use raw prompt before extra-networks parsing)
+    raw = p.prompt or ""
+    keywords = [kw.strip() for kw in raw.replace('\n', ',').split(',') if kw.strip()][:5]
+    prompt_str = ", ".join(keywords)
+
+    # task type
+    if getattr(p, 'init_images', None):
+        task_type = "img2img"
+    elif getattr(p, 'enable_hr', False):
+        task_type = "txt2img+hr"
+    else:
+        task_type = "txt2img"
+
+    # settings
+    seed = p.seed if p.seed != -1 else "random"
+    settings = f"steps:{p.steps}, {p.sampler_name or '?'}, cfg:{p.cfg_scale}, seed:{seed}, {p.width}x{p.height}"
+
+    # batch count
+    total_images = p.n_iter * p.batch_size
+    if total_images > 1:
+        settings += f", x{total_images}"
+
+    line = f"{task_type}: \"{prompt_str}\" | {settings}"
+    print(line, file=shared.progress_print_out)
+
+
+def _print_save_result(filepath: str, elapsed: float, image=None):
+    """Print save result using tqdm.write to avoid interleaving with progress bars."""
+    if elapsed >= 60:
+        time_str = f"{elapsed/60:.1f}m"
+    else:
+        time_str = f"{elapsed:.1f}s"
+
+    # file size
+    try:
+        size_mb = os.path.getsize(filepath) / (1024 * 1024)
+        size_str = f"{size_mb:.1f} MB"
+    except OSError:
+        size_str = "? MB"
+
+    # actual image resolution
+    if image is not None:
+        res_str = f"{image.width}x{image.height}"
+    else:
+        res_str = ""
+
+    parts = [f"  \u2192 {filepath}", f"{res_str}" if res_str else "", f"{size_str}", f"{time_str}"]
+    line = " ".join(p for p in parts if p)
+
+    # Use tqdm.write if tqdm is active, otherwise plain print
+    try:
+        import tqdm
+        if tqdm.tqdm._instances:
+            tqdm.tqdm.write(line)
+            return
+    except Exception:
+        pass
+    print(line)
+
+
 def process_images(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None:
         p.scripts.before_process(p)
@@ -853,6 +918,8 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
         # backwards compatibility, fix sampler and scheduler if invalid
         sd_samplers.fix_p_invalid_sampler_and_scheduler(p)
 
+        _print_task_header(p)
+        p._start_time = time.perf_counter()
         with profiling.Profiler():
             res = process_images_inner(p)
 
@@ -941,6 +1008,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
         for n in range(p.n_iter):
             p.iteration = n
+            p._iter_start_time = time.perf_counter()
 
             if state.skipped:
                 state.skipped = False
@@ -1092,7 +1160,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     image = pp.image
 
                 if save_samples:
-                    images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                    fullfn, _ = images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                    _print_save_result(fullfn, time.perf_counter() - getattr(p, '_iter_start_time', p._start_time), image)
 
                 text = infotext(i)
                 infotexts.append(text)
@@ -1137,7 +1206,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 output_images.insert(0, grid)
                 index_of_first_image = 1
             if opts.grid_save:
-                images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+                grid_fullfn, _ = images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+                _print_save_result(grid_fullfn, time.perf_counter() - getattr(p, '_iter_start_time', p._start_time), grid)
 
     if not p.disable_extra_networks and p.extra_network_data:
         extra_networks.deactivate(p, p.extra_network_data)

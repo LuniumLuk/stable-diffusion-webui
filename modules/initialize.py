@@ -18,6 +18,8 @@ def imports():
     startup_timer.record("import torch")
     warnings.filterwarnings(action="ignore", category=DeprecationWarning, module="pytorch_lightning")
     warnings.filterwarnings(action="ignore", category=UserWarning, module="torchvision")
+    warnings.filterwarnings(action="ignore", category=FutureWarning, module="timm")
+    warnings.filterwarnings(action="ignore", message=".*clean_up_tokenization_spaces.*")
 
     os.environ.setdefault('GRADIO_ANALYTICS_ENABLED', 'False')
     import gradio  # noqa: F401

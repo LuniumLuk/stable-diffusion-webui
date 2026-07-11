@@ -827,7 +827,7 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
                 sd_model = instantiate_from_config(sd_config.model, state_dict)
 
     except Exception as e:
-        errors.display(e, "creating model quickly", full_traceback=True)
+        errors.display(e, "creating model quickly", full_traceback=False)
 
     if sd_model is None:
         print('Failed to create model quickly; will retry using slow method.', file=sys.stderr)

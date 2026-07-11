@@ -1,5 +1,12 @@
 import tqdm
 
+# Monkey-patch: all tqdm bars disappear when finished
+_orig_tqdm_init = tqdm.tqdm.__init__
+def _patched_tqdm_init(self, *args, **kwargs):
+    kwargs.setdefault('leave', False)
+    _orig_tqdm_init(self, *args, **kwargs)
+tqdm.tqdm.__init__ = _patched_tqdm_init
+
 from modules import shared
 
 

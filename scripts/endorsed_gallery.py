@@ -1322,6 +1322,19 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
             parts.append(f"{errors} error(s)")
         parts.append(f"Freed {freed_mb:.1f} MB")
         status_message = f'<div class="endgal-sync-result">{" · ".join(parts)}. Thumbnails kept.</div>'
+    elif t == "delete_disliked_originals":
+        result = endorsement_db.delete_disliked_originals()
+        deleted = result["deleted"]
+        skipped = result["skipped"]
+        errors = result["errors"]
+        freed_mb = result["freed_bytes"] / (1024 * 1024)
+        parts = [f"Deleted {deleted} original file(s)"]
+        if skipped:
+            parts.append(f"{skipped} already gone")
+        if errors:
+            parts.append(f"{errors} error(s)")
+        parts.append(f"Freed {freed_mb:.1f} MB")
+        status_message = f'<div class="endgal-sync-result">{" · ".join(parts)}. Thumbnails kept.</div>'
     elif t == "removebg":
         ok, status_message = _apply_removebg(data.get("path", ""))
         if not ok:
@@ -1551,6 +1564,7 @@ def on_ui_tabs():
                 stats_btn = gr.Button("📊 Statistics", elem_id="endgal_stats_btn", size="sm")
                 archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
                 delete_originals_btn = gr.Button("🧹 Delete Originals", elem_id="endgal_delete_originals_btn", size="sm")
+                delete_disliked_btn = gr.Button("🧹 Delete Disliked", elem_id="endgal_delete_disliked_btn", size="sm")
 
         with gr.Accordion("Advanced Gallery Settings", open=False, elem_id="endgal_advanced_controls"):
             with gr.Row(elem_id="endgal_controls_row"):
@@ -1778,6 +1792,19 @@ def on_ui_tabs():
 
         delete_originals_btn.click(
             fn=do_delete_archived_originals,
+            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
+            outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
+        )
+
+        def do_delete_disliked_originals(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
+            action_json = json.dumps({"type": "delete_disliked_originals"})
+            status, html, info, info2, page = handle_gallery_action(
+                action_json, mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode
+            )
+            return status, html, info, info2, page
+
+        delete_disliked_btn.click(
+            fn=do_delete_disliked_originals,
             inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
