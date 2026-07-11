@@ -389,7 +389,185 @@ def _fmt_time(ts):
     return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
+def _safe_detail_val(val):
+    """Convert a job arg value to a JSON-safe, human-readable string for the tooltip."""
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "Yes" if val else "No"
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, str):
+        return val
+    if isinstance(val, (list, tuple)):
+        # Keep only stringifiable items, skip images/bytes
+        items = []
+        for v in val:
+            if isinstance(v, str):
+                items.append(v)
+            elif isinstance(v, (int, float, bool)):
+                items.append(str(v))
+        return ", ".join(items) if items else ""
+    # Skip binary, image data, Gradio components
+    return ""
+
+
+def _build_job_details(job) -> dict:
+    """Extract key human-readable parameters from job args into a dict for the hover tooltip."""
+    args = job.args
+    details = {}
+
+    if job.job_type == "txt2img":
+        # Fixed arg positions (after dummy is stripped by add_to_queue_txt2img)
+        # 0:prompt, 1:neg, 2:styles, 3:batch_count, 4:batch_size, 5:cfg, 6:height, 7:width,
+        # 8:enable_hr, 9:denoising, 10:hr_scale, 11:hr_upscaler, 12:hr_2nd_steps,
+        # 13:hr_x, 14:hr_y, 15:hr_stage_cfg, 16:hr_ckpt, 17:hr_sampler, 18:hr_scheduler,
+        # 19:hr_prompt, 20:hr_neg, 21:override_settings, 22+:custom_inputs
+        if len(args) > 0:
+            details["Prompt"] = _safe_detail_val(args[0])
+        if len(args) > 1:
+            details["Negative prompt"] = _safe_detail_val(args[1])
+        if len(args) > 2:
+            styles = _safe_detail_val(args[2])
+            if styles:
+                details["Styles"] = styles
+        if len(args) > 5:
+            details["CFG scale"] = _safe_detail_val(args[5])
+        if len(args) > 7:
+            w = _safe_detail_val(args[7])
+            h = _safe_detail_val(args[6])
+            if w and h:
+                details["Size"] = f"{w}×{h}"
+        if len(args) > 3:
+            bc = _safe_detail_val(args[3])
+            bs = _safe_detail_val(args[4]) if len(args) > 4 else "1"
+            if bc and bs:
+                details["Batch"] = f"{bc}×{bs}"
+        if len(args) > 8 and args[8]:
+            details["Hires fix"] = "Enabled"
+            if len(args) > 10:
+                details["Hires scale"] = _safe_detail_val(args[10])
+            if len(args) > 11:
+                details["Hires upscaler"] = _safe_detail_val(args[11])
+            if len(args) > 12:
+                val = _safe_detail_val(args[12])
+                if val and val != "0":
+                    details["Hires steps"] = val
+            if len(args) > 16:
+                val = _safe_detail_val(args[16])
+                if val and val not in ("Use same checkpoint", ""):
+                    details["Hires checkpoint"] = val
+
+        # Try to extract seed, sampler, steps, scheduler from custom_inputs (args[22:])
+        custom = list(args[22:]) if len(args) > 22 else []
+        _extract_custom_params(custom, details)
+
+    elif job.job_type == "img2img":
+        # Fixed arg positions (after dummy is stripped by add_to_queue_img2img):
+        # 0:tab_idx, 1:prompt, 2:neg, 3:styles,
+        # 4:init_img, 5:sketch, 6:init_img_with_mask, 7:inpaint_color_sketch,
+        # 8:inpaint_color_sketch_orig, 9:init_img_inpaint, 10:init_mask_inpaint,
+        # 11:mask_blur, 12:mask_alpha, 13:inpainting_fill,
+        # 14:batch_count, 15:batch_size, 16:cfg_scale, 17:image_cfg_scale,
+        # 18:denoising, 19:selected_scale_tab, 20:height, 21:width,
+        # 22:scale_by, 23:resize_mode, 24:inpaint_full_res, 25:inpaint_full_res_padding,
+        # 26:inpainting_mask_invert,
+        # 27:batch_input_dir, 28:batch_output_dir, 29:batch_inpaint_mask_dir,
+        # 30:override_settings, 31:batch_use_png_info, 32:batch_png_info_props,
+        # 33:batch_png_info_dir, 34:batch_source_type, 35:batch_upload,
+        # 36+: custom_inputs
+        if len(args) > 1:
+            details["Prompt"] = _safe_detail_val(args[1])
+        if len(args) > 2:
+            details["Negative prompt"] = _safe_detail_val(args[2])
+        if len(args) > 3:
+            styles = _safe_detail_val(args[3])
+            if styles:
+                details["Styles"] = styles
+        if len(args) > 16:
+            details["CFG scale"] = _safe_detail_val(args[16])
+        if len(args) > 21:
+            w = _safe_detail_val(args[21])
+            h = _safe_detail_val(args[20]) if len(args) > 20 else ""
+            if w and h:
+                details["Size"] = f"{w}×{h}"
+        if len(args) > 14:
+            bc = _safe_detail_val(args[14])
+            bs = _safe_detail_val(args[15]) if len(args) > 15 else "1"
+            if bc and bs:
+                details["Batch"] = f"{bc}×{bs}"
+        if len(args) > 18:
+            details["Denoising"] = _safe_detail_val(args[18])
+        if len(args) > 23:
+            rm = _safe_detail_val(args[23])
+            if rm:
+                resize_labels = {0: "Just resize", 1: "Crop and resize", 2: "Resize and fill", 3: "Just resize (latent upscale)"}
+                details["Resize mode"] = resize_labels.get(int(rm) if rm.isdigit() else -1, rm)
+        if len(args) > 11:
+            details["Mask blur"] = _safe_detail_val(args[11])
+
+        # Try to extract seed, sampler, steps, scheduler from custom_inputs (args[36:])
+        custom = list(args[36:]) if len(args) > 36 else []
+        _extract_custom_params(custom, details)
+
+    # Clean up empty values
+    return {k: v for k, v in details.items() if v}
+
+
+def _extract_custom_params(custom_args: list, details: dict):
+    """Try to extract seed, sampler, steps, scheduler from custom_inputs list."""
+    # The Sampler script returns (batch_steps, steps, sampler_name, scheduler) in order.
+    # The Seed script returns (seed, seed_checkbox, subseed, ...).
+    # Walk through and extract by type/context.
+    for val in custom_args:
+        s = _safe_detail_val(val)
+        if not s:
+            continue
+        # Numbers: could be seed, steps, or subseed/subseed_strength
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if val == -1:
+                if "Seed" not in details:
+                    details["Seed"] = "random (-1)"
+            elif 1 <= val <= 150:
+                if "Steps" not in details:
+                    details["Steps"] = s
+            elif val > 150:
+                if "Seed" not in details:
+                    details["Seed"] = s
+        # Strings: could be sampler or scheduler names
+        if isinstance(val, str) and s:
+            if _KNOWN_SAMPLERS and any(s == sn for sn in _KNOWN_SAMPLERS):
+                if "Sampler" not in details:
+                    details["Sampler"] = s
+            elif _KNOWN_SCHEDULERS and any(s == sn for sn in _KNOWN_SCHEDULERS):
+                if "Scheduler" not in details:
+                    details["Scheduler"] = s
+
+
+# Cached sampler/scheduler names for _extract_custom_params
+_KNOWN_SAMPLERS = []
+_KNOWN_SCHEDULERS = []
+_KNOWN_NAMES_LOADED = False
+
+
+def _refresh_known_names():
+    global _KNOWN_SAMPLERS, _KNOWN_SCHEDULERS, _KNOWN_NAMES_LOADED
+    if _KNOWN_NAMES_LOADED:
+        return
+    try:
+        from modules import sd_samplers, sd_schedulers
+        _KNOWN_SAMPLERS = [x.name for x in sd_samplers.visible_samplers()]
+        _KNOWN_SCHEDULERS = [x.label for x in sd_schedulers.schedulers]
+        _KNOWN_NAMES_LOADED = True
+    except Exception:
+        pass
+
+
 def render_queue_html() -> str:
+    import json as _json
+
+    _refresh_known_names()
+
     jobs = queue_manager.get_snapshot()
     is_paused = queue_manager.is_paused()
     queue_state_class = "jq-s-paused" if is_paused else "jq-s-done"
@@ -422,8 +600,20 @@ def render_queue_html() -> str:
         icon = {"queued": "Q", "running": "R", "done": "D", "failed": "F"}.get(j.status, "?")
         lbl = html.escape(j.label[:70]) if j.label else "<em>(no prompt)</em>"
         err = f'<br><small class="jq-error">{html.escape(str(j.error))}</small>' if j.error else ""
+
+        # Build job details JSON for hover tooltip
+        try:
+            job_details = _build_job_details(j)
+            job_details["Job ID"] = j.id
+            job_details["Type"] = j.job_type
+            job_details["Status"] = j.status
+            job_details["Image count"] = str(j.image_count)
+            details_json = html.escape(_json.dumps(job_details, ensure_ascii=False))
+        except Exception:
+            details_json = "{}"
+
         rows.append(
-            f'<tr class="jq-row jq-s-{j.status}" data-task-id="{html.escape(j.task_id)}" data-job-type="{html.escape(j.job_type)}">'
+            f'<tr class="jq-row jq-s-{j.status}" data-task-id="{html.escape(j.task_id)}" data-job-type="{html.escape(j.job_type)}" data-job-details="{details_json}">'
             f'<td data-label="ID"><code class="jq-id">{j.id}</code></td>'
             f'<td data-label="Type">{html.escape(j.job_type)}</td>'
             f'<td class="jq-lbl" data-label="Prompt">{lbl}{err}</td>'

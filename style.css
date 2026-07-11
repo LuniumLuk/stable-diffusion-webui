@@ -3782,3 +3782,56 @@ body.resizing .resize-handle {
     }
 }
 
+/* ── Queue job hover tooltip ─────────────────────────────────────────── */
+.jq-tooltip {
+    position: fixed;
+    z-index: 10000;
+    max-width: 460px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--background-fill-primary, #1a1a2e);
+    border: 1px solid var(--block-border-color, #334155);
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.45;
+    pointer-events: auto;
+}
+
+.jq-tooltip-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.jq-tooltip-table th {
+    text-align: left;
+    padding: 2px 8px 2px 0;
+    color: var(--body-text-color-subdued, #94a3b8);
+    font-weight: 500;
+    white-space: nowrap;
+    vertical-align: top;
+    font-size: 11px;
+    min-width: 80px;
+}
+
+.jq-tooltip-table td {
+    padding: 2px 0;
+    color: var(--body-text-color, #e5e7eb);
+    word-break: break-word;
+    vertical-align: top;
+}
+
+.jq-tt-prompt {
+    font-style: italic;
+    color: var(--body-text-color, #e5e7eb);
+}
+
+.jq-tooltip::-webkit-scrollbar {
+    width: 5px;
+}
+.jq-tooltip::-webkit-scrollbar-thumb {
+    background: var(--block-border-color, #334155);
+    border-radius: 4px;
+}
+

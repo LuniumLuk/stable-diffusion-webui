@@ -1,6 +1,13 @@
+import logging
+import base64
+from io import BytesIO
+
 import gradio as gr
+from PIL import Image
 
 from modules import scripts, ui_tempdir, patches
+
+log = logging.getLogger(__name__)
 
 
 def add_classes_to_gradio_component(comp):
@@ -78,6 +85,34 @@ original_IOComponent_init = patches.patch(__name__, obj=gr.components.IOComponen
 original_Block_get_config = patches.patch(__name__, obj=gr.blocks.Block, field="get_config", replacement=Block_get_config)
 original_BlockContext_init = patches.patch(__name__, obj=gr.blocks.BlockContext, field="__init__", replacement=BlockContext_init)
 original_Blocks_get_config_file = patches.patch(__name__, obj=gr.blocks.Blocks, field="get_config_file", replacement=Blocks_get_config_file)
+
+
+# ── Patch Gradio's decode_base64_to_image to survive invalid / empty image data ──
+
+_BLANK_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+    "+M9QDwADgQGBYcVxOQAAAABJRU5ErkJggg=="
+)
+_BLANK_IMAGE_BYTES = base64.b64decode(_BLANK_PNG_BASE64)
+
+
+def _patched_decode_base64_to_image(encoding: str) -> Image.Image:
+    try:
+        return _original_decode_base64_to_image(encoding)
+    except Exception as e:
+        log.warning(
+            "gradio decode_base64_to_image failed (returning blank placeholder): %s",
+            e,
+        )
+        return Image.open(BytesIO(_BLANK_IMAGE_BYTES)).copy()
+
+
+_original_decode_base64_to_image = patches.patch(
+    __name__,
+    obj=gr.processing_utils,
+    field="decode_base64_to_image",
+    replacement=_patched_decode_base64_to_image,
+)
 
 
 ui_tempdir.install_ui_tempdir_override()
