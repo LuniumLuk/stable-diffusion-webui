@@ -1364,14 +1364,11 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
 
     html, info, page, is_last = render_gallery(mode, query, page, page_size, date_filter, thumb_size, card_extras_mode, reverse_unrated=_current_reverse_unrated())
     
-    # If gallery became empty after action (e.g., endorsed last image and filter changed), show hint
-    if '<div class="endgal-empty">' in html:
-        hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
-        html = html + hint_html
-    # If still on last page with content, show hint
-    elif is_last:
-        hint_html = '<div id="endgal_end_hint" class="endgal-sync-result">All images are over.</div>'
-        html = html + hint_html
+    # The end-of-gallery hint (#endgal_end_hint) is only appended by _goto_next_page
+    # when the user explicitly tries to navigate past the last page.
+    # We do NOT add it here on every last-page render, because that would cause
+    # the JS MutationObserver to auto-scroll to the bottom on every endorse,
+    # archive, dislike, or mode-switch action.
     
     return status_message, html, info, info, page
 

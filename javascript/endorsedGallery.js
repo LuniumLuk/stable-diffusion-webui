@@ -2381,20 +2381,37 @@
     };
 
     /**
-     * Monitor gallery for end-of-gallery state and hide preview when detected
+     * Track whether the end-of-gallery hint was present before the current
+     * mutation, so we only scroll to it when it *first* appears (i.e. the
+     * user clicked Next past the last page), not on every single render of
+     * a last-page gallery (endorse/archive/dislike, mode switch, etc.).
+     */
+    let _endHintWasPresent = false;
+
+    /**
+     * Monitor gallery for end-of-gallery state.
+     * Only auto-scrolls to the hint when it is *newly* added, never on
+     * repeated renders of the same last page.
      */
     function checkAndHandleEndOfGallery() {
         const app = gradioApp();
         if (!app) return;
 
         const endHint = app.querySelector('#endgal_end_hint');
-        if (endHint) {
-            // Keep preview frozen while browsing; do not auto-close on background gallery updates.
-            if (isPreviewOpen()) return;
-            setTimeout(() => {
-                endHint.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }, 100);
+        const hintNowPresent = !!endHint;
+
+        // Scroll to hint only when it first appears (user navigated past the last page).
+        // Do NOT scroll on subsequent mutations that already had the hint (e.g. endorse,
+        // archive, dislike, mode switch – all of which re-render the last page).
+        if (hintNowPresent && !_endHintWasPresent) {
+            if (!isPreviewOpen()) {
+                setTimeout(() => {
+                    endHint.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 100);
+            }
         }
+
+        _endHintWasPresent = hintNowPresent;
     }
 
     // Monitor gallery HTML updates for end-of-gallery state
@@ -2417,7 +2434,25 @@
         lastThumbCount = getThumbCount();
         lastScrollTop = galleryContainer.scrollTop;
 
+        // Track the actual scrollable ancestor of #endgal_html.
+        // #endgal_html itself is a gr.HTML component that may not be the
+        // scroll container; its parent chain (up to the tab panel) is.
+        function getScrollContainer() {
+            let el = galleryContainer;
+            while (el && el !== document.body) {
+                const style = window.getComputedStyle(el);
+                const overflowY = style.overflowY;
+                if (overflowY === 'auto' || overflowY === 'scroll') {
+                    return el;
+                }
+                el = el.parentElement;
+            }
+            return galleryContainer; // fallback
+        }
+
         const observer = new MutationObserver(() => {
+            const scrollEl = getScrollContainer();
+
             // Save scroll before any DOM change
             const prevScrollTop = lastScrollTop;
             const prevThumbCount = lastThumbCount;
@@ -2426,13 +2461,15 @@
             const newThumbCount = getThumbCount();
             // If new image(s) added: scroll to top
             if (newThumbCount > prevThumbCount) {
+                scrollEl.scrollTop = 0;
                 galleryContainer.scrollTop = 0;
             } else {
                 // Always restore previous scroll position (prevents scroll to bottom)
+                scrollEl.scrollTop = prevScrollTop;
                 galleryContainer.scrollTop = prevScrollTop;
             }
             lastThumbCount = newThumbCount;
-            lastScrollTop = galleryContainer.scrollTop;
+            lastScrollTop = scrollEl.scrollTop;
 
             checkAndHandleEndOfGallery();
         });

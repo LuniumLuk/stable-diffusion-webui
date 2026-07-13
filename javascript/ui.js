@@ -215,6 +215,28 @@ function notifyGenerationEvent(tabname, imageCount, phase, source) {
     }
 }
 
+/**
+ * Scroll the output gallery container to the top so the first image / grid
+ * is visible. Gradio's gallery update can leave the scroll at the bottom.
+ * @param {string} tabname - 'txt2img' or 'img2img'
+ */
+function scrollOutputGalleryToTop(tabname) {
+    var gallery = gradioApp().querySelector('#' + tabname + '_gallery');
+    if (!gallery) return;
+
+    // Gradio 3.x gallery: the scrollable element is .thumbnails inside the gallery.
+    var thumbnails = gallery.querySelector('.thumbnails');
+    if (thumbnails) {
+        thumbnails.scrollTop = 0;
+    }
+
+    // Also scroll the gallery container itself (belt and suspenders).
+    var container = gradioApp().querySelector('#' + tabname + '_gallery_container');
+    if (container) {
+        container.scrollTop = 0;
+    }
+}
+
 function submit() {
     setAllGenerationButtonsVisibility(false);
     var txt2imgImageCount = generationImageCount('txt2img', arguments);
@@ -228,6 +250,12 @@ function submit() {
         localRemove("txt2img_task_id");
         showRestoreProgressButton('txt2img', false);
         notifyGenerationEvent('txt2img', txt2imgImageCount, 'finish', 'manual');
+        // Scroll output gallery to top so the grid/first image is visible.
+        // Gradio's gallery update can leave the scroll at the bottom, hiding
+        // the grid image that was inserted at index 0.
+        setTimeout(function() {
+            scrollOutputGalleryToTop('txt2img');
+        }, 120);
     });
 
     var res = create_submit_args(arguments);
@@ -269,6 +297,10 @@ function submit_img2img() {
         localRemove("img2img_task_id");
         showRestoreProgressButton('img2img', false);
         notifyGenerationEvent('img2img', img2imgImageCount, 'finish', 'manual');
+        // Scroll output gallery to top after generation completes.
+        setTimeout(function() {
+            scrollOutputGalleryToTop('img2img');
+        }, 120);
     });
 
     var res = create_submit_args(arguments);

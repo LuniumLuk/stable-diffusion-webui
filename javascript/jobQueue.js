@@ -154,6 +154,13 @@ function queue_job_img2img() {
             if (typeof notifyGenerationEvent === 'function') {
                 notifyGenerationEvent(trackerMeta.jobType, trackerMeta.imageCount, 'finish', 'queue');
             }
+
+            // Scroll output gallery to top so the first image / grid is visible.
+            if (typeof scrollOutputGalleryToTop === 'function') {
+                setTimeout(function() {
+                    scrollOutputGalleryToTop(tabName);
+                }, 120);
+            }
         }, null, 0);
     }
 
