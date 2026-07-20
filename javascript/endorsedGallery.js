@@ -215,6 +215,8 @@
         if (action.type === 'remove_endorse') return { ...action, type: 'endorse' };
         if (action.type === 'dislike') return { ...action, type: 'remove_dislike' };
         if (action.type === 'remove_dislike') return { ...action, type: 'dislike' };
+        if (action.type === 'stage') return { ...action, type: 'unstage' };
+        if (action.type === 'unstage') return { ...action, type: 'stage' };
         return null;
     }
 
@@ -1703,6 +1705,12 @@
             } else if (e.key === 'h' || e.key === 'H') {
                 e.preventDefault();
                 queueCurrentPreviewFire();
+            } else if (e.key === 'a' || e.key === 'A') {
+                e.preventDefault();
+                triggerPreviewAction('archive');
+            } else if (e.key === 's' || e.key === 'S') {
+                e.preventDefault();
+                triggerPreviewAction('stage');
             }
         });
 
@@ -1857,8 +1865,10 @@
                 infotextB64: el.dataset.infotext || '',
                 endorseAction: el.dataset.endorseAction || '',
                 dislikeAction: el.dataset.dislikeAction || '',
+                stageAction: el.dataset.stageAction || '',
                 endorseLabel: el.dataset.endorseLabel || '☆',
                 dislikeLabel: el.dataset.dislikeLabel || '⬇',
+                stageLabel: el.dataset.stageLabel || '📌',
                 quickButtons: collectCardQuickButtons(el),
                 tags: (() => {
                     try { return JSON.parse(atob(el.dataset.tags || '')); }
@@ -1891,6 +1901,8 @@
                         btn.classList.add('endgal-preview-action-archive');
                     } else if (sourceBtn.classList.contains('endgal-act-dislike')) {
                         btn.classList.add('endgal-preview-action-dislike');
+                    } else if (sourceBtn.classList.contains('endgal-act-stage')) {
+                        btn.classList.add('endgal-preview-action-stage');
                     }
 
                     if (sourceBtn.classList.contains('active')) {
@@ -1924,6 +1936,10 @@
                             triggerPreviewAction('like');
                         } else if (hint.toLowerCase().includes('dislike')) {
                             triggerPreviewAction('dislike');
+                        } else if (hint.toLowerCase().includes('stage') || hint.toLowerCase().includes('pick')) {
+                            triggerPreviewAction('stage');
+                        } else if (hint.toLowerCase().includes('archive')) {
+                            triggerPreviewAction('archive');
                         } else if (hint.toLowerCase().includes('txt2img') && item.infotextB64) {
                             window.endorsedGallery.sendTo(item.infotextB64, 'txt2img');
                         } else if (hint.toLowerCase().includes('img2img') && item.infotextB64) {
@@ -2068,7 +2084,24 @@
     function triggerPreviewAction(kind) {
         const item = previewList[previewIndex];
         if (!item) return;
-        const actionB64 = kind === 'like' ? item.endorseAction : item.dislikeAction;
+        let actionB64 = null;
+        if (kind === 'like') {
+            actionB64 = item.endorseAction;
+        } else if (kind === 'dislike') {
+            actionB64 = item.dislikeAction;
+        } else if (kind === 'stage') {
+            actionB64 = item.stageAction;
+        } else if (kind === 'archive') {
+            // Archive action is collected from the corner button
+            if (item.quickButtons) {
+                const archiveBtn = item.quickButtons.find(b => b.classList.contains('endgal-act-archive'));
+                if (archiveBtn) {
+                    const onclick = archiveBtn.getAttribute('onclick') || '';
+                    const match = onclick.match(/endorsedGallery\.action\('([^']+)'\)/);
+                    if (match) actionB64 = match[1];
+                }
+            }
+        }
         if (!actionB64) return;
 
         const atLast = previewIndex >= previewList.length - 1;

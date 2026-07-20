@@ -178,6 +178,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dislikes_item_key ON dislikes(item_key)")
         _ensure_image_tags_table(conn)
         _ensure_archived_table(conn)
+        _ensure_staged_table(conn)
         conn.commit()
 
 
@@ -192,6 +193,19 @@ def _ensure_archived_table(conn):
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_item_key ON archived(item_key)")
+
+
+def _ensure_staged_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS staged (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_key    TEXT    NOT NULL UNIQUE,
+            staged_at   TEXT    NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_staged_item_key ON staged(item_key)")
 
 
 def _ensure_image_tags_table(conn):
@@ -690,6 +704,9 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
     item_key = _item_key_from_path(image_path)
     endorsed_at = datetime.now()
 
+    # Endorsing cancels staged status
+    unstage_item(item_key)
+
     endorsed_copy_path, original_path = _move_into_endorsed(image_path, endorsed_at)
 
     with _get_conn() as conn:
@@ -786,6 +803,10 @@ def get_endorsed_id_by_path(path: str):
 def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
             cfg_scale, width, height, model_name, model_hash, infotext):
     item_key = _item_key_from_path(image_path)
+
+    # Disliking cancels staged status
+    unstage_item(item_key)
+
     with _get_conn() as conn:
         if item_key:
             # Endorse/dislike are mutually exclusive for the same item.
@@ -923,6 +944,7 @@ def count_unrated(query: str = "", since_ts: float | None = None) -> int:
         " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM staged WHERE item_key IS NOT NULL AND item_key != '')"
     )
     sql = "SELECT COUNT(*) FROM generated_images" + (where_sql if where_sql else " WHERE 1=1") + rated_filter
     with _get_conn() as conn:
@@ -937,6 +959,7 @@ def search_unrated(query: str = "", limit: int = 48, offset: int = 0,
         " AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM staged WHERE item_key IS NOT NULL AND item_key != '')"
     )
     sql = ("SELECT * FROM generated_images"
            + (where_sql if where_sql else " WHERE 1=1")
@@ -958,6 +981,10 @@ def is_archived(item_key: str) -> bool:
 def archive_item(item_key: str) -> None:
     if not item_key:
         return
+
+    # Archiving cancels staged status
+    unstage_item(item_key)
+
     now = datetime.now().isoformat(timespec="seconds")
     with _get_conn() as conn:
         conn.execute(
@@ -1026,6 +1053,82 @@ def search_archived(query: str = "", limit: int = 48, offset: int = 0,
         "SELECT g.* FROM archived a JOIN generated_images g ON g.item_key = a.item_key"
         + where_sql
         + " ORDER BY a.archived_at DESC LIMIT ? OFFSET ?"
+    )
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Staged (picked) ──────────────────────────────────────────────────────────
+
+def is_staged(item_key: str) -> bool:
+    if not item_key:
+        return False
+    with _get_conn() as conn:
+        row = conn.execute("SELECT id FROM staged WHERE item_key=?", (item_key,)).fetchone()
+    return row is not None
+
+
+def stage_item(item_key: str) -> None:
+    """Mark an image as staged (picked). Does nothing if already endorsed or disliked."""
+    if not item_key:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        # Don't stage if already endorsed or disliked
+        e = conn.execute("SELECT id FROM endorsements WHERE item_key=?", (item_key,)).fetchone()
+        d = conn.execute("SELECT id FROM dislikes WHERE item_key=?", (item_key,)).fetchone()
+        if e or d:
+            return
+        conn.execute(
+            "INSERT OR IGNORE INTO staged (item_key, staged_at) VALUES (?,?)",
+            (item_key, now),
+        )
+        conn.commit()
+
+
+def unstage_item(item_key: str) -> None:
+    """Remove the staged flag from an image."""
+    if not item_key:
+        return
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM staged WHERE item_key=?", (item_key,))
+        conn.commit()
+
+
+def get_staged_item_keys(item_keys: list[str]) -> set:
+    """Return subset of item_keys that are staged."""
+    if not item_keys:
+        return set()
+    placeholders = ",".join(["?"] * len(item_keys))
+    with _get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT item_key FROM staged WHERE item_key IN ({placeholders})",
+            item_keys,
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def count_staged(query: str = "", since_ts: float | None = None) -> int:
+    where_sql, params = _build_keyword_where(query, ["g.prompt", "g.negative_prompt", "g.model_name", "g.sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "g.file_mtime", since_ts, numeric=True)
+    base = """
+        SELECT COUNT(*)
+        FROM staged s
+        JOIN generated_images g ON g.item_key = s.item_key
+    """
+    with _get_conn() as conn:
+        return conn.execute(base + where_sql, params).fetchone()[0]
+
+
+def search_staged(query: str = "", limit: int = 48, offset: int = 0,
+                  since_ts: float | None = None) -> list:
+    where_sql, params = _build_keyword_where(query, ["g.prompt", "g.negative_prompt", "g.model_name", "g.sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "g.file_mtime", since_ts, numeric=True)
+    sql = (
+        "SELECT g.* FROM staged s JOIN generated_images g ON g.item_key = s.item_key"
+        + where_sql
+        + " ORDER BY s.staged_at DESC LIMIT ? OFFSET ?"
     )
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()

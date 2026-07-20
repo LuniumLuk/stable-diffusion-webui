@@ -2638,7 +2638,8 @@ body.resizing .resize-handle {
 
 .endgal-thumb-corner-actions .endgal-star,
 .endgal-thumb-corner-actions .endgal-dislike,
-.endgal-thumb-corner-actions .endgal-archive {
+.endgal-thumb-corner-actions .endgal-archive,
+.endgal-thumb-corner-actions .endgal-stage {
     margin: 0 !important;
     width: 36px;
     min-width: 36px;
@@ -2663,10 +2664,12 @@ body.resizing .resize-handle {
 .endgal-thumb-corner-actions .endgal-star.active { color: #facc15; }
 .endgal-thumb-corner-actions .endgal-dislike.active { color: #ef4444; }
 .endgal-thumb-corner-actions .endgal-archive.active { color: #f59e0b; }
+.endgal-thumb-corner-actions .endgal-stage.active { color: #22d3ee; }
 
 .endgal-thumb-corner-actions .endgal-star:hover,
 .endgal-thumb-corner-actions .endgal-dislike:hover,
-.endgal-thumb-corner-actions .endgal-archive:hover {
+.endgal-thumb-corner-actions .endgal-archive:hover,
+.endgal-thumb-corner-actions .endgal-stage:hover {
     border-color: #38bdf8;
     background: rgba(30, 41, 59, 0.96);
 }
@@ -2994,7 +2997,8 @@ body.resizing .resize-handle {
 
 .endgal-preview-action.endgal-preview-action-endorse,
 .endgal-preview-action.endgal-preview-action-archive,
-.endgal-preview-action.endgal-preview-action-dislike {
+.endgal-preview-action.endgal-preview-action-dislike,
+.endgal-preview-action.endgal-preview-action-stage {
     min-height: 46px;
     font-size: 14px;
 }
@@ -3017,9 +3021,16 @@ body.resizing .resize-handle {
     color: #fecaca;
 }
 
+.endgal-preview-action.endgal-preview-action-stage {
+    background: rgba(6, 34, 46, 0.9);
+    border-color: rgba(34, 211, 238, 0.72);
+    color: #a5f3fc;
+}
+
 .endgal-preview-action.endgal-preview-action-endorse.endgal-preview-action-active,
 .endgal-preview-action.endgal-preview-action-archive.endgal-preview-action-active,
-.endgal-preview-action.endgal-preview-action-dislike.endgal-preview-action-active {
+.endgal-preview-action.endgal-preview-action-dislike.endgal-preview-action-active,
+.endgal-preview-action.endgal-preview-action-stage.endgal-preview-action-active {
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14) inset;
 }
 

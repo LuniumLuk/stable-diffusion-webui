@@ -679,7 +679,7 @@ def _open_in_explorer(path: str) -> tuple[bool, str]:
     return True, f"Opened in Explorer: {_html.escape(target)}"
 
 
-def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False, card_extras_mode: str = "Expanded") -> str:
+def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False, is_staged: bool = False, card_extras_mode: str = "Expanded") -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
     seed = str(record.get("seed", ""))
@@ -749,6 +749,12 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     archive_class = "endgal-archive active" if is_archived else "endgal-archive"
     archive_title = "unarchive" if is_archived else "archive (hide from Unrated)"
 
+    stage_action = {"type": "unstage" if is_staged else "stage", "item_key": item_key, **_action_payload(record)}
+    stage_action_b64 = _b64(json.dumps(stage_action))
+    stage_label = "📍" if is_staged else "📌"
+    stage_class = "endgal-stage active" if is_staged else "endgal-stage"
+    stage_title = "unstage (remove from picked)" if is_staged else "stage (pick this image)"
+
     tags = tags or []
     # Top 20 tags for display; full list encoded for preview
     tags_display = tags[:20]
@@ -784,8 +790,10 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         f'data-infotext="{infotext_b64}" '
         f'data-endorse-action="{endorse_action_b64}" '
         f'data-dislike-action="{dislike_action_b64}" '
+        f'data-stage-action="{stage_action_b64}" '
         f'data-endorse-label="{endorse_label}" '
         f'data-dislike-label="{dislike_label}" '
+        f'data-stage-label="{stage_label}" '
         f'data-tags="{tags_full_b64}" '
         f'onclick="endorsedGallery.previewImage(this.dataset.preview || this.dataset.orig || this.src)" />'
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
@@ -945,6 +953,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         f'<button class="{endorse_class} endgal-act-endorse" data-hint="Toggle endorse" title="toggle endorse" onclick="endorsedGallery.action(\'{endorse_action_b64}\')">{endorse_label}</button>'
         f'<button class="{archive_class} endgal-act-archive" data-hint="{_html.escape(archive_title)}" title="{archive_title}" onclick="endorsedGallery.action(\'{archive_action}\')">{archive_label}</button>'
         f'<button class="{dislike_class} endgal-act-dislike" data-hint="Toggle dislike" title="toggle dislike" onclick="endorsedGallery.action(\'{dislike_action_b64}\')">{dislike_label}</button>'
+        f'<button class="{stage_class} endgal-act-stage" data-hint="{_html.escape(stage_title)}" title="{stage_title}" onclick="endorsedGallery.action(\'{stage_action_b64}\')">{stage_label}</button>'
         '</div>'
     )
 
@@ -959,7 +968,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     )
 
     return f"""
-<div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''}">
+<div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''} {'staged' if is_staged else ''}">
     <div class="endgal-thumb">{thumb_html}{corner_action_stack}{info_overlay}{thumb_action_stack}</div>
     <details class="endgal-card-extra"{details_open}>
         <summary class="endgal-card-extra-summary">Details{details_time_html}</summary>
@@ -1094,6 +1103,13 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
         else:
             total = 0
             rows = []
+    elif mode == "📌 Staged":
+        if hasattr(endorsement_db, "count_staged") and hasattr(endorsement_db, "search_staged"):
+            total = _call_db("count_staged", query, since_ts=since_ts)
+            rows = _call_db("search_staged", query, limit=page_size, offset=offset, since_ts=since_ts)
+        else:
+            total = 0
+            rows = []
     elif mode == "👎 Disliked":
         if hasattr(endorsement_db, "count_disliked") and hasattr(endorsement_db, "search_disliked"):
             total = _call_db("count_disliked", query, since_ts=since_ts)
@@ -1180,7 +1196,7 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
         page_info = f"{total} items · page {page}/{pages}"
         return header + grid, page_info, page, is_last_page
 
-    # Batch-fetch tags and archived status for all cards on this page
+    # Batch-fetch tags, archived status, and staged status for all cards on this page
     item_keys = [
         endorsement_db._item_key_from_path(r.get("path") or r.get("image_path", ""))
         for r in rows
@@ -1188,6 +1204,7 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     valid_keys = [k for k in item_keys if k]
     tags_map = endorsement_db.get_tags_for_items(valid_keys)
     archived_keys = endorsement_db.get_archived_item_keys(valid_keys) if hasattr(endorsement_db, "get_archived_item_keys") else set()
+    staged_keys = endorsement_db.get_staged_item_keys(valid_keys) if hasattr(endorsement_db, "get_staged_item_keys") else set()
 
     if "Unrated" in mode and reverse_unrated:
         rows = list(reversed(rows))
@@ -1199,7 +1216,8 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
         did = endorsement_db.get_disliked_id_by_path(path)
         tags = tags_map.get(item_key, [])
         is_arch = item_key in archived_keys
-        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch, card_extras_mode=card_extras_mode))
+        is_stg = item_key in staged_keys
+        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch, is_staged=is_stg, card_extras_mode=card_extras_mode))
 
     header = f'<div class="endgal-count">{total} items</div>'
     grid = f'<div class="endgal-grid {size_class}" style="--endgal-card-min:{card_min}px" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
@@ -1320,6 +1338,14 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
         item_key = data.get("item_key") or endorsement_db._item_key_from_path(data.get("path", ""))
         if item_key:
             endorsement_db.unarchive_item(item_key)
+    elif t == "stage":
+        item_key = data.get("item_key") or endorsement_db._item_key_from_path(data.get("path", ""))
+        if item_key:
+            endorsement_db.stage_item(item_key)
+    elif t == "unstage":
+        item_key = data.get("item_key") or endorsement_db._item_key_from_path(data.get("path", ""))
+        if item_key:
+            endorsement_db.unstage_item(item_key)
     elif t == "archive_all_unrated":
         count = endorsement_db.archive_all_unrated()
         status_message = f'<div class="endgal-sync-result">Archived {count} unrated image(s).</div>'
@@ -1500,6 +1526,7 @@ def get_gallery_statistics() -> str:
     endorsed = endorsement_db.count_endorsements("")
     disliked = endorsement_db.count_disliked("")
     archived = endorsement_db.count_archived("")
+    staged = endorsement_db.count_staged("") if hasattr(endorsement_db, "count_staged") else 0
 
     # Count origin files (still on disk) vs deleted
     origins_on_disk = 0
@@ -1521,7 +1548,7 @@ def get_gallery_statistics() -> str:
     thumb_count, thumb_bytes = _dir_size(_THUMB_CACHE_DIR)
     preview_count, preview_bytes = _dir_size(_PREVIEW_CACHE_DIR)
 
-    unrated = max(0, total_gen - endorsed - disliked - archived)
+    unrated = max(0, total_gen - endorsed - disliked - archived - staged)
 
     rows = [
         ("📸 Total indexed images", str(total_gen)),
@@ -1530,6 +1557,7 @@ def get_gallery_statistics() -> str:
         ("🖼  Thumbnail cache", f"{thumb_count} files ({_format_bytes(thumb_bytes)})"),
         ("🔍 Preview cache", f"{preview_count} files ({_format_bytes(preview_bytes)})"),
         ("⭐ Endorsed", str(endorsed)),
+        ("📌 Staged", str(staged)),
         ("👎 Disliked", str(disliked)),
         ("📦 Archived", str(archived)),
         ("⬜ Unrated", str(unrated)),
@@ -1565,7 +1593,7 @@ def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_mode_row"):
             mode_radio = gr.Radio(
-                choices=["⭐ Endorsed", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked"],
+                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",
