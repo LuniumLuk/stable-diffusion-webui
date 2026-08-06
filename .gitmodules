@@ -4,3 +4,6 @@
 [submodule "kohya_ss"]
 	path = kohya_ss
 	url = https://github.com/bmaltais/kohya_ss.git
+[submodule "repositories/sana"]
+	path = repositories/sana
+	url = https://github.com/NVlabs/Sana.git
