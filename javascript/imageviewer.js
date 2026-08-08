@@ -1,6 +1,49 @@
 // A full size 'lightbox' preview modal shown when left clicking on gallery previews
+
+// ── Zoom & pan state ──────────────────────────────────────────────
+let _modalZoom  = 1;
+let _modalPanX  = 0;
+let _modalPanY  = 0;
+let _modalDragging     = false;
+let _modalDragStartX   = 0;
+let _modalDragStartY   = 0;
+let _modalDragOriginX  = 0;
+let _modalDragOriginY  = 0;
+let _modalDragMoved    = false;  // true if cursor moved >3px during drag
+let _modalImageNaturalW = 0;
+let _modalImageNaturalH = 0;
+
+function _modalApplyTransform() {
+    const img = gradioApp().getElementById('modalImage');
+    if (!img) return;
+    img.style.transform = `translate(${_modalPanX}px, ${_modalPanY}px) scale(${_modalZoom})`;
+    // Update cursor: grab when zoomed in, default otherwise
+    img.style.cursor = (_modalZoom > 1.005) ? 'grab' : 'default';
+}
+
+function _modalResetTransform() {
+    _modalZoom = 1;
+    _modalPanX = 0;
+    _modalPanY = 0;
+    _modalApplyTransform();
+}
+
+function _modalFitToViewport(img) {
+    // CSS max-width/max-height already constrains the image to the viewport,
+    // so zoom=1 / pan=0 is the correct initial fit.
+    _modalZoom = 1;
+    _modalPanX = 0;
+    _modalPanY = 0;
+    if (img) {
+        _modalImageNaturalW = img.naturalWidth || 0;
+        _modalImageNaturalH = img.naturalHeight || 0;
+    }
+    _modalApplyTransform();
+}
+
 function closeModal() {
     gradioApp().getElementById("lightboxModal").style.display = "none";
+    _modalDragging = false;
 }
 
 function showModal(event) {
@@ -13,6 +56,11 @@ function showModal(event) {
     if (modalImage.style.display === 'none') {
         lb.style.setProperty('background-image', 'url(' + source.src + ')');
     }
+
+    // Reset transform and fit image to viewport (handles async load internally)
+    _modalResetTransform();
+    _modalFitToViewport(modalImage);
+
     lb.style.display = "flex";
     lb.focus();
 
@@ -39,8 +87,10 @@ function updateOnBackgroundChange() {
         if (opts.js_live_preview_in_modal_lightbox && preview.length > 0) {
             // show preview image if available
             modalImage.src = preview[preview.length - 1].src;
+            _modalFitToViewport(modalImage);
         } else if (currentButton?.children?.length > 0 && modalImage.src != currentButton.children[0].src) {
             modalImage.src = currentButton.children[0].src;
+            _modalFitToViewport(modalImage);
             if (modalImage.style.display === 'none') {
                 const modal = gradioApp().getElementById("lightboxModal");
                 modal.style.setProperty('background-image', `url(${modalImage.src})`);
@@ -61,6 +111,7 @@ function modalImageSwitch(offset) {
             const modalImage = gradioApp().getElementById("modalImage");
             const modal = gradioApp().getElementById("lightboxModal");
             modalImage.src = nextButton.children[0].src;
+            _modalFitToViewport(modalImage);
             if (modalImage.style.display === 'none') {
                 modal.style.setProperty('background-image', `url(${modalImage.src})`);
             }
@@ -137,7 +188,6 @@ function setupImageForLightbox(e) {
     e.addEventListener('click', function(evt) {
         if (!opts.js_modal_lightbox || evt.button != 0) return;
 
-        modalZoomSet(gradioApp().getElementById('modalImage'), opts.js_modal_lightbox_initially_zoomed);
         evt.preventDefault();
         showModal(evt);
     }, true);
@@ -145,12 +195,42 @@ function setupImageForLightbox(e) {
 }
 
 function modalZoomSet(modalImage, enable) {
-    if (modalImage) modalImage.classList.toggle('modalImageFullscreen', !!enable);
+    // Toggle between 100% actual size and fit-to-viewport.
+    if (!modalImage) return;
+    if (enable) {
+        _modalFitToViewport(modalImage);
+    } else {
+        _modalZoom = 1;
+        _modalPanX = 0;
+        _modalPanY = 0;
+    }
+    _modalApplyTransform();
 }
 
 function modalZoomToggle(event) {
     var modalImage = gradioApp().getElementById("modalImage");
-    modalZoomSet(modalImage, !modalImage.classList.contains('modalImageFullscreen'));
+    if (!modalImage) { event.stopPropagation(); return; }
+    // Toggle between fit-to-viewport and 1:1 actual pixel size.
+    // zoom=1 = CSS-fitted; to show 1:1 we need zoom = natural / rendered.
+    if (Math.abs(_modalZoom - 1) < 0.005 && Math.abs(_modalPanX) < 1 && Math.abs(_modalPanY) < 1) {
+        // Currently fitted — zoom to 1:1 actual size
+        var rect = modalImage.getBoundingClientRect();
+        var nw = modalImage.naturalWidth || _modalImageNaturalW;
+        var nh = modalImage.naturalHeight || _modalImageNaturalH;
+        if (nw && nh && rect.width > 0 && rect.height > 0) {
+            _modalZoom = Math.max(nw / rect.width, nh / rect.height);
+            _modalPanX = 0;
+            _modalPanY = 0;
+        } else {
+            _modalZoom = 2; // fallback if dimensions unavailable
+        }
+    } else {
+        // Currently zoomed — reset to fit
+        _modalZoom = 1;
+        _modalPanX = 0;
+        _modalPanY = 0;
+    }
+    _modalApplyTransform();
     event.stopPropagation();
 }
 
@@ -235,9 +315,75 @@ document.addEventListener("DOMContentLoaded", function() {
 
     const modalImage = document.createElement('img');
     modalImage.id = 'modalImage';
-    modalImage.onclick = closeModal;
     modalImage.tabIndex = 0;
+    modalImage.draggable = false;
+    modalImage.style.transformOrigin = 'center center';
+    modalImage.style.transition = 'none';
     modalImage.addEventListener('keydown', modalKeyHandler, true);
+
+    // ── Wheel zoom (cursor-anchored) ──────────────────────────
+    modalImage.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = modalImage.getBoundingClientRect();
+        const cx = e.clientX - (rect.left + rect.width / 2);
+        const cy = e.clientY - (rect.top + rect.height / 2);
+        const oldScale = _modalZoom;
+        const factor = e.deltaY < 0 ? 1.12 : 0.89;
+        _modalZoom = Math.min(8, Math.max(0.15, _modalZoom * factor));
+        const ratio = _modalZoom / oldScale;
+        _modalPanX = _modalPanX * ratio - cx * (ratio - 1);
+        _modalPanY = _modalPanY * ratio - cy * (ratio - 1);
+        _modalApplyTransform();
+    }, { passive: false });
+
+    // ── Drag to pan ───────────────────────────────────────────
+    modalImage.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        _modalDragging = true;
+        _modalDragMoved = false;
+        _modalDragStartX = e.clientX;
+        _modalDragStartY = e.clientY;
+        _modalDragOriginX = _modalPanX;
+        _modalDragOriginY = _modalPanY;
+        modalImage.style.cursor = 'grabbing';
+        modalImage.style.transition = 'none';
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!_modalDragging) return;
+        var dx = e.clientX - _modalDragStartX;
+        var dy = e.clientY - _modalDragStartY;
+        if (!_modalDragMoved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+            _modalDragMoved = true;
+        }
+        _modalPanX = _modalDragOriginX + dx;
+        _modalPanY = _modalDragOriginY + dy;
+        _modalApplyTransform();
+    });
+
+    document.addEventListener('mouseup', function() {
+        if (!_modalDragging) return;
+        _modalDragging = false;
+        var img = gradioApp().getElementById('modalImage');
+        if (img) img.style.cursor = (_modalZoom > 1.005) ? 'grab' : 'default';
+    });
+
+    // ── Double-click to reset ─────────────────────────────────
+    modalImage.addEventListener('dblclick', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        _modalFitToViewport(modalImage);
+    });
+
+    // ── Click on image: prevent bubbling to backdrop (backdrop click closes) ──
+    modalImage.addEventListener('click', function(e) {
+        e.stopPropagation();
+        // Do NOT close — only backdrop clicks close the modal.
+    });
+
     modal.appendChild(modalImage);
 
     const modalPrev = document.createElement('a');
