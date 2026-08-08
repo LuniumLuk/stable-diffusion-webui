@@ -2350,12 +2350,21 @@
         sendToComposer: function (imagePathB64, configPathB64) {
             const imagePath = b64Decode(imagePathB64 || '');
             const configPath = b64Decode(configPathB64 || '');
-            if (!imagePath) return;
+            console.debug('[endorsedGallery] sendToComposer() imagePath=' + (imagePath ? imagePath.split(/[\\\\/]/).pop() : '(none)') + ' configPath=' + (configPath ? 'yes' : 'no'));
+            if (!imagePath) { console.debug('[endorsedGallery] sendToComposer() ABORT: no imagePath'); return; }
 
             switchToTabByName('composer');
             setTimeout(async () => {
+                console.debug('[endorsedGallery] sendToComposer() after 450ms, composer_load_from_gallery=' + (typeof window.composer_load_from_gallery));
                 if (typeof window.composer_load_from_gallery === 'function') {
-                    await window.composer_load_from_gallery(imagePath, configPath);
+                    try {
+                        await window.composer_load_from_gallery(imagePath, configPath);
+                        console.debug('[endorsedGallery] sendToComposer() completed');
+                    } catch (e) {
+                        console.warn('[endorsedGallery] sendToComposer() ERROR:', e);
+                    }
+                } else {
+                    console.warn('[endorsedGallery] sendToComposer() composer_load_from_gallery not available');
                 }
             }, 450);
         },

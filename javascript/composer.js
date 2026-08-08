@@ -1,5 +1,7 @@
 (function () {
+  var _composerLog = function () { var args = ['[composer]']; for (var i = 0; i < arguments.length; i++) args.push(arguments[i]); console.debug.apply(console, args); };
   function makeComposerController(root) {
+    _composerLog('makeComposerController() called, root.id=' + (root && root.id));
     const state = {
       layers: [],
       active: -1,
@@ -51,10 +53,13 @@
     };
 
     const canvas = root.querySelector("#composer_canvas");
+    _composerLog('  canvas=' + !!canvas + ' (' + (canvas ? canvas.width + 'x' + canvas.height : 'MISSING') + ')');
     const ctx = canvas.getContext("2d");
     const canvasWrap = root.querySelector("#composer_canvas_wrap");
     const bgUploadWrap = document.getElementById("composer_bg_upload");
+    _composerLog('  bgUploadWrap=' + !!bgUploadWrap);
     const charsUploadWrap = document.getElementById("composer_chars_upload");
+    _composerLog('  charsUploadWrap=' + !!charsUploadWrap);
     const layerList = root.querySelector("#composer_layers");
     const assetList = root.querySelector("#composer_assets");
     const lockModeBtn = root.querySelector("#composer_lock_mode_btn");
@@ -723,13 +728,16 @@
     }
 
     async function restoreFromConfigJson(configJson) {
+      _composerLog('restoreFromConfigJson() len=' + (configJson ? configJson.length : 0));
       let payload;
       try {
         payload = JSON.parse(configJson);
       } catch (e) {
+        _composerLog('  JSON parse FAILED: ' + e.message);
         setStatus("Failed to parse config file.");
         return;
       }
+      _composerLog('  parsed OK, layers=' + (payload.layers ? payload.layers.length : 0) + ' w=' + (payload.width || '?') + ' h=' + (payload.height || '?'));
 
       if (payload.width && payload.height) {
         canvas.width = payload.width;
@@ -786,6 +794,7 @@
         state.assetKeys.add(key);
       }
 
+      _composerLog('  built ' + layers.length + ' layer(s), canvas=' + canvas.width + 'x' + canvas.height);
       renderLayerList();
       renderAssetList();
       fitCanvasToParent();
@@ -2099,14 +2108,21 @@
     });
 
     function bindBgInput() {
+      _composerLog('bindBgInput() bgUploadWrap=' + !!bgUploadWrap);
       if (!bgUploadWrap) return;
       const fileInput = bgUploadWrap.querySelector('input[type="file"]');
+      _composerLog('  fileInput=' + !!fileInput);
       if (!fileInput || fileInput.dataset.composerBound === "1") return;
 
       const loadBackgroundFromFile = async (file) => {
-        if (!file || !String(file.type || "").startsWith("image/")) return;
+        _composerLog('loadBackgroundFromFile() file=' + (file ? file.name : 'null') + ' type=' + (file ? file.type : 'N/A') + ' size=' + (file ? file.size : 'N/A'));
+        if (!file || !String(file.type || "").startsWith("image/")) {
+          _composerLog('  SKIP: not an image file');
+          return;
+        }
 
         const img = await loadImageFromFile(file);
+        _composerLog('  image loaded: ' + img.width + 'x' + img.height + ', setting canvas size');
         canvas.width = img.width;
         canvas.height = img.height;
         state.useColorBackground = false;
@@ -2164,8 +2180,10 @@
     }
 
     function bindCharsInput() {
+      _composerLog('bindCharsInput() charsUploadWrap=' + !!charsUploadWrap);
       if (!charsUploadWrap) return;
       const fileInput = charsUploadWrap.querySelector('input[type="file"]');
+      _composerLog('  fileInput=' + !!fileInput);
       if (!fileInput || fileInput.dataset.composerBound === "1") return;
 
       fileInput.dataset.composerBound = "1";
@@ -2182,6 +2200,7 @@
     }
 
     function bindUploadInputs() {
+      _composerLog('bindUploadInputs() called');
       bindBgInput();
       bindCharsInput();
     }
@@ -2428,9 +2447,11 @@
     }
 
     root.__composer_state = state;
+    _composerLog('  root.__composer_state set, layers=' + state.layers.length + ' assets=' + state.assets.length);
     fitCanvasToParent();
     syncCanvasSizeInputs();
     draw();
+    _composerLog('makeComposerController() DONE');
 
     // ── Canvas Size controls ──────────────────────────
     if (canvasSizeApplyBtn) {
@@ -2467,12 +2488,16 @@
   }
 
   window.composer_ensure_init = function () {
+    _composerLog('composer_ensure_init() called');
     const root = document.getElementById("composer_root");
-    if (!root) return;
+    if (!root) { _composerLog('  ERROR: composer_root NOT in DOM'); return; }
 
     if (!root.__composer_initialized) {
+      _composerLog('  first init, calling makeComposerController');
       root.__composer_initialized = true;
       makeComposerController(root);
+    } else {
+      _composerLog('  already inited, skipping');
     }
   };
 
@@ -2515,11 +2540,16 @@
    *                            or empty string if none exists.
    */
   window.composer_load_from_gallery = async function (imagePath, configPath) {
+    _composerLog('composer_load_from_gallery() imagePath=' + (imagePath ? imagePath.split(/[\\\\/]/).pop() : '(none)') + ' configPath=' + (configPath ? 'yes' : 'no'));
     window.composer_ensure_init();
     const root = document.getElementById("composer_root");
-    if (!root || !root.__composer_state) return;
+    if (!root || !root.__composer_state) {
+      _composerLog('  ERROR: root=' + !!root + ' __composer_state=' + (root ? !!root.__composer_state : 'N/A') + ' — aborting');
+      return;
+    }
     const state = root.__composer_state;
     const canvas = root.querySelector("#composer_canvas");
+    _composerLog('  state OK, canvas=' + (canvas ? canvas.width + 'x' + canvas.height : 'null'));
 
     function toFileUrl(absPath) {
       return `/file=${encodeURIComponent(String(absPath).replace(/\\/g, "/"))}`;
@@ -2648,6 +2678,11 @@
     const root = document.getElementById("composer_root");
     if (root && root.__composer_state && typeof root.__composer_state.bindUploadInputs === "function") {
       root.__composer_state.bindUploadInputs();
+    }
+    // Throttled: only log at most once per 500ms to avoid flooding console
+    if (!observer._lastLog || Date.now() - observer._lastLog > 500) {
+      observer._lastLog = Date.now();
+      _composerLog('MutationObserver fired, composer_root=' + !!root + ' state=' + !!(root && root.__composer_state));
     }
   });
 
