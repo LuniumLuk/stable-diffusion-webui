@@ -1947,9 +1947,9 @@
                             window.endorsedGallery.sendTo(item.infotextB64, 'img2img', b64Encode(p));
                         } else if (hint.toLowerCase().includes('fire')) {
                             queueCurrentPreviewFire();
-                        } else if (hint.toLowerCase().includes('extras')) {
+                        } else if (hint.toLowerCase().includes('inpaint')) {
                             const p = decodeFilePathFromFileUrl(item.origUrl);
-                            if (p) window.endorsedGallery.sendToExtras(b64Encode(p));
+                            if (p) window.endorsedGallery.sendToInpaint(item.infotextB64 || '', b64Encode(p));
                         }
                     });
                     previewActionsEl.appendChild(btn);
@@ -2376,6 +2376,70 @@
                     console.warn('[endorsedGallery] injectPathToExtrasUpload failed:', err);
                 });
             }, 40);
+        },
+
+        /**
+         * Send selected gallery image to img2img Inpaint tab.
+         * Applies infotext to img2img (same as sendTo img2img), switches to the
+         * Inpaint sub-tab within img2img, and injects the source image.
+         * infotextB64 - base64(infotext string)
+         * pathB64     - base64(abs_file_path)
+         */
+        sendToInpaint: function (infotextB64, pathB64) {
+            const infotext = b64Decode(infotextB64 || '');
+            const path = b64Decode(pathB64 || '');
+            if (!path) return;
+
+            // Apply infotext to img2img (same hidden bridge as sendTo img2img)
+            if (infotext) {
+                if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
+                    console.warn('[endorsedGallery] infotext_apply textbox not found');
+                } else {
+                    clickGradioBtn('endorsed_gallery_apply_img2img_btn', 0);
+                }
+            }
+
+            // Switch to img2img → Inpaint sub-tab using the built-in switch_to_inpaint()
+            setTimeout(() => {
+                if (typeof window.switch_to_inpaint === 'function') {
+                    window.switch_to_inpaint();
+                } else {
+                    // Fallback: click img2img tab then Inpaint sub-tab
+                    switchToTabByName('img2img');
+                    setTimeout(() => {
+                        const modeTabs = gradioApp().querySelector('#mode_img2img');
+                        if (modeTabs) {
+                            const buttons = modeTabs.querySelectorAll('button');
+                            // Inpaint is the 3rd tab (index 2: img2img=0, Sketch=1, Inpaint=2)
+                            if (buttons[2]) buttons[2].click();
+                        }
+                    }, 100);
+                }
+            }, 250);
+
+            // Inject the source image into the Inpaint image input (#img2maskimg)
+            setTimeout(() => {
+                const fileInput = gradioApp().querySelector('#img2maskimg input[type="file"]');
+                if (!fileInput) {
+                    console.warn('[endorsedGallery] inpaint file input (#img2maskimg) not found');
+                    return;
+                }
+                const srcUrl = toFileServeUrl(path);
+                fetch(srcUrl)
+                    .then((res) => {
+                        if (!res.ok) throw new Error('fetch failed: ' + res.status);
+                        return res.blob();
+                    })
+                    .then((blob) => {
+                        const name = (String(path).split(/[\\/]/).pop() || 'gallery-image.png');
+                        const file = new File([blob], name, { type: blob.type || 'image/png' });
+                        const data = new DataTransfer();
+                        data.items.add(file);
+                        fileInput.files = data.files;
+                        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    })
+                    .catch((err) => console.warn('[endorsedGallery] inpaint image inject failed:', err));
+            }, 400);
         },
 
         previewImage: function (src) {

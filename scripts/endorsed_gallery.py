@@ -435,9 +435,9 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
         f'<button class="endgal-btn-send2img endgal-act-i2i" data-icon="🖼" data-hint="Send to img2img" '
         f'title="send to img2img" '
         f'onclick="endorsedGallery.sendTo(\'\', \'img2img\', \'{path_b64}\')">🖼</button>'
-        f'<button class="endgal-btn-send2img endgal-act-extras" data-icon="✨" data-hint="Send to extras" '
-        f'title="send to extras" '
-        f'onclick="endorsedGallery.sendToExtras(\'{path_b64}\')">✨</button>'
+        f'<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="🎨" data-hint="Send to Inpaint" '
+        f'title="send to inpaint" '
+        f'onclick="endorsedGallery.sendToInpaint(\'\', \'{path_b64}\')">🎨</button>'
         '</div>'
     )
 
@@ -963,7 +963,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         f'<button class="endgal-btn-send2img endgal-act-fire" data-icon="🔥" data-hint="Queue fire jobs" title="queue txt2img override jobs from fire config" onclick="endorsedGallery.queueTxt2ImgFire(\'{infotext_b64}\')">🔥</button>'
         f'<button class="endgal-btn-send2img endgal-act-i2i" data-icon="🖼" data-hint="Send to img2img" title="send to img2img" onclick="endorsedGallery.sendTo(\'{infotext_b64}\', \'img2img\', \'{path_b64}\')">🖼</button>'
         f'<button class="endgal-btn-send2img endgal-act-removebg" data-icon="✂" data-hint="Remove background" title="remove background" onclick="endorsedGallery.action(\'{_b64(json.dumps({"type": "removebg", **payload}))}\')">✂</button>'
-        f'<button class="endgal-btn-send2img endgal-act-extras" data-icon="✨" data-hint="Send to extras" title="send to extras" onclick="endorsedGallery.sendToExtras(\'{path_b64}\')">✨</button>'
+        f'<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="🎨" data-hint="Send to Inpaint" title="send to inpaint" onclick="endorsedGallery.sendToInpaint(\'{infotext_b64}\', \'{path_b64}\')">🎨</button>'
         '</div>'
     )
 

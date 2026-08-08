@@ -2551,6 +2551,7 @@ body.resizing .resize-handle {
 
 .endgal-thumb-actions button.endgal-act-removebg::after,
 .endgal-thumb-actions button.endgal-act-extras::after,
+.endgal-thumb-actions button.endgal-act-inpaint::after,
 .endgal-thumb-actions button.endgal-act-compose::after {
     background: rgba(16, 185, 129, 0.92);
     color: #052e16;
