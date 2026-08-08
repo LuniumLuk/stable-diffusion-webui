@@ -240,6 +240,57 @@ COMPOSER_HTML = """
 }
 #composer_bg_color_apply:hover, #composer_bg_color_random:hover { background: #1e3a5f; border-color: #38bdf8; }
 
+/* ── Canvas size input row ──────────────────── */
+.cmp-canvas-size-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cmp-canvas-size-row input[type="number"] {
+  width: 70px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: monospace;
+  border: 1px solid var(--block-border-color, #334155);
+  border-radius: 5px;
+  background: var(--block-background-fill, #1e293b);
+  color: var(--body-text-color, #e2e8f0);
+  text-align: center;
+}
+.cmp-canvas-size-row input[type="number"]:focus {
+  border-color: #38bdf8;
+  outline: none;
+  box-shadow: 0 0 0 1px #38bdf833;
+}
+.cmp-canvas-size-row .cmp-size-sep {
+  color: #475569;
+  font-size: 14px;
+  font-weight: 700;
+  user-select: none;
+}
+.cmp-canvas-size-row .cmp-sm-btn {
+  flex: 1;
+}
+.cmp-canvas-size-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  margin-top: 4px;
+}
+.cmp-preset-chip {
+  font-size: 10px;
+  padding: 3px 4px;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  background: #0f172a;
+  color: #64748b;
+  cursor: pointer;
+  text-align: center;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap;
+}
+.cmp-preset-chip:hover { background: #1e3a5f; border-color: #38bdf8; color: #cbd5e1; }
+
 /* ── Status bar ─────────────────────────────── */
 #composer_status_text {
   font-size: 11px;
@@ -379,6 +430,32 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
           <input id="composer_bg_color" type="color" value="#1e293b" title="Pure color background" />
           <button id="composer_bg_color_apply"  type="button" title="Set canvas background to this color">Use Color</button>
           <button id="composer_bg_color_random" type="button" title="Random background color">&#127922; Random</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─ CANVAS SIZE ─────────────────────────── -->
+    <div class="composer-box">
+      <div class="cmp-box-header">Canvas Size</div>
+      <div class="cmp-box-body">
+        <div class="cmp-canvas-size-row">
+          <input id="composer_canvas_width" type="number" min="64" max="8192" step="64" value="1280"
+                 title="Canvas width in pixels" />
+          <span class="cmp-size-sep">&times;</span>
+          <input id="composer_canvas_height" type="number" min="64" max="8192" step="64" value="768"
+                 title="Canvas height in pixels" />
+          <button id="composer_canvas_size_apply" type="button" class="cmp-sm-btn"
+                  title="Resize canvas to the specified dimensions">Apply</button>
+        </div>
+        <div class="cmp-canvas-size-presets">
+          <button type="button" class="cmp-preset-chip" data-w="512"  data-h="512">512&sup2;</button>
+          <button type="button" class="cmp-preset-chip" data-w="768"  data-h="768">768&sup2;</button>
+          <button type="button" class="cmp-preset-chip" data-w="1024" data-h="1024">1024&sup2;</button>
+          <button type="button" class="cmp-preset-chip" data-w="1280" data-h="768">1280&times;768</button>
+          <button type="button" class="cmp-preset-chip" data-w="1360" data-h="768">1360&times;768</button>
+          <button type="button" class="cmp-preset-chip" data-w="1280" data-h="1024">1280&times;1024</button>
+          <button type="button" class="cmp-preset-chip" data-w="1920" data-h="1080">1920&times;1080</button>
+          <button type="button" class="cmp-preset-chip" data-w="1024" data-h="576">1024&times;576</button>
         </div>
       </div>
     </div>

@@ -78,6 +78,9 @@
     const cropApplyBtn = root.querySelector("#composer_crop_apply_btn");
     const cropCancelBtn = root.querySelector("#composer_crop_cancel_btn");
     const statusText = root.querySelector("#composer_status_text");
+    const canvasWidthInput = root.querySelector("#composer_canvas_width");
+    const canvasHeightInput = root.querySelector("#composer_canvas_height");
+    const canvasSizeApplyBtn = root.querySelector("#composer_canvas_size_apply");
 
     const toolButtons = {
       move: toolMoveBtn,
@@ -786,6 +789,7 @@
       renderLayerList();
       renderAssetList();
       fitCanvasToParent();
+      syncCanvasSizeInputs();
       draw();
       setStatus(`Config loaded: ${layers.length} layer(s), ${state.assets.length} asset(s) restored.`);
     }
@@ -815,6 +819,52 @@
       canvas.style.width = cssW + "px";
       canvas.style.height = cssH + "px";
       applyCanvasViewport();
+    }
+
+    /**
+     * Sync the canvas size number inputs to reflect the current canvas dimensions.
+     */
+    function syncCanvasSizeInputs() {
+      if (canvasWidthInput) canvasWidthInput.value = canvas.width;
+      if (canvasHeightInput) canvasHeightInput.value = canvas.height;
+    }
+
+    /**
+     * Resize the internal canvas to the values in the width/height inputs.
+     * Scales all layer positions proportionally so the composition is preserved.
+     */
+    function resizeCanvasFromInputs() {
+      const newW = Math.max(64, Math.min(8192, Math.round(Number(canvasWidthInput?.value) || canvas.width)));
+      const newH = Math.max(64, Math.min(8192, Math.round(Number(canvasHeightInput?.value) || canvas.height)));
+      if (newW === canvas.width && newH === canvas.height) return;
+
+      const scaleX = newW / Math.max(1, canvas.width);
+      const scaleY = newH / Math.max(1, canvas.height);
+
+      // Scale all layer positions proportionally (skip paint overlay — it
+      // always spans the full canvas and will be synced separately).
+      for (const layer of state.layers) {
+        if (layer.isPaintOverlay) continue;
+        layer.x = layer.x * scaleX;
+        layer.y = layer.y * scaleY;
+        layer.scale = (layer.scale || 1) * Math.min(scaleX, scaleY);
+      }
+
+      // Resize canvas FIRST so syncPaintOverlaySize uses the new dimensions
+      canvas.width = newW;
+      canvas.height = newH;
+
+      // Now sync the paint overlay to the new canvas size
+      const overlay = state.layers.find((x) => x.isPaintOverlay);
+      if (overlay) {
+        syncPaintOverlaySize(overlay);
+      }
+
+      syncCanvasSizeInputs();
+      fitCanvasToParent();
+      renderLayerList();
+      draw();
+      setStatus(`Canvas resized to ${newW}×${newH}.`);
     }
 
     function drawLayer(layer) {
@@ -2077,6 +2127,7 @@
         }
 
         fitCanvasToParent();
+        syncCanvasSizeInputs();
         renderLayerList();
         draw();
         setStatus(`Background loaded: ${file.name} (${canvas.width}x${canvas.height})`);
@@ -2378,7 +2429,39 @@
 
     root.__composer_state = state;
     fitCanvasToParent();
+    syncCanvasSizeInputs();
     draw();
+
+    // ── Canvas Size controls ──────────────────────────
+    if (canvasSizeApplyBtn) {
+      canvasSizeApplyBtn.addEventListener("click", () => {
+        resizeCanvasFromInputs();
+      });
+    }
+
+    // Canvas size preset chips
+    const presetChips = root.querySelectorAll(".cmp-preset-chip");
+    presetChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const w = parseInt(chip.dataset.w, 10);
+        const h = parseInt(chip.dataset.h, 10);
+        if (!w || !h) return;
+        if (canvasWidthInput) canvasWidthInput.value = w;
+        if (canvasHeightInput) canvasHeightInput.value = h;
+        resizeCanvasFromInputs();
+      });
+    });
+
+    // Allow Enter key on the size inputs to trigger apply
+    [canvasWidthInput, canvasHeightInput].forEach((inp) => {
+      if (!inp) return;
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          resizeCanvasFromInputs();
+        }
+      });
+    });
 
     return state;
   }
