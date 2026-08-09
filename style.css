@@ -2039,7 +2039,7 @@ body.resizing .resize-handle {
 #endgal_refresh_btn,
 #endgal_sync_btn,
 #endgal_archive_unrated_btn,
-#endgal_delete_originals_btn {
+#endgal_delete_archived_disliked_btn {
     min-height: 2.35em !important;
 }
 
@@ -2075,13 +2075,13 @@ body.resizing .resize-handle {
 #endgal_sync_btn    { background: #1e3a5f; border-color: #38bdf8; }
 #endgal_sync_btn:hover { background: #0c4a6e; }
 #endgal_archive_unrated_btn { min-width: 142px; }
-#endgal_delete_originals_btn {
-    min-width: 142px;
+#endgal_delete_archived_disliked_btn {
+    min-width: 210px;
     background: #5f1e1e;
     border-color: #f87171;
     color: #fca5a5;
 }
-#endgal_delete_originals_btn:hover {
+#endgal_delete_archived_disliked_btn:hover {
     background: #7f1d1d;
     color: #fecaca;
 }

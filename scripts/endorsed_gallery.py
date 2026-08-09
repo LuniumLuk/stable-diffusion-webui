@@ -679,7 +679,9 @@ def _open_in_explorer(path: str) -> tuple[bool, str]:
     return True, f"Opened in Explorer: {_html.escape(target)}"
 
 
-def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None, is_archived: bool = False, is_staged: bool = False, card_extras_mode: str = "Expanded") -> str:
+def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None,
+               is_archived: bool = False, is_staged: bool = False, is_trash: bool = False,
+               card_extras_mode: str = "Expanded") -> str:
     path = record.get("path") or record.get("image_path", "")
     prompt = record.get("prompt", "")
     seed = str(record.get("seed", ""))
@@ -955,7 +957,7 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         f'<button class="{dislike_class} endgal-act-dislike" data-hint="Toggle dislike" title="toggle dislike" onclick="endorsedGallery.action(\'{dislike_action_b64}\')">{dislike_label}</button>'
         f'<button class="{stage_class} endgal-act-stage" data-hint="{_html.escape(stage_title)}" title="{stage_title}" onclick="endorsedGallery.action(\'{stage_action_b64}\')">{stage_label}</button>'
         '</div>'
-    )
+    ) if not is_trash else ""
 
     thumb_action_stack = (
         '<div class="endgal-thumb-actions">'
@@ -965,10 +967,12 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
         f'<button class="endgal-btn-send2img endgal-act-removebg" data-icon="✂" data-hint="Remove background" title="remove background" onclick="endorsedGallery.action(\'{_b64(json.dumps({"type": "removebg", **payload}))}\')">✂</button>'
         f'<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="🎨" data-hint="Send to Inpaint" title="send to inpaint" onclick="endorsedGallery.sendToInpaint(\'{infotext_b64}\', \'{path_b64}\')">🎨</button>'
         '</div>'
-    )
+    ) if not is_trash else ""
+
+    trashed_class = " trashed" if is_trash else ""
 
     return f"""
-<div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''} {'staged' if is_staged else ''}">
+<div class="endgal-card {'endorsed' if endorsed_id else ''} {'disliked' if disliked_id else ''} {'staged' if is_staged else ''}{trashed_class}">
     <div class="endgal-thumb">{thumb_html}{corner_action_stack}{info_overlay}{thumb_action_stack}</div>
     <details class="endgal-card-extra"{details_open}>
         <summary class="endgal-card-extra-summary">Details{details_time_html}</summary>
@@ -1117,6 +1121,13 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
         else:
             total = 0
             rows = []
+    elif mode == "🗑 Trash":
+        if hasattr(endorsement_db, "count_trash") and hasattr(endorsement_db, "search_trash"):
+            total = _call_db("count_trash", query, since_ts=since_ts)
+            rows = _call_db("search_trash", query, limit=page_size, offset=offset, since_ts=since_ts)
+        else:
+            total = 0
+            rows = []
     else:
         # Preferred fast path with paged SQL + dislike exclusion.
         if hasattr(endorsement_db, "count_generated_filtered"):
@@ -1209,6 +1220,7 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     if "Unrated" in mode and reverse_unrated:
         rows = list(reversed(rows))
 
+    is_trash_mode = mode == "🗑 Trash"
     cards = []
     for rec, item_key in zip(rows, item_keys):
         path = rec.get("path") or rec.get("image_path", "")
@@ -1217,7 +1229,7 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
         tags = tags_map.get(item_key, [])
         is_arch = item_key in archived_keys
         is_stg = item_key in staged_keys
-        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch, is_staged=is_stg, card_extras_mode=card_extras_mode))
+        cards.append(_card_html(rec, endorsed_id=eid, disliked_id=did, tags=tags, is_archived=is_arch, is_staged=is_stg, is_trash=is_trash_mode, card_extras_mode=card_extras_mode))
 
     header = f'<div class="endgal-count">{total} items</div>'
     grid = f'<div class="endgal-grid {size_class}" style="--endgal-card-min:{card_min}px" data-is-last-page="{str(is_last_page).lower()}">' + "".join(cards) + "</div>"
@@ -1279,6 +1291,14 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
 
     t = data.get("type", "")
     status_message = ""
+
+    # Guard: do not allow state-changing actions on items already in Trash.
+    if t not in ("delete_archived_and_disliked", "archive_all_unrated"):
+        item_key = data.get("item_key") or endorsement_db._item_key_from_path(data.get("path", ""))
+        if item_key and hasattr(endorsement_db, "is_trashed") and endorsement_db.is_trashed(item_key):
+            status_message = '<div class="endgal-sync-result">This item is in Trash and cannot be modified.</div>'
+            t = ""  # neutralize so no state-changing branch runs
+
     if t == "endorse":
         _endorse_path = data.get("path", "")
         endorsement_db.endorse(
@@ -1349,32 +1369,28 @@ def handle_gallery_action(action_json: str, mode: str, query: str, page: int, pa
     elif t == "archive_all_unrated":
         count = endorsement_db.archive_all_unrated()
         status_message = f'<div class="endgal-sync-result">Archived {count} unrated image(s).</div>'
-    elif t == "delete_archived_originals":
-        result = endorsement_db.delete_archived_originals()
-        deleted = result["deleted"]
-        skipped = result["skipped"]
-        errors = result["errors"]
-        freed_mb = result["freed_bytes"] / (1024 * 1024)
-        parts = [f"Deleted {deleted} original file(s)"]
+    elif t == "delete_archived_and_disliked":
+        result = endorsement_db.trash_archived_and_disliked()
+        trashed = result.get("trashed", 0)
+        deleted = result.get("deleted", 0)
+        skipped = result.get("skipped", 0)
+        thumb_deleted = result.get("thumb_deleted", 0)
+        preview_deleted = result.get("preview_deleted", 0)
+        errors = result.get("errors", 0)
+        freed_mb = result.get("freed_bytes", 0) / (1024 * 1024)
+        parts = [f"Moved {trashed} item(s) to trash"]
+        if deleted:
+            parts.append(f"deleted {deleted} original file(s)")
+        if thumb_deleted:
+            parts.append(f"deleted {thumb_deleted} thumbnail(s)")
+        if preview_deleted:
+            parts.append(f"deleted {preview_deleted} preview(s)")
         if skipped:
             parts.append(f"{skipped} already gone")
         if errors:
             parts.append(f"{errors} error(s)")
         parts.append(f"Freed {freed_mb:.1f} MB")
-        status_message = f'<div class="endgal-sync-result">{" · ".join(parts)}. Thumbnails kept.</div>'
-    elif t == "delete_disliked_originals":
-        result = endorsement_db.delete_disliked_originals()
-        deleted = result["deleted"]
-        skipped = result["skipped"]
-        errors = result["errors"]
-        freed_mb = result["freed_bytes"] / (1024 * 1024)
-        parts = [f"Deleted {deleted} original file(s)"]
-        if skipped:
-            parts.append(f"{skipped} already gone")
-        if errors:
-            parts.append(f"{errors} error(s)")
-        parts.append(f"Freed {freed_mb:.1f} MB")
-        status_message = f'<div class="endgal-sync-result">{" · ".join(parts)}. Thumbnails kept.</div>'
+        status_message = f'<div class="endgal-sync-result">{" · ".join(parts)}. Metadata preserved in Trash.</div>'
     elif t == "removebg":
         ok, status_message = _apply_removebg(data.get("path", ""))
         if not ok:
@@ -1527,6 +1543,7 @@ def get_gallery_statistics() -> str:
     disliked = endorsement_db.count_disliked("")
     archived = endorsement_db.count_archived("")
     staged = endorsement_db.count_staged("") if hasattr(endorsement_db, "count_staged") else 0
+    trash = endorsement_db.count_trash("") if hasattr(endorsement_db, "count_trash") else 0
 
     # Count origin files (still on disk) vs deleted
     origins_on_disk = 0
@@ -1560,6 +1577,7 @@ def get_gallery_statistics() -> str:
         ("📌 Staged", str(staged)),
         ("👎 Disliked", str(disliked)),
         ("📦 Archived", str(archived)),
+        ("🗑 Trash", str(trash)),
         ("⬜ Unrated", str(unrated)),
     ]
 
@@ -1593,7 +1611,7 @@ def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_mode_row"):
             mode_radio = gr.Radio(
-                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked"],
+                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked", "🗑 Trash"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",
@@ -1602,8 +1620,7 @@ def on_ui_tabs():
                 refresh_btn = gr.Button("Refresh", elem_id="endgal_refresh_btn", size="sm")
                 stats_btn = gr.Button("📊 Statistics", elem_id="endgal_stats_btn", size="sm")
                 archive_unrated_btn = gr.Button("📦 Archive Unrated", elem_id="endgal_archive_unrated_btn", size="sm")
-                delete_originals_btn = gr.Button("🧹 Delete Originals", elem_id="endgal_delete_originals_btn", size="sm")
-                delete_disliked_btn = gr.Button("🧹 Delete Disliked", elem_id="endgal_delete_disliked_btn", size="sm")
+                delete_archived_disliked_btn = gr.Button("🧹 Delete Archived and Disliked", elem_id="endgal_delete_archived_disliked_btn", size="sm")
 
         with gr.Accordion("Advanced Gallery Settings", open=False, elem_id="endgal_advanced_controls"):
             with gr.Row(elem_id="endgal_controls_row"):
@@ -1822,28 +1839,15 @@ def on_ui_tabs():
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )
 
-        def do_delete_archived_originals(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
-            action_json = json.dumps({"type": "delete_archived_originals"})
+        def do_delete_archived_and_disliked(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
+            action_json = json.dumps({"type": "delete_archived_and_disliked"})
             status, html, info, info2, page = handle_gallery_action(
                 action_json, mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode
             )
             return status, html, info, info2, page
 
-        delete_originals_btn.click(
-            fn=do_delete_archived_originals,
-            inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
-            outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
-        )
-
-        def do_delete_disliked_originals(mode, query, pg, size, date_filter, thumb_size, card_extras_mode):
-            action_json = json.dumps({"type": "delete_disliked_originals"})
-            status, html, info, info2, page = handle_gallery_action(
-                action_json, mode, query, pg, int(size), date_filter, thumb_size, card_extras_mode
-            )
-            return status, html, info, info2, page
-
-        delete_disliked_btn.click(
-            fn=do_delete_disliked_originals,
+        delete_archived_disliked_btn.click(
+            fn=do_delete_archived_and_disliked,
             inputs=[mode_radio, search_box, page_state, page_size, date_filter, thumb_size, card_extras_mode],
             outputs=[sync_status, gallery_html, page_info, page_info_bottom, page_state],
         )

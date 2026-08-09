@@ -1,5 +1,6 @@
 """SQLite persistence for generated images, endorsements, and dislikes."""
 
+import hashlib
 import os
 import re
 import shutil
@@ -10,6 +11,20 @@ _DB_ROOT = os.path.dirname(os.path.dirname(__file__))
 _DB_PATH = os.path.join(_DB_ROOT, "endorsements.db")
 _ENDORSED_ROOT = os.path.join(_DB_ROOT, "outputs", "endorsed")
 _REMOVEBG_ROOT = os.path.join(_DB_ROOT, "outputs", "removebg")
+_TRASH_EXCLUDE = "item_key NOT IN (SELECT item_key FROM trash WHERE item_key IS NOT NULL AND item_key != '')"
+
+
+def _append_trash_exclusion(sql: str) -> str:
+    """Append a trash exclusion clause to a SELECT statement or WHERE fragment.
+
+    If the statement already contains a WHERE clause, the exclusion is added with AND.
+    Otherwise a new WHERE clause is added.
+    """
+    if not sql or not sql.strip():
+        return f" WHERE {_TRASH_EXCLUDE}"
+    if re.search(r"\bWHERE\b", sql, re.IGNORECASE):
+        return f"{sql} AND {_TRASH_EXCLUDE}"
+    return f"{sql} WHERE {_TRASH_EXCLUDE}"
 
 
 def _get_conn():
@@ -179,6 +194,7 @@ def init_db():
         _ensure_image_tags_table(conn)
         _ensure_archived_table(conn)
         _ensure_staged_table(conn)
+        _ensure_trash_table(conn)
         conn.commit()
 
 
@@ -206,6 +222,33 @@ def _ensure_staged_table(conn):
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_staged_item_key ON staged(item_key)")
+
+
+def _ensure_trash_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trash (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_key        TEXT    NOT NULL UNIQUE,
+            trashed_at      TEXT    NOT NULL,
+            path            TEXT,
+            file_mtime      REAL,
+            prompt          TEXT,
+            negative_prompt TEXT,
+            seed            TEXT,
+            steps           INTEGER,
+            sampler         TEXT,
+            cfg_scale       REAL,
+            width           INTEGER,
+            height          INTEGER,
+            model_name      TEXT,
+            model_hash      TEXT,
+            infotext        TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_trash_item_key ON trash(item_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_trash_trashed_at ON trash(trashed_at DESC)")
 
 
 def _ensure_image_tags_table(conn):
@@ -898,6 +941,7 @@ def count_endorsements(query: str = "", exclude_disliked: bool = True, since_ts:
                 )
         else:
             sql = base_sql + where_sql
+        sql = _append_trash_exclusion(sql)
         return conn.execute(sql, params).fetchone()[0]
 
 
@@ -913,6 +957,7 @@ def search_endorsements(query: str = "", limit: int = 60, offset: int = 0,
             sql += " WHERE item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
     else:
         sql += where_sql
+    sql = _append_trash_exclusion(sql)
     sql += " ORDER BY endorsed_at DESC LIMIT ? OFFSET ?"
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
@@ -924,6 +969,7 @@ def count_disliked(query: str = "", since_ts: float | None = None) -> int:
     where_sql, params = _append_time_filter(where_sql, params, "disliked_at", since_ts, numeric=False)
     with _get_conn() as conn:
         sql = "SELECT COUNT(*) FROM dislikes" + where_sql
+        sql = _append_trash_exclusion(sql)
         return conn.execute(sql, params).fetchone()[0]
 
 
@@ -931,7 +977,9 @@ def search_disliked(query: str = "", limit: int = 60, offset: int = 0,
                     since_ts: float | None = None) -> list:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
     where_sql, params = _append_time_filter(where_sql, params, "disliked_at", since_ts, numeric=False)
-    sql = "SELECT * FROM dislikes" + where_sql + " ORDER BY disliked_at DESC LIMIT ? OFFSET ?"
+    sql = "SELECT * FROM dislikes" + where_sql
+    sql = _append_trash_exclusion(sql)
+    sql += " ORDER BY disliked_at DESC LIMIT ? OFFSET ?"
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
         return [dict(r) for r in rows]
@@ -945,6 +993,7 @@ def count_unrated(query: str = "", since_ts: float | None = None) -> int:
         " AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM staged WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM trash WHERE item_key IS NOT NULL AND item_key != '')"
     )
     sql = "SELECT COUNT(*) FROM generated_images" + (where_sql if where_sql else " WHERE 1=1") + rated_filter
     with _get_conn() as conn:
@@ -960,6 +1009,7 @@ def search_unrated(query: str = "", limit: int = 48, offset: int = 0,
         " AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')"
         " AND item_key NOT IN (SELECT item_key FROM staged WHERE item_key IS NOT NULL AND item_key != '')"
+        " AND item_key NOT IN (SELECT item_key FROM trash WHERE item_key IS NOT NULL AND item_key != '')"
     )
     sql = ("SELECT * FROM generated_images"
            + (where_sql if where_sql else " WHERE 1=1")
@@ -1003,7 +1053,7 @@ def unarchive_item(item_key: str) -> None:
 
 
 def archive_all_unrated() -> int:
-    """Archive all generated images not yet endorsed, disliked, or archived. Returns count added."""
+    """Archive all generated images not yet endorsed, disliked, archived, or trashed. Returns count added."""
     now = datetime.now().isoformat(timespec="seconds")
     sql = """
         INSERT OR IGNORE INTO archived (item_key, archived_at)
@@ -1013,6 +1063,7 @@ def archive_all_unrated() -> int:
           AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')
           AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')
           AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')
+          AND item_key NOT IN (SELECT item_key FROM trash WHERE item_key IS NOT NULL AND item_key != '')
     """
     with _get_conn() as conn:
         cur = conn.execute(sql, (now,))
@@ -1054,6 +1105,48 @@ def search_archived(query: str = "", limit: int = 48, offset: int = 0,
         + where_sql
         + " ORDER BY a.archived_at DESC LIMIT ? OFFSET ?"
     )
+    with _get_conn() as conn:
+        rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Trash ────────────────────────────────────────────────────────────────────
+
+def get_trashed_item_keys(item_keys: list[str]) -> set:
+    """Return subset of item_keys that are in trash."""
+    if not item_keys:
+        return set()
+    placeholders = ",".join(["?"] * len(item_keys))
+    with _get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT item_key FROM trash WHERE item_key IN ({placeholders})",
+            item_keys,
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def is_trashed(item_key: str) -> bool:
+    """Return True if the item is in the trash."""
+    if not item_key:
+        return False
+    with _get_conn() as conn:
+        row = conn.execute("SELECT id FROM trash WHERE item_key=?", (item_key,)).fetchone()
+    return row is not None
+
+
+def count_trash(query: str = "", since_ts: float | None = None) -> int:
+    where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "trashed_at", since_ts, numeric=False)
+    with _get_conn() as conn:
+        sql = "SELECT COUNT(*) FROM trash" + where_sql
+        return conn.execute(sql, params).fetchone()[0]
+
+
+def search_trash(query: str = "", limit: int = 48, offset: int = 0,
+                 since_ts: float | None = None) -> list:
+    where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])
+    where_sql, params = _append_time_filter(where_sql, params, "trashed_at", since_ts, numeric=False)
+    sql = "SELECT * FROM trash" + where_sql + " ORDER BY trashed_at DESC LIMIT ? OFFSET ?"
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
         return [dict(r) for r in rows]
@@ -1211,6 +1304,7 @@ def count_generated_filtered(query: str = "", exclude_disliked: bool = True,
                 )
         else:
             sql = base_sql + where_sql
+        sql = _append_trash_exclusion(sql)
         return conn.execute(sql, params).fetchone()[0]
 
 
@@ -1226,6 +1320,7 @@ def search_generated(query: str = "", limit: int = 60, offset: int = 0,
             sql += " WHERE item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')"
     else:
         sql += where_sql
+    sql = _append_trash_exclusion(sql)
     sql += " ORDER BY file_mtime DESC LIMIT ? OFFSET ?"
     with _get_conn() as conn:
         rows = conn.execute(sql, params + [int(limit), int(offset)]).fetchall()
@@ -1313,8 +1408,205 @@ def sync_output_dirs(output_dirs: list, progress_cb=None) -> dict:
     }
 
 
+def _trash_thumb_cache_path(path: str, mtime: float) -> str:
+    key = hashlib.sha1(f"{path}|{mtime:.6f}".encode("utf-8", errors="ignore")).hexdigest()
+    return os.path.join(_DB_ROOT, "cache", "gallery_thumbs", f"{key}.webp")
+
+
+def _trash_preview_cache_path(path: str, mtime: float) -> str:
+    key = hashlib.sha1(f"{path}|{mtime:.6f}|preview".encode("utf-8", errors="ignore")).hexdigest()
+    return os.path.join(_DB_ROOT, "cache", "gallery_previews", f"{key}.webp")
+
+
+def trash_archived_and_disliked() -> dict:
+    """Move archived and disliked items to trash, deleting originals and thumbnails.
+
+    Generation metadata (prompt, parameters, infotext) is preserved in the trash table.
+    Original files and cached thumbnails/previews are removed from disk.
+    Items are removed from archived, dislikes, endorsements, staged, and generated_images
+    so they no longer appear in any gallery mode except Trash.
+
+    Returns dict with:
+      - trashed: number of items moved to trash
+      - deleted: original files successfully deleted
+      - skipped: original files already gone or not found
+      - thumb_deleted: thumbnails deleted
+      - preview_deleted: preview images deleted
+      - errors: file deletion errors
+      - freed_bytes: total bytes freed
+    """
+    trashed = 0
+    deleted = 0
+    skipped = 0
+    thumb_deleted = 0
+    preview_deleted = 0
+    errors = 0
+    freed_bytes = 0
+
+    files_to_delete = []  # list of (path, mtime) tuples for originals and cache
+    now = datetime.now().isoformat(timespec="seconds")
+
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != ''
+            UNION
+            SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != ''
+            """
+        ).fetchall()
+        item_keys = [r[0] for r in rows]
+
+        for item_key in item_keys:
+            # Prefer generated_images for the richest metadata, then dislikes, then endorsements.
+            meta_row = conn.execute(
+                """
+                SELECT path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
+                       cfg_scale, width, height, model_name, model_hash, infotext
+                FROM generated_images
+                WHERE item_key=? LIMIT 1
+                """,
+                (item_key,),
+            ).fetchone()
+            path, mtime = None, None
+
+            if meta_row:
+                columns = meta_row
+                path, mtime = meta_row[0], meta_row[1]
+            else:
+                row = conn.execute(
+                    """
+                    SELECT image_path, prompt, negative_prompt, seed, steps, sampler,
+                           cfg_scale, width, height, model_name, model_hash, infotext
+                    FROM dislikes
+                    WHERE item_key=? ORDER BY id DESC LIMIT 1
+                    """,
+                    (item_key,),
+                ).fetchone()
+                if row:
+                    path = row[0]
+                    columns = (path, None) + row[1:]
+                else:
+                    row = conn.execute(
+                        """
+                        SELECT image_path, prompt, negative_prompt, seed, steps, sampler,
+                               cfg_scale, width, height, model_name, model_hash, infotext
+                        FROM endorsements
+                        WHERE item_key=? ORDER BY id DESC LIMIT 1
+                        """,
+                        (item_key,),
+                    ).fetchone()
+                    if row:
+                        path = row[0]
+                        columns = (path, None) + row[1:]
+                    else:
+                        columns = (None, None, "", "", "", 0, "", 0.0, 0, 0, "", "", "")
+
+            # If the DB didn't store mtime, try to read it from the still-existing original.
+            if path and mtime is None and os.path.isfile(path):
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    pass
+
+            # Save metadata to trash.
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO trash
+                    (item_key, trashed_at, path, file_mtime, prompt, negative_prompt, seed, steps,
+                     sampler, cfg_scale, width, height, model_name, model_hash, infotext)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    item_key,
+                    now,
+                    columns[0],
+                    columns[1],
+                    columns[2],
+                    columns[3],
+                    str(columns[4] or ""),
+                    int(columns[5] or 0),
+                    columns[6],
+                    float(columns[7] or 0),
+                    int(columns[8] or 0),
+                    int(columns[9] or 0),
+                    columns[10],
+                    columns[11],
+                    columns[12],
+                ),
+            )
+            trashed += 1
+
+            if path:
+                files_to_delete.append((path, mtime))
+
+            # Remove from every state table so the item is only in trash.
+            conn.execute("DELETE FROM archived WHERE item_key=?", (item_key,))
+            conn.execute("DELETE FROM dislikes WHERE item_key=?", (item_key,))
+            conn.execute("DELETE FROM endorsements WHERE item_key=?", (item_key,))
+            conn.execute("DELETE FROM staged WHERE item_key=?", (item_key,))
+            conn.execute("DELETE FROM generated_images WHERE item_key=?", (item_key,))
+
+        conn.commit()
+
+    # Delete originals and their cached thumbnails/previews after the DB transaction commits.
+    for path, mtime in files_to_delete:
+        if not path:
+            continue
+
+        if os.path.isfile(path):
+            try:
+                file_size = os.path.getsize(path)
+                os.remove(path)
+                deleted += 1
+                freed_bytes += file_size
+            except OSError:
+                errors += 1
+        else:
+            skipped += 1
+
+        if mtime is not None:
+            thumb_path = _trash_thumb_cache_path(path, mtime)
+            if os.path.isfile(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                    thumb_deleted += 1
+                except OSError:
+                    errors += 1
+
+            preview_path = _trash_preview_cache_path(path, mtime)
+            if os.path.isfile(preview_path):
+                try:
+                    os.remove(preview_path)
+                    preview_deleted += 1
+                except OSError:
+                    errors += 1
+
+    if trashed > 0 or deleted > 0 or errors > 0:
+        freed_mb = freed_bytes / (1024 * 1024)
+        print(
+            f"[Gallery] Moved {trashed} archived/disliked item(s) to trash, "
+            f"deleted {deleted} original(s), freed {freed_mb:.1f} MB"
+            + (f", {errors} error(s)" if errors else "")
+            + (f", {skipped} already gone" if skipped else "")
+            + (f", {thumb_deleted} thumbnail(s)" if thumb_deleted else "")
+            + (f", {preview_deleted} preview(s)" if preview_deleted else "")
+        )
+
+    return {
+        "trashed": trashed,
+        "deleted": deleted,
+        "skipped": skipped,
+        "thumb_deleted": thumb_deleted,
+        "preview_deleted": preview_deleted,
+        "errors": errors,
+        "freed_bytes": freed_bytes,
+    }
+
+
 def delete_archived_originals() -> dict:
     """Delete original image files for all archived items, keeping thumbnails/preview caches.
+
+    Kept for backward compatibility; new UI uses trash_archived_and_disliked().
 
     Returns dict with:
       - deleted: number of files successfully deleted
@@ -1365,6 +1657,8 @@ def delete_archived_originals() -> dict:
 
 def delete_disliked_originals() -> dict:
     """Delete original image files for all disliked items, keeping thumbnails/preview caches.
+
+    Kept for backward compatibility; new UI uses trash_archived_and_disliked().
 
     Returns dict with:
       - deleted: number of files successfully deleted

@@ -2895,40 +2895,19 @@
     }
 
     /**
-     * Intercept the "Delete Originals" button to show a confirmation dialog.
-     * This prevents accidental deletion of archived image files.
+     * Intercept the "Delete Archived and Disliked" button to show a confirmation dialog.
+     * This explains that original PNG files and cached thumbnails/previews will be deleted,
+     * while the generation metadata is preserved in the Trash filter.
      */
-    function setupDeleteOriginalsConfirm() {
-        const btn = gradioApp().querySelector('#endgal_delete_originals_btn');
-        if (!btn || btn.__endgalDelConfirm) return;
-        btn.__endgalDelConfirm = true;
+    function setupDeleteArchivedAndDislikedConfirm() {
+        const btn = gradioApp().querySelector('#endgal_delete_archived_disliked_btn');
+        if (!btn || btn.__endgalDelArchDisConfirm) return;
+        btn.__endgalDelArchDisConfirm = true;
 
         btn.addEventListener('click', function(e) {
             const confirmed = window.confirm(
-                'This will permanently delete the original PNG files for ALL archived images.\n' +
-                'Thumbnails and preview caches will be kept.\n\n' +
-                'This action CANNOT be undone. Continue?'
-            );
-            if (!confirmed) {
-                e.stopImmediatePropagation();
-                e.preventDefault();
-            }
-        }, true); // use capture phase to intercept before Gradio
-    }
-
-    /**
-     * Intercept the "Delete Disliked" button to show a confirmation dialog.
-     * This prevents accidental deletion of disliked image files.
-     */
-    function setupDeleteDislikedConfirm() {
-        const btn = gradioApp().querySelector('#endgal_delete_disliked_btn');
-        if (!btn || btn.__endgalDelDislikeConfirm) return;
-        btn.__endgalDelDislikeConfirm = true;
-
-        btn.addEventListener('click', function(e) {
-            const confirmed = window.confirm(
-                'This will permanently delete the original PNG files for ALL disliked images.\n' +
-                'Thumbnails and preview caches will be kept.\n\n' +
+                'This will permanently delete the original PNG files and cached thumbnails/previews for ALL archived and disliked images.\n' +
+                'Generation metadata (prompt + parameters) will be kept in the Trash filter.\n\n' +
                 'This action CANNOT be undone. Continue?'
             );
             if (!confirmed) {
@@ -3011,10 +2990,8 @@
             setTimeout(setupEndOfGalleryMonitor, 3000);
             setTimeout(setupReverseUnratedSync, 1500);
             setTimeout(setupReverseUnratedSync, 3000);
-            setTimeout(setupDeleteOriginalsConfirm, 1500);
-            setTimeout(setupDeleteOriginalsConfirm, 3000);
-            setTimeout(setupDeleteDislikedConfirm, 1500);
-            setTimeout(setupDeleteDislikedConfirm, 3000);
+            setTimeout(setupDeleteArchivedAndDislikedConfirm, 1500);
+            setTimeout(setupDeleteArchivedAndDislikedConfirm, 3000);
             setTimeout(setupStatisticsPopup, 1500);
             setTimeout(setupStatisticsPopup, 3000);
         });
@@ -3034,10 +3011,8 @@
         setTimeout(setupEndOfGalleryMonitor, 3000);
         setTimeout(setupReverseUnratedSync, 1500);
         setTimeout(setupReverseUnratedSync, 3000);
-        setTimeout(setupDeleteOriginalsConfirm, 1500);
-        setTimeout(setupDeleteOriginalsConfirm, 3000);
-        setTimeout(setupDeleteDislikedConfirm, 1500);
-        setTimeout(setupDeleteDislikedConfirm, 3000);
+        setTimeout(setupDeleteArchivedAndDislikedConfirm, 1500);
+        setTimeout(setupDeleteArchivedAndDislikedConfirm, 3000);
         setTimeout(setupStatisticsPopup, 1500);
         setTimeout(setupStatisticsPopup, 3000);
     }
