@@ -19,7 +19,10 @@
     const mosaicSettings = root.querySelector("#censor_mosaic_settings");
     const mosaicBlockSlider = root.querySelector("#censor_mosaic_block_size");
     const mosaicBlockValue = root.querySelector("#censor_mosaic_block_size_value");
-    if (!canvas || !wrap || !dropHint || !widthSlider || !widthValue || !overwriteWidthBtn || !shapeSelect || !saveBtn || !saveStatus || !brushTypeSelect || !lineSettings || !mosaicSettings || !mosaicBlockSlider || !mosaicBlockValue) return;
+    const blurSettings = root.querySelector("#censor_blur_settings");
+    const blurRadiusSlider = root.querySelector("#censor_blur_radius");
+    const blurRadiusValue = root.querySelector("#censor_blur_radius_value");
+    if (!canvas || !wrap || !dropHint || !widthSlider || !widthValue || !overwriteWidthBtn || !shapeSelect || !saveBtn || !saveStatus || !brushTypeSelect || !lineSettings || !mosaicSettings || !mosaicBlockSlider || !mosaicBlockValue || !blurSettings || !blurRadiusSlider || !blurRadiusValue) return;
 
     const ctx = canvas.getContext("2d");
     const storedWidth = Number(window.localStorage?.getItem(storageKeyWidth) || widthSlider.value || 18);
@@ -34,10 +37,12 @@
       lineShape: shapeSelect.value || "round",
       brushType: brushTypeSelect.value || "line",
       mosaicBlockSize: Number(mosaicBlockSlider.value) || 16,
+      blurRadius: Number(blurRadiusSlider.value) || 12,
       pendingStart: null,
       segments: [],
       redoSegments: [],
       mosaics: [],
+      blurs: [],
       baseImage: null,
       scale: 1,
       panX: 0,
@@ -50,6 +55,7 @@
       displayW: canvas.clientWidth,
       displayH: canvas.clientHeight,
       mosaicDrag: null,
+      blurDrag: null,
     };
 
     root.dataset.censorReady = "1";
@@ -116,6 +122,9 @@
       state.mosaics.forEach((mosaic) => {
         applyMosaic(targetCtx, mosaic.x, mosaic.y, mosaic.w, mosaic.h, mosaic.blockSize);
       });
+      state.blurs.forEach((blur) => {
+        applyBlur(targetCtx, blur.x, blur.y, blur.w, blur.h, blur.radius);
+      });
       targetCtx.restore();
       // Draw line segments (after transform)
       state.segments.forEach((seg) => {
@@ -158,6 +167,18 @@
       ctx.putImageData(imgData, x, y);
     }
 
+    // Gaussian blur effect: blur a region
+    function applyBlur(ctx, x, y, w, h, radius) {
+      const src = document.createElement("canvas");
+      src.width = w;
+      src.height = h;
+      src.getContext("2d").putImageData(ctx.getImageData(x, y, w, h), 0, 0);
+      ctx.save();
+      ctx.filter = `blur(${radius}px)`;
+      ctx.drawImage(src, x, y);
+      ctx.restore();
+    }
+
     function redraw() {
       if (!state.baseImage) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -176,14 +197,23 @@
       state.mosaics.forEach((mosaic) => {
         applyMosaic(offCtx, mosaic.x, mosaic.y, mosaic.w, mosaic.h, mosaic.blockSize);
       });
-      // Draw live mosaic preview (if dragging)
-      if (state.mosaicDrag) {
-        const x = Math.round(Math.min(state.mosaicDrag.x0, state.mosaicDrag.x1));
-        const y = Math.round(Math.min(state.mosaicDrag.y0, state.mosaicDrag.y1));
-        const w = Math.round(Math.abs(state.mosaicDrag.x1 - state.mosaicDrag.x0));
-        const h = Math.round(Math.abs(state.mosaicDrag.y1 - state.mosaicDrag.y0));
+      // Draw permanent blurs
+      state.blurs.forEach((blur) => {
+        applyBlur(offCtx, blur.x, blur.y, blur.w, blur.h, blur.radius);
+      });
+      // Draw live effect preview (if dragging)
+      const drag = state.mosaicDrag || state.blurDrag;
+      if (drag) {
+        const x = Math.round(Math.min(drag.x0, drag.x1));
+        const y = Math.round(Math.min(drag.y0, drag.y1));
+        const w = Math.round(Math.abs(drag.x1 - drag.x0));
+        const h = Math.round(Math.abs(drag.y1 - drag.y0));
         if (w > 2 && h > 2) {
-          applyMosaic(offCtx, x, y, w, h, state.mosaicBlockSize);
+          if (state.mosaicDrag) {
+            applyMosaic(offCtx, x, y, w, h, state.mosaicBlockSize);
+          } else {
+            applyBlur(offCtx, x, y, w, h, state.blurRadius);
+          }
         }
       }
       // 2. Draw the composited result to the main canvas with pan/zoom
@@ -203,17 +233,18 @@
         ctx.stroke();
         ctx.restore();
       });
-      // Draw mosaic preview rectangle (if dragging)
-      if (state.mosaicDrag) {
+      // Draw effect preview rectangle (if dragging)
+      const dragRect = state.mosaicDrag || state.blurDrag;
+      if (dragRect) {
         ctx.save();
         ctx.strokeStyle = "#ff9800";
         ctx.lineWidth = 2 / state.scale;
         ctx.setLineDash([6 / state.scale, 6 / state.scale]);
         ctx.strokeRect(
-          Math.min(state.mosaicDrag.x0, state.mosaicDrag.x1),
-          Math.min(state.mosaicDrag.y0, state.mosaicDrag.y1),
-          Math.abs(state.mosaicDrag.x1 - state.mosaicDrag.x0),
-          Math.abs(state.mosaicDrag.y1 - state.mosaicDrag.y0)
+          Math.min(dragRect.x0, dragRect.x1),
+          Math.min(dragRect.y0, dragRect.y1),
+          Math.abs(dragRect.x1 - dragRect.x0),
+          Math.abs(dragRect.y1 - dragRect.y0)
         );
         ctx.restore();
       }
@@ -295,43 +326,51 @@
       }
     }
 
-    // Mosaic brush: click and drag to select region
-    function onMosaicMouseDown(evt) {
+    // Effect brush (mosaic/blur): click and drag to select region
+    function onEffectMouseDown(evt) {
       if (!state.hasImage) return;
       if (evt.button !== 0) return; // left click only
       evt.preventDefault();
       const p = getCanvasPoint(evt);
-      state.mosaicDrag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      const drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      if (state.brushType === "mosaic") {
+        state.mosaicDrag = drag;
+      } else {
+        state.blurDrag = drag;
+      }
     }
-    function onMosaicMouseMove(evt) {
-      if (!state.mosaicDrag) return;
+    function onEffectMouseMove(evt) {
+      const drag = state.mosaicDrag || state.blurDrag;
+      if (!drag) return;
       const p = getCanvasPoint(evt);
-      state.mosaicDrag.x1 = p.x;
-      state.mosaicDrag.y1 = p.y;
+      drag.x1 = p.x;
+      drag.y1 = p.y;
       redraw();
     }
-    function onMosaicMouseUp(evt) {
-      if (!state.mosaicDrag) return;
-      const x = Math.round(Math.min(state.mosaicDrag.x0, state.mosaicDrag.x1));
-      const y = Math.round(Math.min(state.mosaicDrag.y0, state.mosaicDrag.y1));
-      const w = Math.round(Math.abs(state.mosaicDrag.x1 - state.mosaicDrag.x0));
-      const h = Math.round(Math.abs(state.mosaicDrag.y1 - state.mosaicDrag.y0));
+    function onEffectMouseUp(evt) {
+      const drag = state.mosaicDrag || state.blurDrag;
+      if (!drag) return;
+      const x = Math.round(Math.min(drag.x0, drag.x1));
+      const y = Math.round(Math.min(drag.y0, drag.y1));
+      const w = Math.round(Math.abs(drag.x1 - drag.x0));
+      const h = Math.round(Math.abs(drag.y1 - drag.y0));
       if (w > 2 && h > 2) {
-        state.mosaics.push({ x, y, w, h, blockSize: state.mosaicBlockSize });
+        if (state.mosaicDrag) {
+          state.mosaics.push({ x, y, w, h, blockSize: state.mosaicBlockSize });
+        } else {
+          state.blurs.push({ x, y, w, h, radius: state.blurRadius });
+        }
         state.redoSegments = [];
       }
       state.mosaicDrag = null;
+      state.blurDrag = null;
       redraw();
     }
     // Brush type selector logic
     function updateBrushUI() {
-      if (state.brushType === "line") {
-        lineSettings.style.display = "";
-        mosaicSettings.style.display = "none";
-      } else {
-        lineSettings.style.display = "none";
-        mosaicSettings.style.display = "";
-      }
+      lineSettings.style.display = state.brushType === "line" ? "" : "none";
+      mosaicSettings.style.display = state.brushType === "mosaic" ? "" : "none";
+      blurSettings.style.display = state.brushType === "blur" ? "" : "none";
     }
     brushTypeSelect.addEventListener("change", () => {
       state.brushType = brushTypeSelect.value;
@@ -341,6 +380,10 @@
     mosaicBlockSlider.addEventListener("input", () => {
       state.mosaicBlockSize = Number(mosaicBlockSlider.value) || 16;
       mosaicBlockValue.textContent = `${state.mosaicBlockSize} px`;
+    });
+    blurRadiusSlider.addEventListener("input", () => {
+      state.blurRadius = Number(blurRadiusSlider.value) || 12;
+      blurRadiusValue.textContent = `${state.blurRadius} px`;
     });
     updateBrushUI();
 
@@ -358,6 +401,12 @@
         redraw();
         return;
       }
+      // Undo for blurs
+      if (state.blurs.length > 0) {
+        state.redoSegments.push({ type: 'blur', value: state.blurs.pop() });
+        redraw();
+        return;
+      }
     }
 
     function redo() {
@@ -368,6 +417,8 @@
         state.pendingStart = null;
       } else if (last.type === 'mosaic') {
         state.mosaics.push(last.value);
+      } else if (last.type === 'blur') {
+        state.blurs.push(last.value);
       }
       redraw();
     }
@@ -396,6 +447,7 @@
         state.baseImage = img;
         state.segments = [];
         state.mosaics = [];
+        state.blurs = [];
         state.redoSegments = [];
         state.pendingStart = null;
         state.scale = 1;
@@ -516,15 +568,15 @@
     // Brush event listeners
     function setBrushListeners() {
       canvas.removeEventListener("click", handleCanvasClick);
-      canvas.removeEventListener("mousedown", onMosaicMouseDown);
-      document.removeEventListener("mousemove", onMosaicMouseMove);
-      document.removeEventListener("mouseup", onMosaicMouseUp);
+      canvas.removeEventListener("mousedown", onEffectMouseDown);
+      document.removeEventListener("mousemove", onEffectMouseMove);
+      document.removeEventListener("mouseup", onEffectMouseUp);
       if (state.brushType === "line") {
         canvas.addEventListener("click", handleCanvasClick);
-      } else if (state.brushType === "mosaic") {
-        canvas.addEventListener("mousedown", onMosaicMouseDown);
-        document.addEventListener("mousemove", onMosaicMouseMove);
-        document.addEventListener("mouseup", onMosaicMouseUp);
+      } else if (state.brushType === "mosaic" || state.brushType === "blur") {
+        canvas.addEventListener("mousedown", onEffectMouseDown);
+        document.addEventListener("mousemove", onEffectMouseMove);
+        document.addEventListener("mouseup", onEffectMouseUp);
       }
     }
     brushTypeSelect.addEventListener("change", setBrushListeners);

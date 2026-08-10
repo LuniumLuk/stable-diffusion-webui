@@ -144,6 +144,7 @@ CENSOR_HTML = """
         <select id="censor_brush_type">
             <option value="line" selected>Line</option>
             <option value="mosaic">Mosaic</option>
+            <option value="blur">Gaussian Blur</option>
         </select>
         <div id="censor_line_settings">
             <label for="censor_line_width">Line thickness</label>
@@ -159,10 +160,15 @@ CENSOR_HTML = """
         </div>
         <div id="censor_mosaic_settings" style="display:none">
             <label for="censor_mosaic_block_size">Mosaic block size</label>
-            <input id="censor_mosaic_block_size" type="range" min="4" max="64" step="1" value="16" />
+            <input id="censor_mosaic_block_size" type="range" min="2" max="64" step="1" value="16" />
             <div id="censor_mosaic_block_size_value">16 px</div>
         </div>
-        <div id="censor_hint">Select a brush. For Line: two left clicks draw a segment. For Mosaic: click and drag to pixelate. Right mouse drag moves the image. Ctrl+Z undo, Ctrl+Y redo.</div>
+        <div id="censor_blur_settings" style="display:none">
+            <label for="censor_blur_radius">Blur radius</label>
+            <input id="censor_blur_radius" type="range" min="1" max="40" step="1" value="12" />
+            <div id="censor_blur_radius_value">12 px</div>
+        </div>
+        <div id="censor_hint">Select a brush. For Line: two left clicks draw a segment. For Mosaic: click and drag to pixelate. For Gaussian Blur: click and drag to blur. Right mouse drag moves the image. Ctrl+Z undo, Ctrl+Y redo.</div>
         <div id="censor_save_panel">
             <button id="censor_save_btn" type="button">Save to outputs/censored</button>
             <div id="censor_save_status">Ready.</div>
