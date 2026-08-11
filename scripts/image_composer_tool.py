@@ -181,6 +181,16 @@ COMPOSER_HTML = """
   flex-shrink: 0;
 }
 #composer_brush_size { width: 100%; }
+#composer_replace_source_color, #composer_replace_to_color {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #4b5563;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
 
 /* ── Crop actions ───────────────────────────── */
 .cmp-crop-row {
@@ -413,6 +423,33 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                   title="Apply the current crop selection to the selected layer">&#10003; Apply Crop</button>
           <button id="composer_crop_cancel_btn" type="button" class="cmp-sm-btn"
                   title="Cancel the current crop selection">&#10005; Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─ COLOR REPLACE ──────────────────────── -->
+    <div class="composer-box">
+      <div class="cmp-box-header">Color Replace</div>
+      <div class="cmp-box-body">
+        <div class="cmp-paint-panel">
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Source</span>
+            <input id="composer_replace_source_color" type="color" value="#ff3366"
+                   title="Source color — auto-synced with the picked color" />
+            <span class="cmp-flabel" style="margin-left:6px;">To</span>
+            <input id="composer_replace_to_color" type="color" value="#00ff88"
+                   title="Replacement color applied to matched pixels" />
+          </div>
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Threshold</span>
+            <span id="composer_replace_threshold_value" class="cmp-fval">30</span>
+          </div>
+          <input id="composer_replace_threshold" type="range" min="0" max="255" step="1" value="30"
+                 title="Maximum RGB color distance from the source color" />
+          <button id="composer_replace_apply_btn" type="button" class="cmp-full-btn"
+                  title="Create a new layer with every pixel within the threshold recolored to the replacement color">
+            &#9998; Apply Color Replace
+          </button>
         </div>
       </div>
     </div>

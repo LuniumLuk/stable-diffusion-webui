@@ -19,6 +19,7 @@
       tool: "move",
       drawColor: "#ff3366",
       brushSize: 18,
+      replaceThreshold: 30,
       linePreview: null,
       cropSelection: null,
       cropPreview: null,
@@ -82,6 +83,11 @@
     const brushSizeValue = root.querySelector("#composer_brush_size_value");
     const cropApplyBtn = root.querySelector("#composer_crop_apply_btn");
     const cropCancelBtn = root.querySelector("#composer_crop_cancel_btn");
+    const replaceSourceColorInput = root.querySelector("#composer_replace_source_color");
+    const replaceToColorInput = root.querySelector("#composer_replace_to_color");
+    const replaceThresholdInput = root.querySelector("#composer_replace_threshold");
+    const replaceThresholdValue = root.querySelector("#composer_replace_threshold_value");
+    const replaceApplyBtn = root.querySelector("#composer_replace_apply_btn");
     const statusText = root.querySelector("#composer_status_text");
     const canvasWidthInput = root.querySelector("#composer_canvas_width");
     const canvasHeightInput = root.querySelector("#composer_canvas_height");
@@ -1005,6 +1011,114 @@
       setStatus(`Background color set: ${color}`);
     }
 
+    function hexToRgb(hex) {
+      if (!hex || typeof hex !== 'string') return { r: 0, g: 0, b: 0 };
+      let c = hex.replace(/^#/, '');
+      if (c.length === 3) c = c.split('').map((ch) => ch + ch).join('');
+      if (c.length !== 6) return { r: 0, g: 0, b: 0 };
+      return {
+        r: parseInt(c.slice(0, 2), 16),
+        g: parseInt(c.slice(2, 4), 16),
+        b: parseInt(c.slice(4, 6), 16),
+      };
+    }
+
+    // Render the full composition (background color + all layers, no selection
+    // chrome) into the given 2D context at canvas size.
+    function renderCompositionToCanvas(targetCtx) {
+      if (!targetCtx) return;
+      if (state.useColorBackground && state.backgroundColor) {
+        targetCtx.fillStyle = state.backgroundColor;
+        targetCtx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      for (const layer of state.layers) {
+        const img = layer.img;
+        if (!img) continue;
+        const { w, h } = getLayerSize(layer);
+        targetCtx.save();
+        targetCtx.translate(layer.x, layer.y);
+        targetCtx.rotate(layer.rot);
+        targetCtx.scale(layer.mirror ? -1 : 1, 1);
+        targetCtx.globalAlpha = layer.opacity;
+        targetCtx.drawImage(img, -w / 2, -h / 2, w, h);
+        targetCtx.restore();
+      }
+    }
+
+    function applyColorReplace() {
+      if (state.layers.length === 0 && !state.useColorBackground) {
+        setStatus("Add an image or background first.");
+        return;
+      }
+
+      const srcColor = hexToRgb(state.drawColor);
+      const toColor = hexToRgb(replaceToColorInput ? (replaceToColorInput.value || "#000000") : "#000000");
+      const threshold = Math.max(0, Math.min(255, Number(state.replaceThreshold) || 0));
+      const thresholdSq = threshold * threshold;
+
+      // Render the current composition (without selection chrome) offscreen.
+      const compCanvas = document.createElement("canvas");
+      compCanvas.width = Math.max(1, canvas.width);
+      compCanvas.height = Math.max(1, canvas.height);
+      const compCtx = compCanvas.getContext("2d");
+      renderCompositionToCanvas(compCtx);
+
+      const srcData = compCtx.getImageData(0, 0, compCanvas.width, compCanvas.height).data;
+      const out = new ImageData(compCanvas.width, compCanvas.height);
+      const outData = out.data;
+      let matched = 0;
+
+      for (let i = 0; i < srcData.length; i += 4) {
+        const a = srcData[i + 3];
+        if (a <= 0) continue;
+        const dr = srcData[i] - srcColor.r;
+        const dg = srcData[i + 1] - srcColor.g;
+        const db = srcData[i + 2] - srcColor.b;
+        if (dr * dr + dg * dg + db * db <= thresholdSq) {
+          outData[i] = toColor.r;
+          outData[i + 1] = toColor.g;
+          outData[i + 2] = toColor.b;
+          outData[i + 3] = a;
+          matched += 1;
+        }
+      }
+
+      if (matched === 0) {
+        setStatus(`No pixels within threshold ${threshold} of ${state.drawColor}.`);
+        return;
+      }
+
+      // Build the new full-canvas layer from the matched pixels only.
+      const newCanvas = document.createElement("canvas");
+      newCanvas.width = compCanvas.width;
+      newCanvas.height = compCanvas.height;
+      newCanvas.getContext("2d").putImageData(out, 0, 0);
+
+      const layer = makeLayerFromImage(newCanvas, "Color Replace", false);
+      // Canvas elements have no `.src`, so update the layer image source (sets
+      // both `img` and a data-URL `src`) so the layer survives payload export.
+      updateLayerImageSource(layer, newCanvas);
+      layer.x = compCanvas.width / 2;
+      layer.y = compCanvas.height / 2;
+      layer.scale = 1;
+      layer.rot = 0;
+
+      // Insert above normal layers but below the paint overlay (if any) so the
+      // recolored mask sits over the composition without covering painting.
+      const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+      if (overlayIndex >= 0) {
+        state.layers.splice(overlayIndex, 0, layer);
+        state.active = overlayIndex;
+      } else {
+        state.layers.push(layer);
+        state.active = state.layers.length - 1;
+      }
+
+      renderLayerList();
+      draw();
+      setStatus(`Color replace: ${matched.toLocaleString()} pixel(s) within threshold ${threshold} of ${state.drawColor} → ${replaceToColorInput ? replaceToColorInput.value : "#000000"}. New layer added.`);
+    }
+
     function randomHexColor() {
       const n = Math.floor(Math.random() * 0xffffff);
       return `#${n.toString(16).padStart(6, "0")}`;
@@ -1788,6 +1902,9 @@
         if (drawColorInput) {
           drawColorInput.value = color;
         }
+        if (replaceSourceColorInput) {
+          replaceSourceColorInput.value = color;
+        }
         updateToolUi();
         setStatus(`Picked color ${color}`);
 
@@ -2273,6 +2390,9 @@
     if (drawColorInput) {
       drawColorInput.addEventListener("input", () => {
         state.drawColor = drawColorInput.value || "#ff3366";
+        if (replaceSourceColorInput) {
+          replaceSourceColorInput.value = state.drawColor;
+        }
         if (state.tool === "brush" || state.tool === "line") {
           try {
             canvas.style.cursor = ensureBrushCursor(state.drawColor);
@@ -2331,6 +2451,39 @@
         state.cropPreview = null;
         draw();
         setStatus("Crop selection cleared.");
+      });
+    }
+
+    if (replaceSourceColorInput) {
+      // Keep the source color in sync with the picked/draw color.
+      replaceSourceColorInput.value = state.drawColor;
+      replaceSourceColorInput.addEventListener("input", () => {
+        state.drawColor = replaceSourceColorInput.value || "#ff3366";
+        if (drawColorInput) {
+          drawColorInput.value = state.drawColor;
+        }
+        if (state.tool === "brush" || state.tool === "line") {
+          try {
+            canvas.style.cursor = ensureBrushCursor(state.drawColor);
+          } catch (e) {
+            // ignore
+          }
+        }
+      });
+    }
+
+    if (replaceThresholdInput && replaceThresholdValue) {
+      replaceThresholdInput.value = String(state.replaceThreshold);
+      replaceThresholdValue.textContent = String(state.replaceThreshold);
+      replaceThresholdInput.addEventListener("input", () => {
+        state.replaceThreshold = Math.max(0, Math.min(255, Number(replaceThresholdInput.value) || 0));
+        replaceThresholdValue.textContent = String(state.replaceThreshold);
+      });
+    }
+
+    if (replaceApplyBtn) {
+      replaceApplyBtn.addEventListener("click", () => {
+        applyColorReplace();
       });
     }
 
