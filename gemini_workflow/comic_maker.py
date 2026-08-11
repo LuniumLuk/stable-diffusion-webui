@@ -20,11 +20,17 @@ Usage:
   <workflow-python> comic_maker.py --root-prompt-file story.txt --pages 4 \
       --variations 2   # -> page_01_v01.png, page_01_v02.png, page_02_v01.png, ...
 
+  # Same reference images used for EVERY page (overrides --ref-dir):
+  <workflow-python> comic_maker.py --root-prompt-file story.txt --pages 4 \
+      --ref-images refs/char_a.png refs/style.png
+
 Reference image layout (--ref-dir, optional):
   refs/
     page1/   a.png   b.png       <- references used when rendering page 1
     page2/   style.png           <- references used when rendering page 2
   If refs/page<N>/ is missing, that page is rendered without references.
+  Alternatively, --ref-images takes a flat list of image files that are used
+  for ALL pages (and takes precedence over --ref-dir).
 
 API key: --api-key > GEMINI_API_KEY env > config_states/gemini_nano_banana.txt.
 Output lands in outputs/comic_maker/YYYY-MM-DD/HHMMSS/ (unique per run).
@@ -227,6 +233,21 @@ def ref_images_for_page(ref_dir: str, page_idx: int):
     )
 
 
+def ref_images_from_args(ref_images):
+    """Return the --ref-images list (same references for ALL pages), validated.
+
+    Raises RuntimeError if any path is missing or not a supported image.
+    """
+    paths = []
+    for p in ref_images or []:
+        if not os.path.isfile(p):
+            raise RuntimeError(f"Reference image not found: {p}")
+        if os.path.splitext(p)[1].lower() not in _IMAGE_EXTS:
+            raise RuntimeError(f"Unsupported reference image file: {p}")
+        paths.append(p)
+    return paths
+
+
 def generate_page(client, image_model: str, page_prompt: str, ref_images,
                   output_path: str, aspect_ratio: str = "", image_size: str = "") -> None:
     content = [{"type": "text", "text": page_prompt}]
@@ -274,6 +295,8 @@ def main() -> int:
                         help="Nano Banana image model used to render each page.")
     parser.add_argument("--ref-dir", default="",
                         help="Directory with per-page reference images (refs/page1/, page2/, ...).")
+    parser.add_argument("--ref-images", nargs="+", default=[],
+                        help="Reference image files used for ALL pages (overrides --ref-dir).")
     parser.add_argument("--aspect-ratio", default="3:4",
                         help="Output aspect ratio (default: 3:4).")
     parser.add_argument("--image-size", default="",
@@ -344,9 +367,10 @@ def main() -> int:
 
         # ---- Step 2: render each page (N variations each) -----------------
         variations = max(1, args.variations)
+        global_refs = ref_images_from_args(args.ref_images) if args.ref_images else None
         outputs, errors = {}, {}
         for i, page_prompt in enumerate(page_prompts, 1):
-            refs = ref_images_for_page(args.ref_dir, i)
+            refs = global_refs if global_refs is not None else ref_images_for_page(args.ref_dir, i)
             page_paths, page_errs = [], []
             for v in range(1, variations + 1):
                 out_path = os.path.join(out_dir, f"page_{i:02d}_v{v:02d}.png")
