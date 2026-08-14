@@ -19,7 +19,9 @@
       tool: "move",
       drawColor: "#ff3366",
       brushSize: 18,
-      replaceThreshold: 30,
+      replaceHueThreshold: 20,
+      replaceSatThreshold: 20,
+      replaceValThreshold: 30,
       linePreview: null,
       cropSelection: null,
       cropPreview: null,
@@ -85,8 +87,12 @@
     const cropCancelBtn = root.querySelector("#composer_crop_cancel_btn");
     const replaceSourceColorInput = root.querySelector("#composer_replace_source_color");
     const replaceToColorInput = root.querySelector("#composer_replace_to_color");
-    const replaceThresholdInput = root.querySelector("#composer_replace_threshold");
-    const replaceThresholdValue = root.querySelector("#composer_replace_threshold_value");
+    const replaceHueThresholdInput = root.querySelector("#composer_replace_hue_threshold");
+    const replaceHueThresholdValue = root.querySelector("#composer_replace_hue_threshold_value");
+    const replaceSatThresholdInput = root.querySelector("#composer_replace_sat_threshold");
+    const replaceSatThresholdValue = root.querySelector("#composer_replace_sat_threshold_value");
+    const replaceValThresholdInput = root.querySelector("#composer_replace_val_threshold");
+    const replaceValThresholdValue = root.querySelector("#composer_replace_val_threshold_value");
     const replaceApplyBtn = root.querySelector("#composer_replace_apply_btn");
     const statusText = root.querySelector("#composer_status_text");
     const canvasWidthInput = root.querySelector("#composer_canvas_width");
@@ -1023,6 +1029,25 @@
       };
     }
 
+    // Convert RGB (0-255) to HSV. Hue is 0-360 (undefined -> 0 for gray),
+    // saturation and value are 0-100.
+    function rgbToHsv(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      let h = 0;
+      if (d !== 0) {
+        if (max === r) h = ((g - b) / d) % 6;
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+      const s = max === 0 ? 0 : d / max;
+      return { h, s: s * 100, v: max * 100 };
+    }
+
     // Render the full composition (background color + all layers, no selection
     // chrome) into the given 2D context at canvas size.
     function renderCompositionToCanvas(targetCtx) {
@@ -1052,9 +1077,11 @@
       }
 
       const srcColor = hexToRgb(state.drawColor);
+      const srcHsv = rgbToHsv(srcColor.r, srcColor.g, srcColor.b);
       const toColor = hexToRgb(replaceToColorInput ? (replaceToColorInput.value || "#000000") : "#000000");
-      const threshold = Math.max(0, Math.min(255, Number(state.replaceThreshold) || 0));
-      const thresholdSq = threshold * threshold;
+      const hThresh = Math.max(0, Math.min(180, Number(state.replaceHueThreshold) || 0));
+      const sThresh = Math.max(0, Math.min(100, Number(state.replaceSatThreshold) || 0));
+      const vThresh = Math.max(0, Math.min(100, Number(state.replaceValThreshold) || 0));
 
       // Render the current composition (without selection chrome) offscreen.
       const compCanvas = document.createElement("canvas");
@@ -1071,10 +1098,13 @@
       for (let i = 0; i < srcData.length; i += 4) {
         const a = srcData[i + 3];
         if (a <= 0) continue;
-        const dr = srcData[i] - srcColor.r;
-        const dg = srcData[i + 1] - srcColor.g;
-        const db = srcData[i + 2] - srcColor.b;
-        if (dr * dr + dg * dg + db * db <= thresholdSq) {
+        // Per-channel HSV matching. Hue is circular (wraps at 360); saturation
+        // and value are compared linearly in percent. A pixel matches only when
+        // all three channels fall within their own tolerance.
+        const hsv = rgbToHsv(srcData[i], srcData[i + 1], srcData[i + 2]);
+        const rawHueDist = Math.abs(hsv.h - srcHsv.h);
+        const hueDist = Math.min(rawHueDist, 360 - rawHueDist);
+        if (hueDist <= hThresh && Math.abs(hsv.s - srcHsv.s) <= sThresh && Math.abs(hsv.v - srcHsv.v) <= vThresh) {
           outData[i] = toColor.r;
           outData[i + 1] = toColor.g;
           outData[i + 2] = toColor.b;
@@ -1084,7 +1114,7 @@
       }
 
       if (matched === 0) {
-        setStatus(`No pixels within threshold ${threshold} of ${state.drawColor}.`);
+        setStatus(`No pixels within H±${hThresh}° S±${sThresh}% V±${vThresh}% of ${state.drawColor}.`);
         return;
       }
 
@@ -1116,7 +1146,7 @@
 
       renderLayerList();
       draw();
-      setStatus(`Color replace: ${matched.toLocaleString()} pixel(s) within threshold ${threshold} of ${state.drawColor} → ${replaceToColorInput ? replaceToColorInput.value : "#000000"}. New layer added.`);
+      setStatus(`Color replace: ${matched.toLocaleString()} pixel(s) within H±${hThresh}° S±${sThresh}% V±${vThresh}% of ${state.drawColor} → ${replaceToColorInput ? replaceToColorInput.value : "#000000"}. New layer added.`);
     }
 
     function randomHexColor() {
@@ -2472,12 +2502,30 @@
       });
     }
 
-    if (replaceThresholdInput && replaceThresholdValue) {
-      replaceThresholdInput.value = String(state.replaceThreshold);
-      replaceThresholdValue.textContent = String(state.replaceThreshold);
-      replaceThresholdInput.addEventListener("input", () => {
-        state.replaceThreshold = Math.max(0, Math.min(255, Number(replaceThresholdInput.value) || 0));
-        replaceThresholdValue.textContent = String(state.replaceThreshold);
+    if (replaceHueThresholdInput && replaceHueThresholdValue) {
+      replaceHueThresholdInput.value = String(state.replaceHueThreshold);
+      replaceHueThresholdValue.textContent = `${state.replaceHueThreshold}°`;
+      replaceHueThresholdInput.addEventListener("input", () => {
+        state.replaceHueThreshold = Math.max(0, Math.min(180, Number(replaceHueThresholdInput.value) || 0));
+        replaceHueThresholdValue.textContent = `${state.replaceHueThreshold}°`;
+      });
+    }
+
+    if (replaceSatThresholdInput && replaceSatThresholdValue) {
+      replaceSatThresholdInput.value = String(state.replaceSatThreshold);
+      replaceSatThresholdValue.textContent = `${state.replaceSatThreshold}%`;
+      replaceSatThresholdInput.addEventListener("input", () => {
+        state.replaceSatThreshold = Math.max(0, Math.min(100, Number(replaceSatThresholdInput.value) || 0));
+        replaceSatThresholdValue.textContent = `${state.replaceSatThreshold}%`;
+      });
+    }
+
+    if (replaceValThresholdInput && replaceValThresholdValue) {
+      replaceValThresholdInput.value = String(state.replaceValThreshold);
+      replaceValThresholdValue.textContent = `${state.replaceValThreshold}%`;
+      replaceValThresholdInput.addEventListener("input", () => {
+        state.replaceValThreshold = Math.max(0, Math.min(100, Number(replaceValThresholdInput.value) || 0));
+        replaceValThresholdValue.textContent = `${state.replaceValThreshold}%`;
       });
     }
 

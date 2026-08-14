@@ -191,6 +191,10 @@ COMPOSER_HTML = """
   cursor: pointer;
   flex-shrink: 0;
 }
+#composer_replace_hue_threshold, #composer_replace_sat_threshold, #composer_replace_val_threshold {
+  flex: 1;
+  min-width: 0;
+}
 
 /* ── Crop actions ───────────────────────────── */
 .cmp-crop-row {
@@ -441,11 +445,23 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                    title="Replacement color applied to matched pixels" />
           </div>
           <div class="cmp-paint-row">
-            <span class="cmp-flabel">Threshold</span>
-            <span id="composer_replace_threshold_value" class="cmp-fval">30</span>
+            <span class="cmp-flabel">Hue</span>
+            <input id="composer_replace_hue_threshold" type="range" min="0" max="180" step="1" value="20"
+                   title="Hue tolerance in degrees (0-180, wraps around)" />
+            <span id="composer_replace_hue_threshold_value" class="cmp-fval">20&deg;</span>
           </div>
-          <input id="composer_replace_threshold" type="range" min="0" max="255" step="1" value="30"
-                 title="Maximum RGB color distance from the source color" />
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Sat</span>
+            <input id="composer_replace_sat_threshold" type="range" min="0" max="100" step="1" value="20"
+                   title="Saturation tolerance in percent (0-100)" />
+            <span id="composer_replace_sat_threshold_value" class="cmp-fval">20%</span>
+          </div>
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Val</span>
+            <input id="composer_replace_val_threshold" type="range" min="0" max="100" step="1" value="30"
+                   title="Value (brightness) tolerance in percent (0-100)" />
+            <span id="composer_replace_val_threshold_value" class="cmp-fval">30%</span>
+          </div>
           <button id="composer_replace_apply_btn" type="button" class="cmp-full-btn"
                   title="Create a new layer with every pixel within the threshold recolored to the replacement color">
             &#9998; Apply Color Replace
