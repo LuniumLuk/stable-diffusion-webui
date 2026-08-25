@@ -1,5 +1,17 @@
 (function () {
   var _composerLog = function () { var args = ['[composer]']; for (var i = 0; i < arguments.length; i++) args.push(arguments[i]); console.debug.apply(console, args); };
+  // crypto.randomUUID is only available in secure contexts (HTTPS or localhost).
+  // The webui is served over plain HTTP, so provide a fallback that still works.
+  function _composerUuid() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
   function makeComposerController(root) {
     _composerLog('makeComposerController() called, root.id=' + (root && root.id));
     const state = {
@@ -193,7 +205,7 @@
     function ensureSizePreviewEl() {
       // make a unique id for this composer root so multiple composer instances
       // don't collide
-      const uid = root.dataset.composerUid || (root.dataset.composerUid = crypto.randomUUID());
+      const uid = root.dataset.composerUid || (root.dataset.composerUid = _composerUuid());
       let el = document.querySelector(`.composer-size-preview[data-composer-uid="${uid}"]`);
       if (el) return el;
       // container
@@ -395,7 +407,7 @@
     }
 
     function ensureColorPreviewEl() {
-      const uid = root.dataset.composerUid || (root.dataset.composerUid = crypto.randomUUID());
+      const uid = root.dataset.composerUid || (root.dataset.composerUid = _composerUuid());
       let el = document.querySelector(`.composer-color-preview[data-composer-uid="${uid}"]`);
       if (el) return el;
 
@@ -771,7 +783,7 @@
         const img = await loadImageFromDataUrl(ld.src);
         if (!img) continue;
         layers.push({
-          id: crypto.randomUUID(),
+          id: _composerUuid(),
           name: ld.name || "Layer",
           src: ld.src,
           img,
@@ -797,7 +809,7 @@
         const key = `restored::${layer.name}`;
         if (state.assetKeys.has(key)) continue;
         state.assets.push({
-          id: crypto.randomUUID(),
+          id: _composerUuid(),
           key,
           name: layer.name,
           img: layer.img,
@@ -1234,7 +1246,7 @@
 
     function makeLayerFromImage(img, name, isBackground = false) {
       return {
-        id: crypto.randomUUID(),
+        id: _composerUuid(),
         name,
         src: img.src,
         img,
@@ -1326,7 +1338,7 @@
 
       const img = await loadImageFromFile(file);
       state.assets.push({
-        id: crypto.randomUUID(),
+        id: _composerUuid(),
         key,
         name: file.name,
         img,
