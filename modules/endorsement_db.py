@@ -1239,6 +1239,11 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
     with _get_conn() as conn:
         if item_key:
             conn.execute("DELETE FROM generated_images WHERE item_key=?", (item_key,))
+            # A1111 recycles filename sequence numbers after originals are
+            # deleted, so a regenerated image can reuse an item_key that still
+            # has a stale trash row. Clear it so the new image isn't hidden by
+            # the trash exclusion in gallery queries.
+            conn.execute("DELETE FROM trash WHERE item_key=?", (item_key,))
         conn.execute(
             """
             INSERT OR REPLACE INTO generated_images

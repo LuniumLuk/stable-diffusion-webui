@@ -11,6 +11,7 @@ REM   image_maker.bat --prompt-file prompt.txt --variations 2
 REM   image_maker.bat --prompt-file prompt.txt --ref-images refs\char.png refs\style.png
 REM   image_maker.bat --prompt-file prompt.txt --variations 3 --aspect-ratio 16:9 --image-size 1K
 REM   image_maker.bat --prompt-file prompt.txt --image-model gemini-3.1-flash-image --retries 5
+REM   image_maker.bat --prompt-file prompt.txt --grid 4 3 --grid-padding 16
 REM
 REM Unlike comic_maker.bat, the prompt file is used DIRECTLY as the image
 REM prompt (no txt2txt page expansion). --ref-images (optional) attaches

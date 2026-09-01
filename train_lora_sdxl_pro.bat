@@ -92,6 +92,26 @@ set CLIP_SKIP=2
 set NOISE_OFFSET=0.0357
 set MIN_SNR_GAMMA=5
 
+REM ---- Anti style-bleed options (keep the character, lose the style) ----
+REM  Shuffle tags and drop random tags each step so the model cannot memorize
+REM  the training style.  KEEP_TOKENS=N protects the first N tags
+REM  ("series, character name") from being shuffled/dropped - adjust if your
+REM  captions use a different prefix layout.
+REM  KEEP_TOKENS=6 protects the full quality+identity prefix
+REM  ("masterpiece, best quality, bangdream, mygo, kaname rana, 1girl")
+REM  from shuffling/dropping.
+set KEEP_TOKENS=6
+REM  TEST VALUES - set to 0 to disable (previous scheme had no dropout)
+set CAPTION_TAG_DROPOUT_RATE=0
+set NETWORK_DROPOUT=0
+
+REM  Optional prior-preservation (class images): put unrelated 1boy/1girl
+REM  images WITHOUT captions in a folder and set REG_DATA_DIR to it, e.g.
+REM  set REG_DATA_DIR=%SCRIPT_DIR%data\reg
+set REG_DATA_DIR=
+set REG_FLAGS=
+if not "%REG_DATA_DIR%"=="" set REG_FLAGS=--reg_data_dir="%REG_DATA_DIR%" --prior_loss_weight=1.0
+
 echo ============================================================
 echo  SDXL LoRA Fast Training
 echo ============================================================
@@ -161,6 +181,11 @@ if "%GRADIENT_CHECKPOINTING%"=="1" set GC_FLAG=--gradient_checkpointing
     --clip_skip=%CLIP_SKIP% ^
     --noise_offset=%NOISE_OFFSET% ^
     --min_snr_gamma=%MIN_SNR_GAMMA% ^
+    --shuffle_caption ^
+    --keep_tokens=%KEEP_TOKENS% ^
+    --caption_tag_dropout_rate=%CAPTION_TAG_DROPOUT_RATE% ^
+    --network_dropout=%NETWORK_DROPOUT% ^
+    %REG_FLAGS% ^
     --sdpa ^
     --cache_latents ^
     --cache_latents_to_disk ^
@@ -186,6 +211,12 @@ echo.
 echo ============================================================
 echo  Training complete!
 echo  LoRA saved to: %OUTPUT_DIR%\%OUTPUT_NAME%.safetensors
-echo  Use in WebUI:  ^<lora:%OUTPUT_NAME%:0.8^>
+echo  Use in WebUI:  ^<lora:%OUTPUT_NAME%:0.5-0.65^>
+echo.
+echo  TIP - if the LoRA changes the style too much:
+echo    - try earlier checkpoints first (epoch 4 or 6 files)
+echo    - use a lower weight (0.4-0.6) and pick the lowest
+echo      weight that still keeps the face consistent
+echo    - keep the same style keywords in prompts with/without LoRA
 echo ============================================================
 endlocal
