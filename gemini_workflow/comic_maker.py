@@ -95,21 +95,40 @@ def _resolve_api_key(args) -> str:
 # ---------------------------------------------------------------------------
 # Retry
 # ---------------------------------------------------------------------------
+def _retry_delay(exc, attempt: int) -> int:
+    """Backoff in seconds. HTTP 400 errors whose message mentions
+    "Image generation blocked" retry immediately (0s): that rejection is
+    usually transient and not caused by load, so sleeping only wastes time."""
+    try:
+        if (int(getattr(exc, "code", None)) == 400
+                and "image generation blocked" in str(exc).lower()):
+            return 0
+    except (TypeError, ValueError):
+        pass
+    return 2 ** (attempt + 1)
+
+
 def with_retry(fn, what: str, retries: int = 3):
-    """Call fn(); on any exception retry up to `retries` times with backoff."""
+    """Call fn(); on any exception retry up to `retries` times with backoff.
+
+    HTTP 400 errors mentioning "Image generation blocked" are retried
+    immediately (no backoff).
+    """
     for attempt in range(retries + 1):  # 1 initial attempt + `retries` retries
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 - retry on any API error
             if attempt >= retries:
                 raise
-            delay = 2 ** (attempt + 1)
+            delay = _retry_delay(exc, attempt)
+            when = "immediately" if delay == 0 else f"in {delay}s"
             print(
                 f"[comic_maker] {what} failed (attempt {attempt + 1}/{retries + 1}): "
-                f"{str(exc)[:160]} — retrying in {delay}s",
+                f"{str(exc)[:160]} — retrying {when}",
                 flush=True,
             )
-            time.sleep(delay)
+            if delay:
+                time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
