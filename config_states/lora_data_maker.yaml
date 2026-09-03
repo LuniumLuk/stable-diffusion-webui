@@ -1,13 +1,14 @@
-# lora_data_maker.yaml - per-panel randomization settings.
+# lora_data_maker.yaml - panel randomization + sheet schemes.
 
 # Randomize art style per panel?
-#   true  -> every panel of a sheet gets its own random style
-#           (12 distinct styles per sheet).
-#   false -> one uniform style for every panel (the FIRST entry
-#           of the styles list below).
+#   true  -> each panel gets its own random style (weighted by the
+#           optional 'weight' of every style entry).
+#   false -> one uniform style for every panel (the FIRST entry).
 # --style TAG on the command line overrides everything.
 randomize_panel_style: true
 
+# Add/remove styles freely; optional weight (default 1) biases how
+# often a style is picked, e.g. weight: 3 -> picked ~3x as often.
 styles:
   - tag: anime screencap
     text: "high-resolution anime style, soft cel shading, clean linework"
@@ -51,12 +52,16 @@ styles:
     text: "in the style of Kantoku, soft pastel colors, glossy detailed eyes, fine delicate shading"
 
 # Randomize background scene per panel?
-#   true  -> every panel gets its own random scene from the scenes
-#           list (panels no longer stay plain white).
+#   true  -> each panel gets its own random scene (weighted).
 #   false -> panels stay on the plain white sheet.
-randomize_panel_scene: false
+randomize_panel_scene: true
 
+# Scene entries may carry weight too. 'plain white background' is
+# pre-configured with a raised weight so sheets stay mostly clean.
 scenes:
+  - tag: plain white background
+    text: "background: plain solid white background, no props"
+    weight: 8
   - tag: sunny park
     text: "background: a sunny public park with green lawn and trees"
   - tag: city street, daytime
@@ -94,3 +99,36 @@ scenes:
   - tag: traditional japanese room
     text: "background: a traditional Japanese room with tatami and sliding doors"
 
+# Sheet schemes for the avatar picture(s). Each entry generates
+# one grid. Change grid/aspect/size, or add more entries, e.g.
+#   - grid: [3, 3]
+#     aspect: "2:3"
+#     size: "2K"
+avatar_tasks:
+  - grid: [3, 4]
+    aspect: "3:4"
+    size: "2K"
+  - grid: [3, 3]
+    aspect: "2:3"
+    size: "2K"
+
+# Sheet schemes for EVERY outfit fullbody picture. 'kind' is
+# upper or fullbody; add entries to also generate e.g. a 2x4
+# fullbody turnaround or a 3x3 upper grid.
+outfit_tasks:
+  - kind: upper
+    grid: [3, 4]
+    aspect: "3:4"
+    size: "2K"
+  - kind: upper
+    grid: [3, 3]
+    aspect: "2:3"
+    size: "2K"
+  - kind: fullbody
+    grid: [3, 4]
+    aspect: "3:4"
+    size: "2K"
+  - kind: fullbody
+    grid: [3, 3]
+    aspect: "2:3"
+    size: "2K"

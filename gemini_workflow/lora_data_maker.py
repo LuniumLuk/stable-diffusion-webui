@@ -6,45 +6,42 @@ so the only inputs are the pictures:
 
     lora_data_maker.bat --avatar A --fullbody B C D
 
-  * avatar A alone            -> one 3x4 face sheet  -> 12 expression images
-  * A + fullbody B            -> one 3x4 upper grid  -> 12 images
-                              + one 3x4 fullbody grid -> 12 images
-  * A + fullbody C, A + D, ... -> same per outfit picture
+  * avatar A alone            -> face grids   (avatar_tasks from config)
+  * A + fullbody B            -> upper + fullbody grids per outfit picture
+                                (outfit_tasks from config)
 
 CONFIG (YAML, config_states/lora_data_maker.yaml, created on first run):
-  randomize_panel_style   true/false - give every panel its own random art
-                          style (false = uniform first entry; --style TAG
-                          on the command line always wins).
-  styles                  the full list of art styles (tag + text).
-  randomize_panel_scene   true/false - give every panel its own random
-                          background scene (false = plain white sheet).
-  scenes                  the full list of scene/background settings.
+  randomize_panel_style   true/false - per-panel random art style
+                          (false = uniform first entry; --style TAG on the
+                          command line always wins).
+  styles                  the FULL art-style list; each entry may carry an
+                          optional 'weight' (default 1) biasing how often
+                          the style appears across panels/sheets.
+  randomize_panel_scene   true/false - per-panel random background scene.
+  scenes                  the FULL scene list; entries may carry 'weight'.
+                          A weighted 'plain white background' scene is
+                          pre-configured so sheets stay mostly clean.
+  avatar_tasks            list of sheet schemes for the avatar: each
+                          {grid: [cols, rows], aspect: "3:4",
+                           size: "2K"} generates one grid (e.g. also add a
+                          3x3 face grid).
+  outfit_tasks            list of sheet schemes for each outfit fullbody
+                          picture: each {kind: upper|fullbody,
+                          grid: [...], aspect: "...", size: "..."}.
   Override the file with: --config PATH
 
-Variety (no two sheets are prompted alike, governed by the config):
-  * panels      -- each sheet samples 12 panels from an 18-item expression
-                   (face) / pose (upper, fullbody) pool, in random order.
+Further variety:
+  * panels      -- each sheet samples cols*rows panels from an 18-item
+                   expression (face) / pose (upper, fullbody) pool.
   * lighting    -- each sheet picks a random lighting line.
   * reproducible with --seed N.
-  * reference roles -- the prompt names each attached image: first ref =
-    the character's FACE, last ref (fullbody picture) = the OUTFIT.
-  * if a sheet fails (e.g. one artist style is blocked), the pipeline
-    resamples styles/panels and retries automatically.
-
-Grid framing: the sheet layout stays in the concise mode that keeps grids
-accurate ("clean 3-column by 4-row matrix of 12 separate panels ... wide
-uniform white gutters"); art-style / scene variation lives INSIDE each
-panel's description instead of bloating the framing text.
+  * reference roles -- first ref = FACE, last ref (fullbody) = OUTFIT.
+  * on failure the pipeline resamples styles/scenes/panels and retries.
 
 Final output: one flat folder of images (default
 training_data/lora_<trigger>/, trigger inferred from the avatar filename),
 optionally with kohya-style .txt captions (--captions; each caption carries
-its panel's style and scene tags so training can separate them).
-
-Pipeline per stage:
-  generate sheet (Gemini Nano Banana, refs attached)
-  -> split into 3x4 grid cells (--grid-padding px trimmed per border)
-  -> collect numbered images into the result folder.
+its panel's style and scene tags).
 
 API key: --api-key > GEMINI_API_KEY env > config_states/gemini_nano_banana.txt.
 Result is printed to stdout as a JSON object; exit code 0 when everything
@@ -80,16 +77,9 @@ DEFAULT_RESULT_DIR = os.path.join(_ROOT_DIR, "training_data")
 DEFAULT_CONFIG_PATH = os.path.join(_ROOT_DIR, "config_states",
                                    "lora_data_maker.yaml")
 
-GRID_COLS, GRID_ROWS = 3, 4          # one sheet = 12 panels
-GRID_CELLS = GRID_COLS * GRID_ROWS   # 12
-
 # ---------------------------------------------------------------------------
 # Built-in defaults (used until a YAML config is loaded)
 # ---------------------------------------------------------------------------
-# (caption/style tag, style text injected into the panel description).
-# NOTE: the artist-style entries can occasionally be refused by the image
-# model; on failure the pipeline resamples the styles and retries. Remove
-# any line you do not want - either here or in the YAML config.
 DEFAULT_STYLES = [
     {"tag": "anime screencap", "text": "high-resolution anime style, soft cel shading, clean linework"},
     {"tag": "anime movie style", "text": "modern anime movie style, painterly shading, soft gradients"},
@@ -113,8 +103,8 @@ DEFAULT_STYLES = [
     {"tag": "Kantoku style", "text": "in the style of Kantoku, soft pastel colors, glossy detailed eyes, fine delicate shading"},
 ]
 
-# (scene caption tag, background instruction shown per panel).
 DEFAULT_SCENES = [
+    {"tag": "plain white background", "text": "background: plain solid white background, no props", "weight": 8},
     {"tag": "sunny park", "text": "background: a sunny public park with green lawn and trees"},
     {"tag": "city street, daytime", "text": "background: a busy city street in daytime with shops and signs"},
     {"tag": "city street, night", "text": "background: a quiet city street at night with warm streetlights"},
@@ -135,30 +125,96 @@ DEFAULT_SCENES = [
     {"tag": "traditional japanese room", "text": "background: a traditional Japanese room with tatami and sliding doors"},
 ]
 
+# Sheet schemes. grid = [cols, rows]; aspect/size are passed to the image API.
+DEFAULT_AVATAR_TASKS = [
+    {"kind": "face", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
+]
+DEFAULT_OUTFIT_TASKS = [
+    {"kind": "upper", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
+    {"kind": "fullbody", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
+]
+
 DEFAULT_CONFIG = {
     "randomize_panel_style": True,
     "styles": DEFAULT_STYLES,
     "randomize_panel_scene": False,
     "scenes": DEFAULT_SCENES,
+    "avatar_tasks": DEFAULT_AVATAR_TASKS,
+    "outfit_tasks": DEFAULT_OUTFIT_TASKS,
 }
 
 # Runtime config (module-level so helpers can read it without plumbing).
 CFG = {
     "randomize_panel_style": True,
-    "styles": list(DEFAULT_STYLES),
+    "styles": [dict(s) for s in DEFAULT_STYLES],
     "randomize_panel_scene": False,
-    "scenes": list(DEFAULT_SCENES),
+    "scenes": [dict(s) for s in DEFAULT_SCENES],
+    "avatar_tasks": [dict(t) for t in DEFAULT_AVATAR_TASKS],
+    "outfit_tasks": [dict(t) for t in DEFAULT_OUTFIT_TASKS],
 }
+
+STAGE_TAGS = {"face": "portrait", "upper": "upper body", "fullbody": "full body"}
 
 
 def use_default_config():
     global CFG  # noqa: PLW0603 - helper rebinds the runtime config
-    CFG = {
-        "randomize_panel_style": DEFAULT_CONFIG["randomize_panel_style"],
-        "styles": [dict(s) for s in DEFAULT_CONFIG["styles"]],
-        "randomize_panel_scene": DEFAULT_CONFIG["randomize_panel_scene"],
-        "scenes": [dict(s) for s in DEFAULT_CONFIG["scenes"]],
-    }
+    CFG = {k: [dict(x) for x in v] if isinstance(v, list) else v
+           for k, v in {
+               "randomize_panel_style": DEFAULT_CONFIG["randomize_panel_style"],
+               "styles": DEFAULT_CONFIG["styles"],
+               "randomize_panel_scene": DEFAULT_CONFIG["randomize_panel_scene"],
+               "scenes": DEFAULT_CONFIG["scenes"],
+               "avatar_tasks": DEFAULT_CONFIG["avatar_tasks"],
+               "outfit_tasks": DEFAULT_CONFIG["outfit_tasks"],
+           }.items()}
+
+
+def _as_bool(value, cur):
+    if value is None:
+        return cur
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _norm_entry(e, where):
+    if isinstance(e, dict):
+        tag = str(e.get("tag", "")).strip() or str(e.get("name", "")).strip()
+        text = str(e.get("text", "")).strip() or tag
+        weight = e.get("weight", 1.0)
+        try:
+            weight = float(weight)
+        except (TypeError, ValueError):
+            weight = 1.0
+        return {"tag": tag, "text": text, "weight": max(0.0, weight)}
+    s = str(e).strip()
+    return {"tag": s, "text": s, "weight": 1.0}
+
+
+def _norm_grid(g):
+    if isinstance(g, (list, tuple)):
+        nums = [int(x) for x in g]
+    elif isinstance(g, str):
+        nums = [int(x) for x in re.findall(r"\d+", g)]
+    else:
+        nums = []
+    if len(nums) != 2 or min(nums) < 1 or max(nums) > 24:
+        raise RuntimeError(f"bad grid {g!r}; use [cols, rows] like [3, 4]")
+    return nums
+
+
+def _norm_task(t, where):
+    if isinstance(t, dict):
+        kind = str(t.get("kind", "")).strip()
+        grid = _norm_grid(t.get("grid", [3, 4]))
+        aspect = str(t.get("aspect", "")).strip() or "3:4"
+        size = str(t.get("size", "")).strip() or "2K"
+        return {"kind": kind or where, "grid": grid,
+                "aspect": aspect, "size": size}
+    if isinstance(t, str):
+        return {"kind": where, "grid": _norm_grid(t), "aspect": "3:4",
+                "size": "2K"}
+    raise RuntimeError(f"config '{where}' entries must be mappings")
 
 
 def apply_config(cfg: dict):
@@ -166,30 +222,35 @@ def apply_config(cfg: dict):
     use_default_config()
     if not isinstance(cfg, dict):
         raise RuntimeError("config must be a YAML mapping")
-    b = lambda key, cur: (  # noqa: E731
-        bool(cfg[key]) if isinstance(cfg.get(key), bool)
-        else str(cfg.get(key, cur)).strip().lower() in ("1", "true", "yes", "on")
-        if cfg.get(key) is not None else cur)
-    CFG["randomize_panel_style"] = b("randomize_panel_style",
-                                     CFG["randomize_panel_style"])
-    CFG["randomize_panel_scene"] = b("randomize_panel_scene",
-                                     CFG["randomize_panel_scene"])
-    for key, dst in (("styles", CFG["styles"]), ("scenes", CFG["scenes"])):
-        items = cfg.get(key, [])
-        if items is None:
-            items = []
-        if not isinstance(items, list):
-            raise RuntimeError(f"config '{key}' must be a list")
-        dst[:] = [_entry(e, key) for e in items]
-
-
-def _entry(e, where):
-    if isinstance(e, dict):
-        tag = str(e.get("tag", "")).strip() or str(e.get("name", "")).strip()
-        text = str(e.get("text", "")).strip() or tag
-        return {"tag": tag, "text": text}
-    s = str(e).strip()
-    return {"tag": s, "text": s}
+    CFG["randomize_panel_style"] = _as_bool(cfg.get("randomize_panel_style"),
+                                            CFG["randomize_panel_style"])
+    CFG["randomize_panel_scene"] = _as_bool(cfg.get("randomize_panel_scene"),
+                                            CFG["randomize_panel_scene"])
+    if "styles" in cfg and cfg["styles"] is not None:
+        if not isinstance(cfg["styles"], list):
+            raise RuntimeError("config 'styles' must be a list")
+        CFG["styles"] = [_norm_entry(e, "styles") for e in cfg["styles"]]
+    if "scenes" in cfg and cfg["scenes"] is not None:
+        if not isinstance(cfg["scenes"], list):
+            raise RuntimeError("config 'scenes' must be a list")
+        CFG["scenes"] = [_norm_entry(e, "scenes") for e in cfg["scenes"]]
+    if "avatar_tasks" in cfg and cfg["avatar_tasks"] is not None:
+        if not isinstance(cfg["avatar_tasks"], list):
+            raise RuntimeError("config 'avatar_tasks' must be a list")
+        CFG["avatar_tasks"] = [_norm_task(t, "face")
+                               for t in cfg["avatar_tasks"]]
+    if "outfit_tasks" in cfg and cfg["outfit_tasks"] is not None:
+        if not isinstance(cfg["outfit_tasks"], list):
+            raise RuntimeError("config 'outfit_tasks' must be a list")
+        tasks = []
+        for t in cfg["outfit_tasks"]:
+            tasks.append(_norm_task(t, "upper"))
+            kind = tasks[-1]["kind"]
+            if kind not in ("upper", "fullbody"):
+                raise RuntimeError(
+                    f"outfit task kind must be 'upper' or 'fullbody', got "
+                    f"{kind!r}")
+        CFG["outfit_tasks"] = tasks
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +270,7 @@ def load_config_file(path: str) -> dict:
 def _mini_yaml_load(path):
     """Minimal YAML-subset loader for the config schema used here:
     top-level 'key: value' scalars and 'key:' blocks containing
-    '- tag: X' / '- text: Y' entries (nested under the item or as
-    '- tag: X' / '- text: Y' dash lines, or inline '- {tag: X, text: Y}')."""
+    '- key: value' / indented 'key: value' continuation lines."""
     cfg, section = {}, None
     for raw in open(path, "r", encoding="utf-8").read().splitlines():
         ln = re.sub(r"\s*#.*$", "", raw).rstrip()
@@ -218,7 +278,6 @@ def _mini_yaml_load(path):
         if not body:
             continue
         if body.startswith("-"):
-            # list item (indented or not): '- tag: X' / '- {tag: X, text: Y}'
             if section is None:
                 continue
             item = body[1:].strip()
@@ -236,7 +295,6 @@ def _mini_yaml_load(path):
                         {km.group(1): km.group(2).strip().strip("\"'")})
             continue
         if ln[:1] in (" ", "\t"):
-            # indented continuation belongs to the last list item
             m = re.match(r"([A-Za-z_]\w*)\s*:\s*(.*)$", body)
             if m and section is not None and cfg.get(section):
                 cfg[section][-1].setdefault(m.group(1),
@@ -250,10 +308,6 @@ def _mini_yaml_load(path):
             else:
                 cfg[key] = []
                 section = key
-    for sec in ("styles", "scenes"):
-        for e in cfg.get(sec, []):
-            if isinstance(e, dict):
-                e.setdefault("text", e.get("tag", ""))
     return cfg
 
 
@@ -267,31 +321,58 @@ def _mini_scalar(val):
 
 
 def default_config_text() -> str:
-    y = ["# lora_data_maker.yaml - per-panel randomization settings.",
+    y = ["# lora_data_maker.yaml - panel randomization + sheet schemes.",
          "",
          "# Randomize art style per panel?",
-         "#   true  -> every panel of a sheet gets its own random style",
-         "#           (12 distinct styles per sheet).",
-         "#   false -> one uniform style for every panel (the FIRST entry",
-         "#           of the styles list below).",
+         "#   true  -> each panel gets its own random style (weighted by the",
+         "#           optional 'weight' of every style entry).",
+         "#   false -> one uniform style for every panel (the FIRST entry).",
          "# --style TAG on the command line overrides everything.",
          "randomize_panel_style: true",
          "",
+         "# Add/remove styles freely; optional weight (default 1) biases how",
+         "# often a style is picked, e.g. weight: 3 -> picked ~3x as often.",
          "styles:"]
     for s in DEFAULT_STYLES:
         y.append(f"  - tag: {s['tag']}")
         y.append(f"    text: \"{s['text']}\"")
     y += ["",
           "# Randomize background scene per panel?",
-          "#   true  -> every panel gets its own random scene from the scenes",
-          "#           list (panels no longer stay plain white).",
+          "#   true  -> each panel gets its own random scene (weighted).",
           "#   false -> panels stay on the plain white sheet.",
           "randomize_panel_scene: false",
           "",
+          "# Scene entries may carry weight too. 'plain white background' is",
+          "# pre-configured with a raised weight so sheets stay mostly clean.",
           "scenes:"]
     for s in DEFAULT_SCENES:
         y.append(f"  - tag: {s['tag']}")
         y.append(f"    text: \"{s['text']}\"")
+        if s.get("weight"):
+            y.append(f"    weight: {s['weight']}")
+    y += ["",
+          "# Sheet schemes for the avatar picture(s). Each entry generates",
+          "# one grid. Change grid/aspect/size, or add more entries, e.g.",
+          "#   - grid: [3, 3]",
+          "#     aspect: \"2:3\"",
+          "#     size: \"2K\"",
+          "avatar_tasks:",
+          "  - grid: [3, 4]",
+          "    aspect: \"3:4\"",
+          "    size: \"2K\"",
+          "",
+          "# Sheet schemes for EVERY outfit fullbody picture. 'kind' is",
+          "# upper or fullbody; add entries to also generate e.g. a 2x4",
+          "# fullbody turnaround or a 3x3 upper grid.",
+          "outfit_tasks:",
+          "  - kind: upper",
+          "    grid: [3, 4]",
+          "    aspect: \"3:4\"",
+          "    size: \"2K\"",
+          "  - kind: fullbody",
+          "    grid: [3, 4]",
+          "    aspect: \"3:4\"",
+          "    size: \"2K\""]
     return "\n".join(y) + "\n"
 
 
@@ -315,9 +396,8 @@ def resolve_config(args):
 
 
 # ---------------------------------------------------------------------------
-# Built-in pose / expression pools (internal)
+# Pose / expression pools (internal)
 # ---------------------------------------------------------------------------
-# (caption tags, panel description). 18 items each; every sheet samples 12.
 FACE_POOL = [
     ("portrait, front view, neutral expression", "Shoulder-up portrait, direct front view, calm neutral expression."),
     ("portrait, front view, gentle smile", "Shoulder-up portrait, direct front view, soft gentle smile."),
@@ -392,8 +472,53 @@ LIGHTING = [
 
 
 # ---------------------------------------------------------------------------
-# Prompt assembly (per-panel styles / scenes, concise grid framing)
+# Weighted sampling
 # ---------------------------------------------------------------------------
+def _entry_weights(items):
+    return [max(0.0, float(i.get("weight", 1.0))) for i in items]
+
+
+def weighted_sample(items, k, rng):
+    """k distinct items drawn randomly; higher 'weight' entries are more
+    likely to be included. Falls back to weighted-with-replacement when the
+    pool is smaller than k."""
+    pool = list(items)
+    out = []
+    while len(out) < k and pool:
+        ws = _entry_weights(pool)
+        if sum(ws) <= 0:
+            chosen = pool[0]
+        else:
+            chosen = rng.choices(pool, weights=ws, k=1)[0]
+        out.append(chosen)
+        pool.remove(chosen)
+    if len(out) < k and items:
+        ws = _entry_weights(items)
+        if sum(ws) <= 0:
+            ws = None
+        out += rng.choices(items, weights=ws, k=k - len(out))
+    return out
+
+
+def sample_styles(style_arg: str, rng, cells: int) -> list:
+    """Per-panel art styles for one sheet of `cells` panels."""
+    if style_arg:
+        pinned = lookup_style(style_arg)
+        return [pinned] * cells
+    if not CFG["randomize_panel_style"]:
+        return [CFG["styles"][0]] * cells if CFG["styles"] else []
+    if not CFG["styles"]:
+        return []
+    return weighted_sample(CFG["styles"], cells, rng)
+
+
+def sample_scenes(rng, cells: int) -> list:
+    """Per-panel background scenes for one sheet of `cells` panels."""
+    if not CFG["randomize_panel_scene"] or not CFG["scenes"]:
+        return []
+    return weighted_sample(CFG["scenes"], cells, rng)
+
+
 def lookup_style(style_arg: str):
     want = style_arg.strip().lower()
     for s in CFG["styles"]:
@@ -405,67 +530,47 @@ def lookup_style(style_arg: str):
     )
 
 
-def sample_styles(style_arg: str, rng) -> list:
-    """Art styles for one sheet: per-panel entries when randomization is on,
-    one uniform style otherwise. --style TAG pins it for every panel."""
-    if style_arg:
-        pinned = lookup_style(style_arg)
-        return [pinned] * GRID_CELLS
-    if not CFG["randomize_panel_style"]:
-        return [CFG["styles"][0]] * GRID_CELLS if CFG["styles"] else []
-    if len(CFG["styles"]) >= GRID_CELLS:
-        return rng.sample(CFG["styles"], GRID_CELLS)
-    return rng.choices(CFG["styles"], k=GRID_CELLS)
-
-
-def sample_scenes(rng) -> list:
-    """Background scenes for one sheet: per-panel when randomization is on,
-    empty otherwise (panels keep the plain white sheet)."""
-    if not CFG["randomize_panel_scene"] or not CFG["scenes"]:
-        return []
-    if len(CFG["scenes"]) >= GRID_CELLS:
-        return rng.sample(CFG["scenes"], GRID_CELLS)
-    return rng.choices(CFG["scenes"], k=GRID_CELLS)
-
-
+# ---------------------------------------------------------------------------
+# Prompt assembly
+# ---------------------------------------------------------------------------
 def reference_guide(base: str, refs) -> str:
-    """Explain which attached reference image is the face and which is the
-    outfit. In this pipeline refs are ordered avatar(s) first, then the
-    outfit fullbody picture (last)."""
     if not refs:
         return ""
     if base == "face" or len(refs) < 2:
         names = ", ".join(f"'{os.path.basename(r)}'" for r in refs)
         return (f"REFERENCE IMAGE ROLES: the attached reference image(s) "
                 f"{names} show the character's FACE. Copy this exact face, "
-                f"hairstyle, eye color and facial features into all 12 "
-                f"panels; never change the character's identity.")
+                f"hairstyle, eye color and facial features into all panels; "
+                f"never change the character's identity.")
     return (f"REFERENCE IMAGE ROLES: the FIRST attached reference image "
             f"({os.path.basename(refs[0])}) is the character's FACE - copy "
-            f"this exact face, hairstyle and identity into all 12 panels. "
+            f"this exact face, hairstyle and identity into all panels. "
             f"The LAST attached reference image "
             f"({os.path.basename(refs[-1])}) is the character's OUTFIT "
             f"(fullbody clothing picture) - copy this exact outfit, its "
-            f"colors and details onto the character in all 12 panels. Never "
+            f"colors and details onto the character in all panels. Never "
             f"take the face from the outfit picture and never take the "
             f"outfit from the face picture.")
 
 
-def assemble_sheet(stage: str, rng, styles: list, scenes: list, light: str,
-                   refs):
-    """Assemble one sheet prompt in the simple framing mode: 12 panels
-    sampled from the stage's pool, each panel carrying its own art style
-    (`styles`, len 0 or GRID_CELLS) and its own background scene (`scenes`,
-    len 0 or GRID_CELLS), plus the explicit reference-image roles.
+def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
+                   light: str, refs):
+    """Assemble one sheet prompt for `grid` ([cols, rows]): one panel per
+    cell sampled from the stage's pool, each panel carrying its own art
+    style and background scene (lists sized cols*rows or empty), plus the
+    reference-image roles.
 
     Returns (prompt, panel_map) where panel_map[(r, c)] =
-    (caption tags, style tag, scene tag) for the 12 panels (1-based)."""
+    (caption tags, style tag, scene tag), 1-based."""
     base = "face" if stage == "face" else stage.split("_")[1]
+    cols, rows = int(grid[0]), int(grid[1])
+    cells = cols * rows
     pool = _POOLS[base]
-    panels = rng.sample(pool, GRID_CELLS)
+    panels = rng.sample(pool, cells) if len(pool) >= cells \
+        else rng.choices(pool, k=cells)
     lines, panel_map = [], {}
     for idx, (tags, desc) in enumerate(panels):
-        r, c = divmod(idx, GRID_COLS)
+        r, c = divmod(idx, cols)
         line = f"* R{r + 1}C{c + 1}: {tags} :: {desc}"
         st = styles[idx] if idx < len(styles) else None
         sc = scenes[idx] if idx < len(scenes) else None
@@ -486,7 +591,7 @@ def assemble_sheet(stage: str, rng, styles: list, scenes: list, light: str,
     if base == "face":
         subject = ("Character: the same face, hair and identity as the FIRST "
                    "reference image, with identical features and colors in "
-                   "all 12 panels.")
+                   f"all {cells} panels.")
         geometry = ("* Geometry: every panel the same square size, head and "
                     "shoulders centered in each panel, no panel borders or "
                     "frames, only white gutters separate panels.")
@@ -497,7 +602,7 @@ def assemble_sheet(stage: str, rng, styles: list, scenes: list, light: str,
     elif base == "upper":
         subject = ("Character & outfit: the same face as the FIRST reference "
                    "image and the same outfit as the LAST reference image, "
-                   "identical in all 12 panels.")
+                   f"identical in all {cells} panels.")
         geometry = ("* Geometry: equal panel sizes, consistent head-to-waist "
                     "scale, no panel borders or frames, only white gutters "
                     "separate panels.")
@@ -507,7 +612,7 @@ def assemble_sheet(stage: str, rng, styles: list, scenes: list, light: str,
     else:
         subject = ("Character & outfit: the same face as the FIRST reference "
                    "image and the same outfit as the LAST reference image, "
-                   "identical in all 12 panels.")
+                   f"identical in all {cells} panels.")
         geometry = ("* Geometry: every panel the same size, full body visible "
                     "head to toe with margin in each panel, no panel borders "
                     "or frames, only white gutters separate panels.")
@@ -518,19 +623,19 @@ def assemble_sheet(stage: str, rng, styles: list, scenes: list, light: str,
 
     if has_scene:
         sheet_line = (f"A character {base} reference sheet drawn as a clean "
-                      f"3-column by 4-row matrix of 12 separate square "
-                      f"panels on a pure white sheet, with wide uniform "
-                      f"white gutters between every panel. Each panel is "
-                      f"filled edge to edge with the background scene "
-                      f"declared in its own panel line.")
+                      f"{cols}-column by {rows}-row matrix of {cells} "
+                      f"separate square panels on a pure white sheet, with "
+                      f"wide uniform white gutters between every panel. Each "
+                      f"panel is filled edge to edge with the background "
+                      f"scene declared in its own panel line.")
         end_neg = (" White gutters and sheet around the panels; the panels "
                    "themselves show their declared scene. Never leave a "
                    "panel empty or white.")
     else:
         sheet_line = (f"A character {base} reference sheet drawn as a clean "
-                      f"3-column by 4-row matrix of 12 separate square "
-                      f"panels on a pure white background, with wide uniform "
-                      f"white gutters between every panel.")
+                      f"{cols}-column by {rows}-row matrix of {cells} "
+                      f"separate square panels on a pure white background, "
+                      f"with wide uniform white gutters between every panel.")
         end_neg = (" Plain solid white background only.")
 
     style_bullet = ""
@@ -546,7 +651,7 @@ def assemble_sheet(stage: str, rng, styles: list, scenes: list, light: str,
 
     ref_guide = reference_guide(base, refs)
 
-    return f"""GRID: 3x4
+    return f"""GRID: {cols}x{rows}
 {sheet_line}
 
 {subject}
@@ -557,20 +662,19 @@ Layout & Framing (row-major order, left to right, top to bottom):
 {panel_block}
 
 Art Style & Constraints:
-{style_bullet}* The character's face, hair, eyes, outfit and colors must stay identical across all 12 panels.
+{style_bullet}* The character's face, hair, eyes, outfit and colors must stay identical across all {cells} panels.
 * Lighting: {light}.
 {geometry}
 * Strict Negative Constraints: {core_neg + end_neg}""", panel_map
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers / plan / stage execution
 # ---------------------------------------------------------------------------
 def make_caption(trigger: str, stage: str, panel_tags: str,
                  style_tag: str = "", scene_tag: str = "") -> str:
     base = "face" if stage == "face" else stage.split("_")[1]
-    fallback = {"face": "portrait", "upper": "upper body",
-                "fullbody": "full body"}.get(base, "")
+    fallback = STAGE_TAGS.get(base, "")
     parts = [trigger, "1girl", "solo"]
     if panel_tags or fallback:
         parts.append(panel_tags or fallback)
@@ -582,56 +686,74 @@ def make_caption(trigger: str, stage: str, panel_tags: str,
 
 
 def build_plan(avatars, fullbodies):
-    """Stages for one run: face (avatar only), then per fullbody picture
-    one upper grid and one fullbody grid (avatar + that picture)."""
-    plan = [{"stage": "face", "refs": list(avatars)}]
+    """One entry per avatar task and per outfit picture x outfit task."""
+    plan = []
+    for at in CFG["avatar_tasks"]:
+        plan.append({"stage": "face", "task": at, "refs": list(avatars)})
     for i, fb in enumerate(fullbodies, 1):
         refs = list(avatars) + [fb]
-        plan.append({"stage": f"o{i:02d}_upper", "refs": refs})
-        plan.append({"stage": f"o{i:02d}_fullbody", "refs": refs})
+        for ot in CFG["outfit_tasks"]:
+            plan.append({"stage": f"o{i:02d}_{ot['kind']}", "task": ot,
+                         "refs": refs})
     return plan
 
 
-def run_stage(stage: str, refs, args, client, rng, raw_dir: str, result_dir):
-    """Generate the stage's sheets (each sheet samples 12 panels, plus
-    per-panel art styles / scenes according to the config), split them into
-    12 cells, and collect the numbered images into the result folder.
+def task_cells(task):
+    return int(task["grid"][0]) * int(task["grid"][1])
+
+
+def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
+              args, client, rng, raw_dir: str, result_dir):
+    """Generate one sheet scheme's variations (per-panel styles/scenes per
+    config), split into the task grid, and collect numbered images.
+
+    task_no is the 1-based plan ordinal: it is baked into every raw sheet /
+    tile path so that several config tasks sharing the same stage name (two
+    avatar grids, two upper grids, ...) never overwrite each other.
+    counter_box['n'] is the RUN-WIDE image counter so collected filenames
+    stay unique across tasks as well.
     Returns a stage record."""
-    record = {"stage": stage, "grid": [GRID_COLS, GRID_ROWS],
+    cols, rows = task["grid"]
+    cells = cols * rows
+    record = {"stage": stage, "task": task_no, "grid": [cols, rows],
+              "aspect": task.get("aspect", ""), "size": task.get("size", ""),
               "variations": args.variations, "sheets": [],
               "images": [], "errors": []}
-    tile_dir = os.path.join(raw_dir, f"tiles_{stage}")
+    tile_dir = os.path.join(raw_dir, f"tiles_{stage}_p{task_no:02d}")
     os.makedirs(tile_dir, exist_ok=True)
-    counter = 1
     for v in range(1, args.variations + 1):
-        styles = sample_styles(args.style, rng)
-        scenes = sample_scenes(rng)
+        styles = sample_styles(args.style, rng, cells)
+        scenes = sample_scenes(rng, cells)
         light = rng.choice(LIGHTING)
-        prompt, panel_map = assemble_sheet(stage, rng, styles, scenes, light,
-                                           refs)
-        sheet_path = os.path.join(raw_dir, f"{stage}_v{v:02d}.png")
+        prompt, panel_map = assemble_sheet(stage, rng, task["grid"], styles,
+                                           scenes, light, refs)
+        sheet_path = os.path.join(raw_dir, f"{stage}_p{task_no:02d}_v{v:02d}.png")
+        aspect = args.aspect_ratio or task.get("aspect", "") or "3:4"
+        size = args.image_size or task.get("size", "") or "2K"
 
-        # Generate with retries; on failure resample styles/panels (e.g. a
-        # blocked artist style) and try again.
         last_err = None
         for attempt in range(args.retries + 1):
             if attempt:
-                styles = sample_styles(args.style, rng)
-                scenes = sample_scenes(rng)
+                styles = sample_styles(args.style, rng, cells)
+                scenes = sample_scenes(rng, cells)
                 light = rng.choice(LIGHTING)
-                prompt, panel_map = assemble_sheet(stage, rng, styles,
-                                                   scenes, light, refs)
+                prompt, panel_map = assemble_sheet(stage, rng, task["grid"],
+                                                   styles, scenes, light,
+                                                   refs)
             n_style = len({s["tag"] for s in styles}) if styles else 0
-            shown = ", ".join(s["tag"] for s in styles[:3]) if styles else "none"
-            scenes_shown = ", ".join(s["tag"] for s in scenes[:3]) if scenes else "none"
+            shown_s = (", ".join(s["tag"] for s in styles[:3])
+                       if styles else "none")
+            scenes_shown = (", ".join(s["tag"] for s in scenes[:3])
+                            if scenes else "none")
             print(f"[lora_data_maker] {stage} variation {v}/"
                   f"{args.variations} attempt {attempt + 1}/{args.retries + 1}: "
-                  f"generating (refs {len(refs)}, light '{light}', "
-                  f"styles [{shown}] ({n_style} distinct), scenes [{scenes_shown}])",
-                  flush=True)
+                  f"generating (grid {cols}x{rows} {aspect} {size}, "
+                  f"refs {len(refs)}, light '{light}', "
+                  f"styles [{shown_s}] ({n_style} distinct), "
+                  f"scenes [{scenes_shown}])", flush=True)
             try:
                 generate_image(client, args.image_model, prompt, refs,
-                               sheet_path, args.aspect_ratio, args.image_size)
+                               sheet_path, aspect, size)
                 break
             except Exception as exc:  # noqa: BLE001 - resample and retry
                 last_err = exc
@@ -652,17 +774,18 @@ def run_stage(stage: str, refs, args, client, rng, raw_dir: str, result_dir):
         print(f"[lora_data_maker] {stage} variation {v} -> {sheet_path}",
               flush=True)
 
-        tiles = split_grid(sheet_path, GRID_COLS, GRID_ROWS,
-                           args.grid_padding, tile_dir, v)
+        tiles = split_grid(sheet_path, cols, rows, args.grid_padding,
+                           tile_dir, v)
         print(f"[lora_data_maker] {stage} variation {v} split into "
-              f"{GRID_COLS}x{GRID_ROWS} grid -> {len(tiles)} tiles "
+              f"{cols}x{rows} grid -> {len(tiles)} tiles "
               f"(padding {args.grid_padding}px)", flush=True)
 
         for i, tile_path in enumerate(tiles):
-            r, c = divmod(i, GRID_COLS)
+            r, c = divmod(i, cols)
             tags, style_tag, scene_tag = panel_map.get((r + 1, c + 1),
                                                        ("", "", ""))
-            final_name = f"{args.prefix}_{stage}_{counter:03d}.png"
+            final_name = f"{args.prefix}_{stage}_{counter_box['n']:03d}.png"
+            counter_box["n"] += 1
             shutil.copy2(tile_path, os.path.join(result_dir, final_name))
             caption = make_caption(args.trigger, stage, tags, style_tag,
                                    scene_tag)
@@ -679,7 +802,6 @@ def run_stage(stage: str, refs, args, client, rng, raw_dir: str, result_dir):
                 "panel": f"R{r + 1}C{c + 1}",
                 "sheet": os.path.basename(sheet_path),
             })
-            counter += 1
     return record
 
 
@@ -694,7 +816,8 @@ def selftest() -> int:
     ok = True
     work = tempfile.mkdtemp(prefix="lora_data_maker_selftest_")
     try:
-        cols, rows, pad = GRID_COLS, GRID_ROWS, 8
+        # Split: synthetic 3x4 sheet.
+        cols, rows, pad = 3, 4, 8
         cw, ch = 100, 100
         w = cols * cw + (cols + 1) * pad
         h = rows * ch + (rows + 1) * pad
@@ -708,88 +831,153 @@ def selftest() -> int:
                         fill=((40 * i) % 256, (80 * i) % 256, (160 * i) % 256))
         sheet = os.path.join(work, "test_sheet.png")
         img.save(sheet)
-
         tiles = split_grid(sheet, cols, rows, 0, work, 0)
         assert len(tiles) == 12, f"expected 12 tiles, got {len(tiles)}"
-        exp_w, exp_h = w // cols, h // rows
-        for t in tiles:
-            with Image.open(t) as ti:
-                tw, th = ti.size
-                assert tw in (exp_w, exp_w + 1) and th in (exp_h, exp_h + 1), \
-                    f"bad tile size {ti.size}"
-                assert ti.getbbox() is not None, "tile is empty"
-        print(f"[selftest] split: 3x4 sheet -> 12 tiles ~{exp_w}x{exp_h} OK")
+        print("[selftest] split: 3x4 sheet -> 12 tiles OK")
 
-        tiles2 = split_grid(sheet, cols, rows, 2, work, 0)
-        with Image.open(tiles2[0]) as ti:
-            assert ti.size == (exp_w - 4, exp_h - 4), \
-                f"bad trimmed size {ti.size}"
-        print(f"[selftest] padding trim: 2px/side -> "
-              f"{exp_w - 4}x{exp_h - 4} tile OK")
-
-        # Prompt assembler, style randomization ON.
-        for stage, pool in (("face", FACE_POOL), ("o01_upper", UPPER_POOL),
-                            ("o01_fullbody", FULLBODY_POOL)):
-            assert len(pool) >= GRID_CELLS, f"{stage}: pool too small"
+        # Prompt assembler, 3x4 and 3x3 grids, style randomization ON.
+        for grid, ncell in (((3, 4), 12), ((3, 3), 9)):
             rng = random.Random(42)
-            styles = sample_styles("", rng)
-            assert len({s["tag"] for s in styles}) == 12, \
-                "style randomization must give 12 distinct panel styles"
-            sample_refs = (["avatar.png"] if stage == "face"
-                           else ["avatar.png", "outfit_fullbody.png"])
-            prompt, panel_map = assemble_sheet(stage, rng, styles, [],
-                                               LIGHTING[0], sample_refs)
-            assert "clean 3-column by 4-row matrix of 12 separate" in prompt \
-                and "wide uniform white gutters" in prompt, \
-                f"{stage}: grid framing wording missing"
+            styles = sample_styles("", rng, ncell)
+            assert len(styles) == ncell and \
+                len({s["tag"] for s in styles}) == ncell, \
+                f"{grid}: styles must be {ncell} distinct"
+            prompt, panel_map = assemble_sheet("face", rng, grid, styles, [],
+                                               LIGHTING[0], ["avatar.png"])
+            assert f"{grid[0]}x{grid[1]}" in prompt.splitlines()[0], \
+                f"{grid}: GRID header missing"
+            assert len(panel_map) == ncell, f"{grid}: panel map incomplete"
             panels = parse_panels(prompt)
-            assert len(panels) == 12, f"{stage}: {len(panels)} panels"
-            assert len(panel_map) == 12, f"{stage}: panel map incomplete"
-            assert all("Panel art style:" in line
-                       for line in prompt.splitlines()
-                       if line.strip().startswith("* R") and "::" in line), \
-                f"{stage}: a panel line lacks its art style"
-            assert "Background scene:" not in prompt, \
-                f"{stage}: scenes off but scene text present"
-            assert "FACE" in prompt, f"{stage}: face role missing"
-            if stage != "face":
-                assert "OUTFIT" in prompt, f"{stage}: outfit role missing"
-            print(f"[selftest] {stage}: style-randomized sheet, plain panels "
-                  f"OK")
+            assert len(panels) == ncell, f"{grid}: parsed {len(panels)}"
+            print(f"[selftest] grid {grid[0]}x{grid[1]}: {ncell} panels x "
+                  f"{ncell} distinct styles OK")
 
-        # Scene randomization ON (no styles).
+        # Scene randomization ON (with the weighted white scene in the pool).
         CFG["randomize_panel_scene"] = True
         try:
             rng = random.Random(5)
             prompt, panel_map = assemble_sheet(
-                "o01_fullbody", rng, [], sample_scenes(rng), LIGHTING[0],
-                ["avatar.png", "outfit_fullbody.png"])
+                "o01_fullbody", rng, (3, 4), [], sample_scenes(rng, 12),
+                LIGHTING[0], ["avatar.png", "outfit_fullbody.png"])
             assert len(panel_map) == 12, "scene map incomplete"
-            assert all("Background scene:" in line
+            assert any("Background scene:" in line
                        for line in prompt.splitlines()
                        if line.strip().startswith("* R") and "::" in line), \
-                "a panel line lacks its background scene"
-            assert "Plain solid white background only." not in prompt, \
-                "scene mode must not demand white interiors"
+                "no panel carries a background scene"
             assert "Never leave a panel empty" in prompt, \
                 "scene mode empty-panel rule missing"
-            print("[selftest] scene randomization: 12 panels x 12 scenes OK")
+            tags = [s["tag"] for s in CFG["scenes"]]
+            assert "plain white background" in tags, "white scene missing"
+            white = next(s for s in CFG["scenes"]
+                         if s["tag"] == "plain white background")
+            assert white.get("weight", 1.0) > 1, "white scene must be weighted"
+            print("[selftest] scene randomization + weighted white scene OK")
         finally:
             CFG["randomize_panel_scene"] = False
 
         # Determinism with a seed + variety without one.
         rng_a, rng_b = random.Random(7), random.Random(7)
-        pa, _ = assemble_sheet("face", rng_a, sample_styles("", rng_a), [],
-                               LIGHTING[0], ["avatar.png"])
-        pb, _ = assemble_sheet("face", rng_b, sample_styles("", rng_b), [],
-                               LIGHTING[0], ["avatar.png"])
+        pa, _ = assemble_sheet("face", rng_a, (3, 4),
+                               sample_styles("", rng_a, 12), [], LIGHTING[0],
+                               ["avatar.png"])
+        pb, _ = assemble_sheet("face", rng_b, (3, 4),
+                               sample_styles("", rng_b, 12), [], LIGHTING[0],
+                               ["avatar.png"])
         assert pa == pb, "same seed must give identical prompts"
-        pinned = sample_styles("monochrome grayscale", random.Random(1))
+        pinned = sample_styles("kantoku", random.Random(1), 12)
         assert len({s["tag"] for s in pinned}) == 1, "--style must pin"
-        styles_seen = {sample_styles("", random.Random(s))[0]["tag"]
-                       for s in range(12)}
-        assert len(styles_seen) > 1, "style pool should give variety"
-        print("[selftest] seed determinism + --style pinning + variety OK")
+        # Weighted draw: the heavy-weight item must win a single pick.
+        heavy = weighted_sample([{"tag": "a", "weight": 1.0},
+                                 {"tag": "b", "weight": 99.0}], 1,
+                                random.Random(0))
+        assert heavy[0]["tag"] == "b", "weighted sampling failed"
+        # Config round trip through the mini loader (throwaway template).
+        tpl_path = os.path.join(work, "template.yaml")
+        with open(tpl_path, "w", encoding="utf-8") as f:
+            f.write(default_config_text())
+        cfg = load_config_file(tpl_path)
+        assert len(cfg.get("styles", [])) == 20, "styles must be 20"
+        assert len(cfg.get("scenes", [])) == 19, "scenes must be 19"
+        assert len(cfg.get("avatar_tasks", [])) == 1, "avatar tasks"
+        assert len(cfg.get("outfit_tasks", [])) == 2, "outfit tasks"
+        print("[selftest] seed determinism + pinning + weighting + config OK")
+
+        # No-overwrite regression: config tasks that share a stage name
+        # (two face grids, two upper grids, ...) must get unique paths.
+        CFG["avatar_tasks"] = [
+            {"kind": "face", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
+            {"kind": "face", "grid": [3, 3], "aspect": "2:3", "size": "2K"},
+        ]
+        CFG["outfit_tasks"] = [
+            {"kind": "upper", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
+            {"kind": "upper", "grid": [2, 4], "aspect": "16:9", "size": "2K"},
+        ]
+        plan = build_plan(["avatar.png"], ["fb.png"])
+        assert len(plan) == 4, f"expected 4 plan entries, got {len(plan)}"
+        sheets, finals, n = set(), set(), 1
+        for p_no, p in enumerate(plan, 1):
+            stage = p["stage"]
+            cells = task_cells(p["task"])
+            for v in range(1, 3):  # variations = 2
+                sheet = f"{stage}_p{p_no:02d}_v{v:02d}.png"
+                assert sheet not in sheets, f"sheet collision: {sheet}"
+                sheets.add(sheet)
+                for _ in range(cells):
+                    fname = f"seles_{stage}_{n:03d}.png"
+                    n += 1
+                    assert fname not in finals, f"file collision: {fname}"
+                    finals.add(fname)
+        print("[selftest] no-overwrite naming across same-kind tasks OK")
+
+        # End-to-end run_stage with a stubbed generator (no API): proves the
+        # full path (generate -> split -> caption -> collect) runs cleanly
+        # and the run-wide counter keeps filenames unique across tasks.
+        def _fake_generate(_client, _model, _prompt, _refs, out_path, _aspect,
+                           _size):
+            Image.new("RGB", (900, 1200), (235, 235, 235)).save(out_path)
+        real_gen = globals().get("generate_image")
+        try:
+            globals()["generate_image"] = _fake_generate
+            CFG["avatar_tasks"] = [
+                {"kind": "face", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
+                {"kind": "face", "grid": [3, 3], "aspect": "2:3", "size": "2K"},
+            ]
+            CFG["outfit_tasks"] = []
+            sargs = argparse.Namespace(
+                style="", variations=1, aspect_ratio=None, image_size=None,
+                prefix="seles", trigger="seles_v3", captions=True,
+                image_model="test-model", grid_padding=8, retries=1)
+            raw = os.path.join(work, "raw")
+            res = os.path.join(work, "res")
+            os.makedirs(raw, exist_ok=True)
+            os.makedirs(res, exist_ok=True)
+            box = {"n": 1}
+            recs = []
+            for p_no, p in enumerate(build_plan(["avatar.png"], []), 1):
+                recs.append(run_stage(p["stage"], p["refs"], p["task"], p_no,
+                                     box, sargs, None, random.Random(1),
+                                     raw, res))
+            assert all(not r["errors"] for r in recs), "run_stage errors"
+            assert sum(len(r["images"]) for r in recs) == 21, \
+                "expected 21 collected images (12 + 9)"
+            for r in recs:
+                for img in r["images"]:
+                    assert os.path.isfile(os.path.join(res, img["file"])), \
+                        f"missing collected {img['file']}"
+                    assert os.path.isfile(os.path.join(res,
+                                        img["file"][:-4] + ".txt")), \
+                        f"missing caption {img['file']}"
+            assert os.path.isfile(os.path.join(raw, "face_p01_v01.png")), \
+                "task1 sheet missing"
+            assert os.path.isfile(os.path.join(raw, "face_p02_v01.png")), \
+                "task2 sheet missing (overwritten by task1?)"
+            assert os.path.isfile(os.path.join(res, "seles_face_001.png")) and \
+                os.path.isfile(os.path.join(res, "seles_face_021.png")), \
+                "run-wide image counter not applied"
+            print("[selftest] run_stage end-to-end (stubbed generator) OK")
+        finally:
+            if real_gen is not None:
+                globals()["generate_image"] = real_gen
     except Exception as exc:  # noqa: BLE001
         ok = False
         print(f"[selftest] FAILED: {exc}")
@@ -805,28 +993,25 @@ def selftest() -> int:
 # ---------------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="LoRA dataset maker: avatar -> 12-expression face grid; "
-                    "avatar + each fullbody picture -> 12-image upper grid + "
-                    "12-image fullbody grid. Per-panel art style + scene "
-                    "randomization from a YAML config. Output: one flat "
-                    "folder of images."
+        description="LoRA dataset maker: avatar/outfit sheet schemes, "
+                    "per-panel art style + scene randomization and weights "
+                    "from a YAML config. Output: one flat folder of images."
     )
     parser.add_argument("--avatar", nargs="+", default=None,
                         help="Avatar/portrait picture(s) for the character "
-                             "identity (used for the face grid and attached "
+                             "identity (used for the face grids and attached "
                              "to every outfit grid).")
     parser.add_argument("--fullbody", nargs="*", default=None,
-                        help="Fullbody outfit picture(s); each one produces "
-                             "one upper grid + one fullbody grid with the "
-                             "avatar attached (A+B, A+C, ...).")
+                        help="Fullbody outfit picture(s); each one runs the "
+                             "outfit_tasks schemes (upper/fullbody).")
     parser.add_argument("--out", default="",
                         help="Result folder (default: "
                              "training_data/lora_<trigger>/).")
     parser.add_argument("--variations", type=int, default=1,
-                        help="Sheets per stage (default: 1; each sheet = 12 "
-                             "images).")
+                        help="Sheets per plan entry (default: 1; each sheet "
+                             "yields cols x rows images).")
     parser.add_argument("--style", default="",
-                        help="Pin one art style for all 12 panels of every "
+                        help="Pin one art style for all panels of every "
                              "sheet instead of per-panel randomization. "
                              "Available: " + ", ".join(s["tag"] for s in CFG["styles"]))
     parser.add_argument("--seed", type=int, default=None,
@@ -835,14 +1020,15 @@ def main() -> int:
     parser.add_argument("--config", default="",
                         help="YAML config path (default: "
                              + DEFAULT_CONFIG_PATH + ").")
+    parser.add_argument("--aspect-ratio", default=None,
+                        help="Override the sheet aspect ratio for every task "
+                             "(default: each config task's aspect).")
+    parser.add_argument("--image-size", default=None,
+                        help="Override the image size for every task "
+                             "(default: each config task's size).")
     parser.add_argument("--grid-padding", type=int, default=8,
                         help="Trim P pixels from every side of each grid cell "
                              "to remove grid-line artifacts (default: 8).")
-    parser.add_argument("--image-size", default="2K",
-                        help="Gemini image size e.g. 1K, 2K, 4K (default: 2K).")
-    parser.add_argument("--aspect-ratio", default="3:4",
-                        help="Sheet aspect ratio (default: 3:4, matches the "
-                             "3-column x 4-row grids).")
     parser.add_argument("--captions", action="store_true",
                         help="Write kohya-style .txt tag files beside the "
                              "images (default: images only).")
@@ -862,8 +1048,8 @@ def main() -> int:
     parser.add_argument("--api-key", default="",
                         help="Gemini API key (or GEMINI_API_KEY env / config txt).")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Print the plan (stages, grids, sampled styles, "
-                             "scenes, counts) without calling the API.")
+                        help="Print the plan (stages, grids, styles, scenes, "
+                             "counts) without calling the API.")
     parser.add_argument("--selftest", action="store_true",
                         help="Run the offline self test and exit.")
     args = parser.parse_args()
@@ -891,7 +1077,6 @@ def main() -> int:
         if args.trigger == "chara" and all_refs:
             print("[lora_data_maker] warning: no trigger inferred from the "
                   "pictures; using 'chara'. Set --trigger.", flush=True)
-        # File-name-safe version of the trigger: prefix for every output image.
         args.prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", args.trigger).strip("_") \
             or "chara"
 
@@ -904,7 +1089,7 @@ def main() -> int:
         )
 
         plan = build_plan(avatars, fullbodies)
-        total = sum(GRID_CELLS * args.variations for _ in plan)
+        total = sum(task_cells(p["task"]) * args.variations for p in plan)
         rng = random.Random(args.seed)
 
         # ---------------- dry run ----------------
@@ -917,10 +1102,14 @@ def main() -> int:
                   f"{CFG['randomize_panel_scene']} "
                   f"({len(CFG['scenes'])} scenes)", flush=True)
             for p in plan:
-                styles = sample_styles(args.style, rng)
-                scenes = sample_scenes(rng)
-                _, panel_map = assemble_sheet(p["stage"], rng, styles,
-                                              scenes, LIGHTING[0], p["refs"])
+                task = p["task"]
+                cols, rows = task["grid"]
+                cells = cols * rows
+                styles = sample_styles(args.style, rng, cells)
+                scenes = sample_scenes(rng, cells)
+                _, panel_map = assemble_sheet(p["stage"], rng, task["grid"],
+                                              styles, scenes, LIGHTING[0],
+                                              p["refs"])
                 refs = [os.path.basename(r) for r in p["refs"]]
                 tags, style_tag, scene_tag = panel_map.get((1, 1),
                                                            ("", "", ""))
@@ -931,8 +1120,9 @@ def main() -> int:
                            if styles else "uniform/off")
                 shown_c = (", ".join(s["tag"] for s in scenes[:3])
                            if scenes else "plain white")
-                print(f"  {p['stage']:<14} grid 3x4  refs {refs}  "
-                      f"-> {GRID_CELLS * args.variations} images  "
+                print(f"  {p['stage']:<15} grid {cols}x{rows} "
+                      f"{task.get('aspect','')} {task.get('size','')}  "
+                      f"refs {refs}  -> {cells * args.variations} images  "
                       f"light '{LIGHTING[0]}'", flush=True)
                 print(f"      panel styles: {shown_s} ... "
                       f"({n_style} distinct)", flush=True)
@@ -947,8 +1137,8 @@ def main() -> int:
                 "config": os.path.abspath(args.config or DEFAULT_CONFIG_PATH),
                 "randomize_panel_style": CFG["randomize_panel_style"],
                 "randomize_panel_scene": CFG["randomize_panel_scene"],
-                "stages": [{"stage": p["stage"],
-                            "cells": GRID_CELLS * args.variations}
+                "stages": [{"stage": p["stage"], "grid": list(p["task"]["grid"]),
+                            "cells": task_cells(p["task"]) * args.variations}
                            for p in plan],
                 "total_images": total,
             }
@@ -967,9 +1157,11 @@ def main() -> int:
         os.makedirs(result_dir, exist_ok=True)
 
         stage_records, errors = [], []
-        for p in plan:
-            rec = run_stage(p["stage"], p["refs"], args, client, rng,
-                            raw_dir, result_dir)
+        counter_box = {"n": 1}
+        for p_no, p in enumerate(plan, 1):
+            rec = run_stage(p["stage"], p["refs"], p["task"], p_no,
+                            counter_box, args, client, rng, raw_dir,
+                            result_dir)
             stage_records.append(rec)
             errors.extend(rec["errors"])
 

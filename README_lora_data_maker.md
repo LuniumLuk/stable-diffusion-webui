@@ -10,13 +10,15 @@ curated and built in — the only inputs are your pictures.
   --fullbody .\tmp\body_rana.png .\tmp\outfit_b.png .\tmp\outfit_c.png
 ```
 
-| input | what it makes |
+| input | what it makes (with the default `avatar_tasks` / `outfit_tasks`) |
 |-------|---------------|
 | avatar A alone | one 3x4 face grid -> **12 different expression images** |
 | A + fullbody B | one 3x4 upper grid (12) + one 3x4 fullbody grid (12) = **24 images** |
 | A + fullbody C, A + fullbody D, ... | same per outfit picture |
 
-With 3 fullbody pictures: 12 + 3 x 24 = **84 images** in one run, 7 API calls.
+With 3 fullbody pictures: 12 + 3 x 24 = **84 images** in one run, 7 API calls
+(+1 sheet per extra `avatar_tasks`/`outfit_tasks` entry — the schemes are
+listed in the YAML config, so counts follow your config).
 
 ## Variety (no two sheets are prompted alike)
 
@@ -47,14 +49,47 @@ styles:                        # the FULL art-style list (tag + text)
 randomize_panel_scene: false   # true  -> each panel gets its own random scene
                                # false -> panels stay on the plain white sheet
 scenes:                        # the FULL background-scene list (tag + text)
-  - tag: cozy cafe interior
-    text: "background: a cozy cafe interior with wooden tables and warm tones"
+  - tag: plain white background
+    text: "background: plain solid white background, no props"
+    weight: 8                  # optional weight (default 1) - a raised weight
+                               # here keeps most panels clean white
   ...
+
+# Sheet schemes: what grids get generated, in what aspect/size.
+avatar_tasks:                  # run for the avatar picture(s)
+  - grid: [3, 4]               # cols, rows
+    aspect: "3:4"
+    size: "2K"
+  # - grid: [3, 3]             # example: also render a 3x3 face grid
+  #   aspect: "2:3"
+  #   size: "2K"
+
+outfit_tasks:                  # run for EVERY outfit fullbody picture
+  - kind: upper                # upper-body grid
+    grid: [3, 4]
+    aspect: "3:4"
+    size: "2K"
+  - kind: fullbody
+    grid: [3, 4]
+    aspect: "3:4"
+    size: "2K"
+  # - kind: fullbody           # example: extra wide 2x4 turnaround
+  #   grid: [2, 4]
+  #   aspect: "16:9"
+  #   size: "2K"
 ```
 
-- Both toggles can be on at once: every panel then carries its own art style
-  *and* its own background scene (`Panel art style: ... Background scene: ...`).
-- `--style TAG` on the command line always wins over `randomize_panel_style`.
+- **Every style and scene entry may carry a `weight`** (default 1): weighted
+  random sampling makes heavier entries appear more often across panels while
+  keeping panels distinct within a sheet. `plain white background` ships with
+  a raised weight so scene randomization does not drown your sheets in props.
+- `avatar_tasks` / `outfit_tasks` are plain lists: add entries to generate
+  additional grids (e.g. a 3x3 face grid), each with its own grid, aspect
+  ratio and image size; one sheet is generated per list entry per picture.
+- Both randomization toggles can be on at once: every panel then carries its
+  own art style *and* its own background scene.
+- `--style TAG` on the command line always wins over `randomize_panel_style`;
+  `--aspect-ratio` / `--image-size` override every task.
 - `--seed N` makes a run reproducible; PyYAML is preferred, but a built-in
   YAML-subset loader keeps the file format working if it is not installed.
 
@@ -111,13 +146,13 @@ Raw sheets/tiles/manifest stay in `outputs/lora_data_maker/<timestamp>/`.
 | `--avatar A [A2 ...]` | required | avatar picture(s) = identity refs |
 | `--fullbody B C D ...` | none | outfit pictures; each adds upper + fullbody sets |
 | `--out DIR` | `training_data/lora_<trigger>/` | result folder |
-| `--variations N` | 1 | sheets per stage (each sheet = 12 images) |
-| `--style TAG` | per config | pin one art style for all 12 panels (see YAML config) |
+| `--variations N` | 1 | sheets per plan entry (each sheet = cols x rows images) |
+| `--style TAG` | per config | pin one art style for every panel (see YAML config) |
 | `--config PATH` | `config_states/lora_data_maker.yaml` | YAML config file |
-| `--seed N` | random | reproducible style/lighting/panel sampling |
+| `--seed N` | random | reproducible style/scene/panel sampling |
 | `--grid-padding P` | 8 | trim P px from each cell border |
-| `--image-size 1K\|2K\|4K` | 2K | Gemini output size |
-| `--aspect-ratio W:H` | 3:4 | matches the 3-column x 4-row sheets |
+| `--image-size 1K\|2K\|4K` | per task | override image size for every scheme |
+| `--aspect-ratio W:H` | per task | override aspect ratio for every scheme |
 | `--captions` | off | write `.txt` tag files beside images |
 | `--trigger WORD` | inferred | folder name + captions |
 | `--dry-run` | - | print plan only, no API calls |
