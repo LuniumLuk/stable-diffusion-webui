@@ -117,10 +117,10 @@ COMPOSER_HTML = """
 }
 .cmp-toggle-btn.active::before { content: "●  "; color: #22d3ee; }
 
-/* ── Tool grid (5 tools) ────────────────────── */
+/* ── Tool grid (6 tools) ────────────────────── */
 .cmp-tool-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 4px;
 }
 .cmp-tool-btn {
@@ -192,6 +192,56 @@ COMPOSER_HTML = """
   flex-shrink: 0;
 }
 #composer_replace_hue_threshold, #composer_replace_sat_threshold, #composer_replace_val_threshold {
+  flex: 1;
+  min-width: 0;
+}
+#composer_layer_hsv_hue, #composer_layer_hsv_sat, #composer_layer_hsv_val {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── HSV replace mode toggle ────────────────── */
+.cmp-hsv-mode-group {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  flex: 1;
+}
+.cmp-hsv-mode-group--4 { grid-template-columns: repeat(4, 1fr); }
+.cmp-hsv-mode-btn {
+  padding: 3px 0;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--block-border-color, #334155);
+  border-radius: 5px;
+  background: var(--block-background-fill, #1e293b);
+  color: #64748b;
+  cursor: pointer;
+  text-align: center;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.cmp-hsv-mode-btn:hover { background: #1e3a5f; border-color: #38bdf8; color: #cbd5e1; }
+.cmp-hsv-mode-btn.active {
+  border-color: #f59e0b;
+  background: rgba(245,158,11,.12);
+  color: #fcd34d;
+  box-shadow: 0 0 0 1px #f59e0b33 inset;
+}
+#composer_hsv_source_color, #composer_hsv_to_color {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #4b5563;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+#composer_hsv_threshold {
+  flex: 1;
+  min-width: 0;
+}
+#composer_hsv_s_filter, #composer_hsv_v_filter {
   flex: 1;
   min-width: 0;
 }
@@ -368,6 +418,30 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
           </button>
         </div>
 
+        <div class="cmp-section-label">HSV Adjust</div>
+        <div class="cmp-paint-row">
+          <span class="cmp-flabel">Hue</span>
+          <input id="composer_layer_hsv_hue" type="range" min="-180" max="180" step="1" value="0"
+                 title="Hue shift for the selected layer (-180..+180 degrees)" />
+          <span id="composer_layer_hsv_hue_value" class="cmp-fval">0&deg;</span>
+        </div>
+        <div class="cmp-paint-row">
+          <span class="cmp-flabel">Sat</span>
+          <input id="composer_layer_hsv_sat" type="range" min="-100" max="100" step="1" value="0"
+                 title="Saturation shift for the selected layer (-100..+100%)" />
+          <span id="composer_layer_hsv_sat_value" class="cmp-fval">0%</span>
+        </div>
+        <div class="cmp-paint-row">
+          <span class="cmp-flabel">Val</span>
+          <input id="composer_layer_hsv_val" type="range" min="-100" max="100" step="1" value="0"
+                 title="Value (brightness) shift for the selected layer (-100..+100%)" />
+          <span id="composer_layer_hsv_val_value" class="cmp-fval">0%</span>
+        </div>
+        <button id="composer_layer_hsv_apply_btn" type="button" class="cmp-full-btn"
+                title="Apply the HSV shifts to the selected layer">
+          &#127912; Apply HSV Adjust
+        </button>
+
         <div class="cmp-section-label">Edit Mode</div>
         <div class="cmp-toggle-group">
           <button id="composer_lock_mode_btn" type="button" class="cmp-toggle-btn"
@@ -392,6 +466,10 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
           <button id="composer_tool_brush_btn"  type="button" class="cmp-tool-btn"
                   title="Paint on a full-canvas overlay layer">
             <span class="cmp-tool-icon">&#9997;</span>Brush
+          </button>
+          <button id="composer_tool_eraser_btn" type="button" class="cmp-tool-btn"
+                  title="Erase pixels from the selected layer (works on any editable layer)">
+            <span class="cmp-tool-icon">&#129473;</span>Eraser
           </button>
           <button id="composer_tool_line_btn"   type="button" class="cmp-tool-btn"
                   title="Draw a straight line on the overlay layer">
@@ -465,6 +543,87 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
           <button id="composer_replace_apply_btn" type="button" class="cmp-full-btn"
                   title="Create a new layer with every pixel within the threshold recolored to the replacement color">
             &#9998; Apply Color Replace
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─ HSV REPLACE ────────────────────────── -->
+    <div class="composer-box">
+      <div class="cmp-box-header">HSV Replace</div>
+      <div class="cmp-box-body">
+        <div class="cmp-paint-panel">
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Source</span>
+            <input id="composer_hsv_source_color" type="color" value="#ff3366"
+                   title="Source color — auto-synced with the picked color" />
+            <span class="cmp-flabel" style="margin-left:6px;">To</span>
+            <input id="composer_hsv_to_color" type="color" value="#00ff88"
+                   title="Target color whose active HSV channel is applied to matched pixels" />
+          </div>
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Channel</span>
+            <div class="cmp-hsv-mode-group">
+              <button id="composer_hsv_mode_h_btn" type="button" class="cmp-hsv-mode-btn active"
+                      title="Match pixels by hue. Gray pixels (S=0) have no hue and never match.">H</button>
+              <button id="composer_hsv_mode_s_btn" type="button" class="cmp-hsv-mode-btn"
+                      title="Match pixels by saturation">S</button>
+              <button id="composer_hsv_mode_v_btn" type="button" class="cmp-hsv-mode-btn"
+                      title="Match pixels by value">V</button>
+            </div>
+          </div>
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Apply</span>
+            <div class="cmp-hsv-mode-group cmp-hsv-mode-group--4">
+              <button id="composer_hsv_apply_replace_btn" type="button" class="cmp-hsv-mode-btn active"
+                      title="Hard replace: pixels within the single threshold take the target channel">Replace</button>
+              <button id="composer_hsv_apply_lerp_btn" type="button" class="cmp-hsv-mode-btn"
+                      title="Lerp: below Min hard-replace, between Min and Max blend toward target, beyond Max ignored">Lerp</button>
+              <button id="composer_hsv_apply_alpha_btn" type="button" class="cmp-hsv-mode-btn"
+                      title="Alpha: hard-replace below Max, layer alpha fades from opaque (below Min) to transparent (at Max)">Alpha</button>
+              <button id="composer_hsv_apply_shift_btn" type="button" class="cmp-hsv-mode-btn"
+                      title="Shift: match source pixels by the H/S/V range, then shift their color statistics to match the painted dst selection">Shift</button>
+            </div>
+          </div>
+          <div class="cmp-toggle-group" id="composer_hsv_select_row" style="display:none;">
+            <button id="composer_hsv_select_btn" type="button" class="cmp-toggle-btn"
+                    title="When ON, the brush paints a transient pink selection marking dst pixels (the color stats to match)">
+              Select Dst: OFF
+            </button>
+          </div>
+          <div class="cmp-paint-row" id="composer_hsv_thresh_row">
+            <span class="cmp-flabel" id="composer_hsv_threshold_label">Hue</span>
+            <input id="composer_hsv_threshold" type="range" min="0" max="180" step="1" value="20"
+                   title="Replace mode tolerance around the source color's active channel" />
+            <span id="composer_hsv_threshold_value" class="cmp-fval">20&deg;</span>
+          </div>
+          <div class="cmp-paint-row" id="composer_hsv_min_row" style="display:none;">
+            <span class="cmp-flabel">Min</span>
+            <input id="composer_hsv_min_threshold" type="range" min="0" max="180" step="1" value="10"
+                   title="Lerp/Alpha lower bound: pixels closer than Min are fully replaced" />
+            <span id="composer_hsv_min_threshold_value" class="cmp-fval">10&deg;</span>
+          </div>
+          <div class="cmp-paint-row" id="composer_hsv_max_row" style="display:none;">
+            <span class="cmp-flabel">Max</span>
+            <input id="composer_hsv_max_threshold" type="range" min="0" max="180" step="1" value="40"
+                   title="Lerp/Alpha upper bound: pixels farther than Max are ignored" />
+            <span id="composer_hsv_max_threshold_value" class="cmp-fval">40&deg;</span>
+          </div>
+          <div class="cmp-paint-row" id="composer_hsv_s_filter_row" style="display:none;">
+            <span class="cmp-flabel">S ±</span>
+            <input id="composer_hsv_s_filter" type="range" min="0" max="100" step="1" value="100"
+                   title="H mode filter: only match pixels whose saturation is within this tolerance of the source saturation (100 = any)" />
+            <span id="composer_hsv_s_filter_value" class="cmp-fval">100%</span>
+          </div>
+          <div class="cmp-paint-row" id="composer_hsv_v_filter_row" style="display:none;">
+            <span class="cmp-flabel">V ±</span>
+            <input id="composer_hsv_v_filter" type="range" min="0" max="100" step="1" value="100"
+                   title="H mode filter: only match pixels whose value is within this tolerance of the source value (100 = any)" />
+            <span id="composer_hsv_v_filter_value" class="cmp-fval">100%</span>
+          </div>
+          <button id="composer_hsv_apply_btn" type="button" class="cmp-full-btn"
+                  title="Create a new layer using the active channel and apply mode">
+            &#128260; Apply HSV Replace
           </button>
         </div>
       </div>
