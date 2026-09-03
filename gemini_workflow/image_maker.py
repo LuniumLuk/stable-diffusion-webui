@@ -1,41 +1,47 @@
 """
-gemini_workflow/image_maker.py — direct image generation with Google Gemini.
+gemini_workflow/image_maker.py -- merged LoRA data-preparation pipeline.
 
-Unlike comic_maker.py (root prompt -> txt2txt -> N page prompts -> N images),
-this workflow renders images DIRECTLY from a prompt file: no text-model
-expansion step. The prompt file is used verbatim as the image prompt.
+One python script + one bat entry (image_maker.bat) that covers the whole
+LoRA dataset workflow on the Gemini "Nano Banana" image models:
 
-Pipeline:
-  1. Load the image prompt from a .txt file (--prompt-file).
-  2. Optionally attach reference images (--ref-images) for editing /
-     style transfer / composition.
-  3. Generate --variations images (default 1) from the SAME prompt +
-     references. Every call is retried up to --retries times (default 3)
-     on errors such as safety blocks ("cannot generate unsafe image"),
-     rate limits, etc. Each variation gets its own retry budget.
-  4. Optionally split each generated image into a grid with --grid M N
-     (M columns x N rows) and trim --grid-padding P pixels from every
-     side of each cell to reduce grid-line border artifacts.
+  1. PLAN      face / upper / fullbody character sheets (one mode, or all)
+  2. PROMPT    curated sheet prompts with a machine-readable GRID header and
+               per-panel R{r}C{c} caption tags (tmp/lora_*.txt)
+  3. GENERATE  one sheet image per prompt per variation (reference images
+               attached for character / outfit identity)
+  4. SPLIT     slice each sheet into its grid cells (trim --grid-padding px
+               from every cell border to remove grid-line artifacts)
+  5. CAPTION   kohya-style .txt tag file per training image
+  6. COLLECT   copy every generated + separated image into a result folder
+               training_data/lora_<trigger>[_<outfit>]/ + manifest.json
 
-Usage:
-  <workflow-python> image_maker.py --prompt-file prompt.txt \
-      [--ref-images refs/char.png refs/style.png] \
-      [--image-model gemini-3.1-flash-image] \
-      [--aspect-ratio 16:9] [--image-size 1K] \
-      [--grid 4 3] [--grid-padding 16] \
-      [--output-dir outputs/image_maker] [--retries 3] [--variations 2] \
-      [--api-key KEY]
+Legacy single-run CLI stays fully supported, e.g.:
+  image_maker.bat --prompt-file .\\tmp\\lora_face.txt
+      --ref-images .\\tmp\\images.jpg .\\tmp\\img_chara_rana.png
+      --variations 1 --grid 3 2 --grid-padding 8
+      --image-size 2K --aspect-ratio 1:1
+
+Merged one-command dataset run (20 training images for one outfit):
+  image_maker.bat --mode all --avatar .\\tmp\\img_chara_rana.png
+      --ref-images .\\tmp\\body_rana.png
+      --outfit casual --outfit-desc "blue sailor uniform, white thighhighs"
+
+Grids: splitting is opt-in. In single mode each variation is saved as ONE
+full image unless --grid COLS ROWS is passed explicitly (the prompt text is
+never auto-interpreted as a grid). In --mode all, each stage prompt's GRID
+header decides its sheet grid.
 
 API key: --api-key > GEMINI_API_KEY env > config_states/gemini_nano_banana.txt.
-Output lands in outputs/image_maker/YYYY-MM-DD/HHMMSS/ (unique per run).
-Result is printed to stdout as a JSON object; exit code 0 if every
-variation rendered, 1 otherwise.
+Result is printed to stdout as a JSON object; exit code 0 when every
+requested image rendered and collected, 1 otherwise.
 """
 import argparse
 import base64
 import datetime
 import json
 import os
+import re
+import shutil
 import sys
 import time
 
@@ -48,7 +54,77 @@ from models_config import load_model_config  # noqa: E402
 
 _ROOT_DIR = os.path.dirname(_WORKFLOW_DIR)
 DEFAULT_OUTPUT_DIR = os.path.join(_ROOT_DIR, "outputs", "image_maker")
+DEFAULT_TRAINING_DIR = os.path.join(_ROOT_DIR, "training_data")
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+STAGES = ("face", "upper", "fullbody")
+
+# Per-stage defaults used when the prompt file / CLI does not pin a value.
+STAGE_DEFAULTS = {
+    "face":     {"grid": (3, 2), "aspect": "1:1"},
+    "upper":    {"grid": (2, 3), "aspect": "3:2"},
+    "fullbody": {"grid": (2, 4), "aspect": "16:9"},
+}
+
+# Fallback caption tag when a panel line carries no explicit tags.
+STAGE_TAGS = {"face": "portrait", "upper": "upper body", "fullbody": "full body"}
+
+# Curated sheet prompts used when tmp/lora_<mode>.txt is missing.
+EMBEDDED_PROMPTS = {
+    "face": """GRID: 3x2
+A character face reference sheet drawn as a clean 3-column by 2-row matrix of 6 separate square panels on a pure white background, with wide uniform white gutters between every panel.
+
+Character: the exact character from the reference images, with identical face, hair, eyes and colors in all 6 panels.
+
+Layout & Framing (row-major order, left to right, top to bottom):
+* R1C1: portrait, front view, neutral expression :: Shoulder-up portrait, direct front view, calm neutral expression.
+* R1C2: portrait, front view, gentle smile :: Shoulder-up portrait, direct front view, soft gentle smile.
+* R1C3: portrait, front view, joyful laugh :: Shoulder-up portrait, direct front view, open joyful laugh.
+* R2C1: portrait, three-quarter view, serious :: Shoulder-up portrait, three-quarter angle, serious focused expression.
+* R2C2: portrait, three-quarter view, determined :: Shoulder-up portrait, three-quarter angle, determined fierce expression.
+* R2C3: portrait, tilted head, surprised :: Shoulder-up portrait, head tilted, surprised wide-eyed expression.
+
+Art Style & Constraints:
+* Style: high-resolution anime headshot sheet, soft cel shading, clean linework.
+* Geometry: every panel the same square size, head and shoulders centered in each panel, no panel borders or frames, only white space separates panels.
+* Strict Negative Constraints: NO text, NO words, NO letters, NO numbers, NO labels, NO watermark, NO speech bubbles, NO back views. Plain solid white background only.""",
+    "upper": """GRID: 2x3
+A character upper-body reference sheet drawn as a clean 2-row by 3-column matrix of 6 separate panels on a pure white background, with wide uniform white gutters between every panel.
+
+Character & outfit: the exact character and the exact outfit from the reference images. {outfit}
+
+Layout & Framing (row-major order, left to right, top to bottom):
+* R1C1: upper body, front view, arms at sides :: Medium shot from head to waist, direct front view, arms relaxed at sides.
+* R1C2: upper body, three-quarter view, hand on hip :: Medium shot from head to waist, three-quarter angle, one hand on hip.
+* R1C3: upper body, side profile :: Medium shot from head to waist, side profile view, arms relaxed.
+* R2C1: upper body, front view, arms crossed :: Medium shot from head to waist, front view, arms crossed.
+* R2C2: upper body, three-quarter view, waving :: Medium shot from head to waist, three-quarter angle, one hand raised waving.
+* R2C3: upper body, back view, looking back :: Medium shot from head to waist, back view, head turned looking back over shoulder.
+
+Art Style & Constraints:
+* Style: official anime production art, sharp linework, high detail on upper clothing, collars and shoulders, identical character and outfit in all 6 panels.
+* Geometry: equal panel sizes, consistent head-to-waist scale, no panel borders or frames, only white space separates panels.
+* Strict Negative Constraints: NO text, NO words, NO letters, NO numbers, NO watermark, NO logos. Pure solid white background only.""",
+    "fullbody": """GRID: 2x4
+A character full-body turnaround reference sheet drawn as a clean 2-row by 4-column matrix of 8 separate panels on a pure white background, with wide uniform white gutters between every panel.
+
+Character & outfit: the exact character and the exact outfit from the reference images. {outfit}
+
+Layout & Framing (row-major order, left to right, top to bottom):
+* R1C1: full body, standing, front view, neutral :: Full-body direct front view, standing straight, arms relaxed, whole body visible head to toe with margin.
+* R1C2: full body, standing, three-quarter view :: Full-body three-quarter front view, turned 45 degrees to the right.
+* R1C3: full body, standing, side profile :: Full-body side profile view, facing right, whole body visible with margin.
+* R1C4: full body, standing, back view :: Full-body back view, showing the back of the outfit.
+* R2C1: full body, standing, three-quarter left :: Full-body three-quarter front view, turned 45 degrees to the left.
+* R2C2: full body, walking, side view :: Full-body walking pose, side view, one leg forward.
+* R2C3: full body, standing, arms raised :: Full-body front view, both arms raised above the head.
+* R2C4: full body, standing, looking back :: Full-body three-quarter back view, head turned looking back over the shoulder.
+
+Art Style & Constraints:
+* Style: official anime concept art, high-resolution character design sheet, clean line art, soft cel shading, consistent outfit colors and details in all 8 panels.
+* Geometry: every panel the same size, full body visible head to toe with margin in each panel, no panel borders or frames, only white space separates panels.
+* Strict Negative Constraints: NO text, NO words, NO letters, NO numbers, NO height grid lines, NO color swatches, NO watermark. Pure solid white background only.""",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +162,7 @@ def _resolve_api_key(args) -> str:
 
 
 def ref_images_from_args(ref_images):
-    """Return the --ref-images list, validated.
-
-    Raises RuntimeError if any path is missing or not a supported image.
-    """
+    """Validate the --ref-images list. Raises if a path is missing/unsupported."""
     paths = []
     for p in ref_images or []:
         if not os.path.isfile(p):
@@ -101,12 +174,62 @@ def ref_images_from_args(ref_images):
 
 
 # ---------------------------------------------------------------------------
+# Prompt refinement helpers (grid detection, panels, placeholders)
+# ---------------------------------------------------------------------------
+def detect_grid(prompt_text: str):
+    """Read the intended sheet grid from the prompt text.
+
+    Prefers an explicit "GRID: CxR" header; falls back to legacy prose
+    like "3x3 matrix ... 3 rows and 3 columns". Returns (cols, rows) or None.
+    """
+    m = re.search(r"GRID:\s*(\d+)\s*[xX]\s*(\d+)", prompt_text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r"(\d+)\s*[xX]\s*(\d+)\s*matrix", prompt_text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r"(\d+)\s*columns?\D{0,60}?(\d+)\s*rows", prompt_text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def parse_panels(prompt_text: str):
+    """Extract per-panel caption tags from "R{r}C{c}: tags :: description" lines.
+
+    Returns {(row, col): "tag, tag, ..."} (1-based). Lines without tags are
+    skipped; the pipeline falls back to the stage-level tag for those tiles.
+    """
+    panels = {}
+    for raw in prompt_text.splitlines():
+        m = re.match(r"^\s*\*?\s*R(\d+)C(\d+)\s*:\s*(.+)$", raw.strip())
+        if not m:
+            continue
+        r, c = int(m.group(1)), int(m.group(2))
+        tags = m.group(3).split("::")[0].strip().strip(",").strip()
+        if tags:
+            panels[(r, c)] = tags
+    return panels
+
+
+def substitute_placeholders(prompt_text: str, args) -> str:
+    """Refine the prompt text: fill {outfit} from --outfit-desc (or the
+    reference-image fallback) and {trigger} from the trigger word."""
+    if args.outfit_desc:
+        outfit = (f"The outfit is: {args.outfit_desc}. "
+                  f"Draw this exact outfit in every panel.")
+    else:
+        outfit = ("Wear the exact outfit shown in the reference images, "
+                  "identical in every panel.")
+    text = prompt_text.replace("{outfit}", outfit)
+    text = text.replace("{trigger}", args.trigger)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Retry
 # ---------------------------------------------------------------------------
 def _retry_delay(exc, attempt: int) -> int:
-    """Backoff in seconds. HTTP 400 errors whose message mentions
-    "Image generation blocked" retry immediately (0s): that rejection is
-    usually transient and not caused by load, so sleeping only wastes time."""
     try:
         if (int(getattr(exc, "code", None)) == 400
                 and "image generation blocked" in str(exc).lower()):
@@ -117,12 +240,7 @@ def _retry_delay(exc, attempt: int) -> int:
 
 
 def with_retry(fn, what: str, retries: int = 3):
-    """Call fn(); on any exception retry up to `retries` times with backoff.
-
-    HTTP 400 errors mentioning "Image generation blocked" are retried
-    immediately (no backoff).
-    """
-    for attempt in range(retries + 1):  # 1 initial attempt + `retries` retries
+    for attempt in range(retries + 1):
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 - retry on any API error
@@ -212,132 +330,515 @@ def split_grid(path: str, cols: int, rows: int, padding: int,
 
 
 # ---------------------------------------------------------------------------
+# Captions / naming / refs
+# ---------------------------------------------------------------------------
+def make_caption(args, stage: str, panel_tags: str) -> str:
+    parts = []
+    if args.quality_tags:
+        parts.append(args.quality_tags.strip())
+    parts.append(args.trigger)
+    parts.append("1girl")
+    parts.append("solo")
+    if panel_tags:
+        parts.append(panel_tags)
+    if args.outfit_desc and stage in ("upper", "fullbody"):
+        parts.append(args.outfit_desc.strip())
+    return ", ".join(parts)
+
+
+def infer_trigger(ref_paths) -> str:
+    for p in ref_paths or []:
+        b = os.path.basename(p)
+        m = (re.search(r"(?:img_)?chara[_\-]?([A-Za-z]+)", b)
+             or re.search(r"body[_\-]?([A-Za-z]+)", b))
+        if m:
+            return m.group(1).lower()
+    return "chara"
+
+
+def stage_refs(stage: str, args):
+    """Reference images attached to one stage's generation calls.
+
+    face: avatar image(s) (falls back to --ref-images).
+    upper/fullbody: avatar (identity) + outfit fullbody pictures.
+    """
+    avatar = list(args.avatar or [])
+    refs = list(args.ref_images or [])
+    if stage == "face":
+        return avatar or refs
+    if avatar:
+        return avatar + refs
+    return refs
+
+
+def training_dir_for(args) -> str:
+    name = f"lora_{args.trigger}"
+    if args.outfit:
+        name += "_" + re.sub(r"[^A-Za-z0-9_-]+", "_", args.outfit)
+    return os.path.join(args.training_dir or DEFAULT_TRAINING_DIR, name)
+
+
+# ---------------------------------------------------------------------------
+# Stage execution
+# ---------------------------------------------------------------------------
+def run_stage(stage: str, prompt_text: str, grid, refs, args, client,
+              out_dir: str, training_dir):
+    """Generate the stage's variations and (optionally) split them.
+
+    grid = (cols, rows): every generated image is split into that grid and
+    each cell becomes one collected training image.
+    grid = None: every variation stays ONE full image (no split at all).
+    """
+    if grid:
+        cols, rows = grid
+        cells = cols * rows
+    else:
+        cols = rows = 0
+        cells = 1
+    panels = parse_panels(prompt_text)
+    sheet_name = "image" if stage == "sheet" else stage
+    out_name = "image" if stage == "sheet" else stage
+
+    record = {
+        "stage": stage, "grid": list(grid) if grid else None,
+        "variations": args.variations,
+        "sheets": [], "images": [], "errors": [],
+    }
+    counter = 1
+    for v in range(1, args.variations + 1):
+        sheet_path = os.path.join(out_dir, f"{sheet_name}_v{v:02d}.png")
+        print(f"[image_maker] {stage} variation {v}/{args.variations}: "
+              f"generating ({len(refs)} reference images) ...", flush=True)
+        try:
+            with_retry(
+                lambda: generate_image(
+                    client, args.image_model, prompt_text, refs, sheet_path,
+                    args.aspect_ratio or STAGE_DEFAULTS.get(stage, {}).get("aspect", ""),
+                    args.image_size,
+                ),
+                f"{stage} variation {v}", args.retries,
+            )
+            record["sheets"].append(os.path.basename(sheet_path))
+            print(f"[image_maker] {stage} variation {v} -> {sheet_path}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - continue next variation
+            record["errors"].append((v, str(exc)))
+            print(f"[image_maker] {stage} variation {v} FAILED after retries: {exc}",
+                  flush=True)
+            continue
+
+        if grid is None:
+            # One full image per variation - no grid split.
+            final_name = f"{out_name}_{counter:03d}.png"
+            caption = make_caption(args, stage, STAGE_TAGS.get(stage, ""))
+            if training_dir:
+                shutil.copy2(sheet_path, os.path.join(training_dir, final_name))
+                if args.caption_style == "tags":
+                    with open(os.path.join(training_dir, final_name[:-4] + ".txt"),
+                              "w", encoding="utf-8") as f:
+                        f.write(caption + "\n")
+            record["images"].append({
+                "file": os.path.join(os.path.basename(training_dir), final_name)
+                        if training_dir else os.path.basename(sheet_path),
+                "caption": caption if args.caption_style == "tags" else "",
+                "variation": v,
+                "panel": "full",
+                "sheet": os.path.basename(sheet_path),
+            })
+            counter += 1
+            continue
+
+        tile_dir = os.path.join(out_dir, f"tiles_{out_name}")
+        os.makedirs(tile_dir, exist_ok=True)
+        tiles = split_grid(sheet_path, cols, rows, args.grid_padding,
+                           tile_dir, v)
+        print(f"[image_maker] {stage} variation {v} split into {cols}x{rows} "
+              f"grid -> {len(tiles)} tiles (padding {args.grid_padding}px)", flush=True)
+
+        for i, tile_path in enumerate(tiles):
+            r, c = divmod(i, cols)
+            panel_tags = panels.get((r + 1, c + 1), STAGE_TAGS.get(stage, ""))
+            caption = make_caption(args, stage, panel_tags)
+            final_name = f"{out_name}_{counter:03d}.png"
+
+            if training_dir:
+                dest_img = os.path.join(training_dir, final_name)
+                shutil.copy2(tile_path, dest_img)
+                if args.caption_style == "tags":
+                    with open(os.path.join(training_dir, final_name[:-4] + ".txt"),
+                              "w", encoding="utf-8") as f:
+                        f.write(caption + "\n")
+            record["images"].append({
+                "file": os.path.join(os.path.basename(training_dir), final_name)
+                        if training_dir else os.path.basename(tile_path),
+                "caption": caption if args.caption_style == "tags" else "",
+                "variation": v,
+                "panel": f"R{r + 1}C{c + 1}",
+                "sheet": os.path.basename(sheet_path),
+            })
+            counter += 1
+
+    # Optional: keep the source sheets and refs inside the dataset folder.
+    if training_dir and record["sheets"]:
+        sheets_dir = os.path.join(training_dir, "sheets")
+        os.makedirs(sheets_dir, exist_ok=True)
+        for name in record["sheets"]:
+            shutil.copy2(os.path.join(out_dir, name), os.path.join(sheets_dir, name))
+        if args.include_refs and refs:
+            refs_dir = os.path.join(training_dir, "refs")
+            os.makedirs(refs_dir, exist_ok=True)
+            for k, p in enumerate(refs, 1):
+                tag = "portrait" if stage == "face" else "full body"
+                base = f"ref_{k:02d}"
+                shutil.copy2(p, os.path.join(refs_dir, base + os.path.splitext(p)[1]))
+                if args.caption_style == "tags":
+                    cap = make_caption(args, stage, tag)
+                    with open(os.path.join(refs_dir, base + ".txt"), "w",
+                              encoding="utf-8") as f:
+                        f.write(cap + "\n")
+    return record
+
+
+# ---------------------------------------------------------------------------
+# Self test (no API, no key) — proves the split/caption machinery works
+# ---------------------------------------------------------------------------
+def selftest() -> int:
+    import tempfile
+    from PIL import Image, ImageDraw
+
+    ok = True
+    work = tempfile.mkdtemp(prefix="image_maker_selftest_")
+    try:
+        # 1. Synthetic 3x2 grid sheet with 8px white gutters.
+        cols, rows, pad = 3, 2, 8
+        cw, ch = 100, 100
+        w = cols * cw + (cols + 1) * pad
+        h = rows * ch + (rows + 1) * pad
+        img = Image.new("RGB", (w, h), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        for i in range(cols * rows):
+            r, c = divmod(i, cols)
+            x = pad + c * (cw + pad)
+            y = pad + r * (ch + pad)
+            d.rectangle([x, y, x + cw - 1, y + ch - 1],
+                        fill=((40 * i) % 256, (80 * i) % 256, (160 * i) % 256))
+        sheet = os.path.join(work, "test_sheet.png")
+        img.save(sheet)
+
+        tiles = split_grid(sheet, cols, rows, 0, work, 0)
+        assert len(tiles) == 6, f"expected 6 tiles, got {len(tiles)}"
+        exp_w, exp_h = w // cols, h // rows
+        for t in tiles:
+            with Image.open(t) as ti:
+                tw, th = ti.size
+                assert tw in (exp_w, exp_w + 1) and th in (exp_h, exp_h + 1), \
+                    f"bad tile size {ti.size}"
+                assert ti.getbbox() is not None, "tile is empty"
+        print(f"[selftest] split: 3x2 sheet -> {len(tiles)} tiles "
+              f"~{exp_w}x{exp_h} OK")
+
+        # 2. Padding trim (first tile keeps the top-left corner).
+        tiles2 = split_grid(sheet, cols, rows, 2, work, 0)
+        with Image.open(tiles2[0]) as ti:
+            assert ti.size == (exp_w - 4, exp_h - 4), \
+                f"bad trimmed size {ti.size}"
+        print(f"[selftest] padding trim: 2px/side -> "
+              f"{exp_w - 4}x{exp_h - 4} tile OK")
+
+        # 3. Grid detection + panel parsing on the embedded prompts.
+        for stage, expected in (("face", (3, 2)), ("upper", (2, 3)),
+                                ("fullbody", (2, 4))):
+            text = EMBEDDED_PROMPTS[stage]
+            grid = detect_grid(text)
+            assert grid == expected, f"{stage}: detect_grid -> {grid}, want {expected}"
+            panels = parse_panels(text)
+            assert len(panels) == expected[0] * expected[1], \
+                f"{stage}: {len(panels)} panels, want {expected[0] * expected[1]}"
+            print(f"[selftest] {stage}: GRID {grid[0]}x{grid[1]}, "
+                  f"{len(panels)} captioned panels OK")
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        print(f"[selftest] FAILED: {exc}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    print("[selftest] " + ("ALL OK" if ok else "FAILED"))
+    return 0 if ok else 1
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate images directly from a prompt file with Google Gemini."
+        description="Merged LoRA data-prep pipeline: plan -> generate character "
+                    "sheets -> split grid -> caption -> collect into "
+                    "training_data/lora_<name>/."
     )
-    parser.add_argument("--prompt-file", required=True,
-                        help=".txt file containing the image prompt (used verbatim).")
-    parser.add_argument("--ref-images", nargs="+", default=[],
-                        help="Reference image files attached to the prompt "
-                             "(editing / style transfer / composition).")
-    _cfg = load_model_config()
-    parser.add_argument("--image-model", default=_cfg["image_model"],
-                        help="Nano Banana image model used to render the image.")
+    parser.add_argument("--mode", choices=list(STAGES) + ["all"], default=None,
+                        help="face/upper/fullbody single stage, or 'all' for the "
+                             "merged ~20-image dataset run (default: infer from "
+                             "--prompt-file name; single mode).")
+    parser.add_argument("--prompt-file", default="",
+                        help=".txt sheet prompt (single mode; used verbatim).")
+    parser.add_argument("--face-prompt-file", default="",
+                        help="all-mode override for the face sheet prompt.")
+    parser.add_argument("--upper-prompt-file", default="",
+                        help="all-mode override for the upper-body sheet prompt.")
+    parser.add_argument("--fullbody-prompt-file", default="",
+                        help="all-mode override for the fullbody sheet prompt.")
+    parser.add_argument("--ref-images", nargs="*", default=None,
+                        help="Reference images attached to the prompt: the "
+                             "fullbody outfit picture(s). For face mode these "
+                             "are used as the face/avatar references.")
+    parser.add_argument("--avatar", action="append", default=None,
+                        help="Avatar/portrait picture for character identity "
+                             "(repeatable). In all mode it is attached to every "
+                             "stage; face stage uses it alone.")
+    parser.add_argument("--variations", type=int, default=1,
+                        help="Sheets per stage (default: 1; each sheet yields "
+                             "cols x rows training images).")
+    parser.add_argument("--grid", nargs=2, type=int, metavar=("COLS", "ROWS"),
+                        default=None,
+                        help="Split every generated image into a COLS x ROWS "
+                             "grid of tiles (single mode only). When omitted, "
+                             "each variation is saved as ONE full image - no "
+                             "auto grid detection.")
+    parser.add_argument("--grid-padding", type=int, default=8,
+                        help="Trim P pixels from every side of each grid cell to "
+                             "remove grid-line artifacts (default: 8).")
+    parser.add_argument("--image-size", default="2K",
+                        help="Gemini image size e.g. 1K, 2K, 4K (default: 2K).")
     parser.add_argument("--aspect-ratio", default="",
-                        help="Output aspect ratio e.g. 16:9, 3:4 (omit for model default).")
-    parser.add_argument("--image-size", default="",
-                        help="e.g. 1K, 2K (omit for model default).")
+                        help="Output aspect ratio e.g. 1:1, 3:2, 16:9 (default: "
+                             "per stage).")
+    parser.add_argument("--outfit", default="",
+                        help="Outfit name; the result folder becomes "
+                             "training_data/lora_<trigger>_<outfit>/.")
+    parser.add_argument("--outfit-desc", default="",
+                        help="Tag-style outfit description injected into "
+                             "upper/fullbody prompts ({outfit}) and captions, "
+                             "e.g. \"blue sailor uniform, white thighhighs\".")
+    parser.add_argument("--trigger", default="",
+                        help="LoRA trigger word for captions (default: inferred "
+                             "from img_chara_<name>/body_<name> ref filenames, "
+                             "else 'chara').")
+    parser.add_argument("--quality-tags", default="",
+                        help="Extra caption tags prepended to every caption, "
+                             "e.g. \"masterpiece, best quality\" (default: none).")
+    parser.add_argument("--caption-style", choices=["tags", "none"], default="tags",
+                        help="Write kohya-style .txt tag files per image "
+                             "(default: tags).")
+    parser.add_argument("--include-refs", action="store_true",
+                        help="Copy the avatar/outfit reference images into the "
+                             "dataset folder (refs/).")
+    parser.add_argument("--training-dir", default="",
+                        help="Base result folder (default: training_data/).")
+    parser.add_argument("--no-collect", action="store_true",
+                        help="Skip the collect step; keep raw outputs only.")
+    parser.add_argument("--image-model", default=load_model_config()["image_model"],
+                        help="Nano Banana image model used to render the sheets.")
     parser.add_argument("--output-dir", default="",
-                        help="Output directory (default: outputs/image_maker/YYYY-MM-DD).")
+                        help="Raw output directory (default: "
+                             "outputs/image_maker/YYYY-MM-DD/HHMMSS/).")
     parser.add_argument("--retries", type=int, default=3,
                         help="Max retries per image on error (default: 3).")
-    parser.add_argument("--variations", type=int, default=1,
-                        help="Number of images to generate (default: 1). "
-                             "Each variation uses the same prompt + references and "
-                             "gets its own retry budget.")
-    parser.add_argument("--grid", nargs=2, type=int, metavar=("M", "N"),
-                        default=None,
-                        help="Split each generated image into a grid: M columns "
-                             "x N rows. Tiles are saved as "
-                             "image_vNN_cCC_rRR.png beside the full image.")
-    parser.add_argument("--grid-padding", type=int, default=0,
-                        help="Trim P pixels from every side of each grid cell "
-                             "to remove grid-line border artifacts (default: 0, "
-                             "only used with --grid).")
     parser.add_argument("--api-key", default="",
                         help="Gemini API key (or GEMINI_API_KEY env / config txt).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print the full plan (stages, grids, captions, "
+                             "counts) without calling the API.")
+    parser.add_argument("--selftest", action="store_true",
+                        help="Run the offline self test (grid split + prompt "
+                             "parsing) and exit.")
     args = parser.parse_args()
 
-    if args.grid is not None:
-        cols, rows = args.grid
-        if cols < 1 or rows < 1:
-            parser.error("--grid M N: M and N must both be >= 1")
-        if args.grid_padding < 0:
-            parser.error("--grid-padding must be >= 0")
+    if args.selftest:
+        return selftest()
+
+    if args.grid is not None and min(args.grid) < 1:
+        parser.error("--grid COLS ROWS: both must be >= 1")
+    if args.grid_padding < 0:
+        parser.error("--grid-padding must be >= 0")
+
+    # Which stages run?
+    if args.mode == "all":
+        stages = list(STAGES)
+    else:
+        stage = args.mode
+        if stage is None:
+            for s in STAGES:
+                if s in os.path.basename(args.prompt_file).lower():
+                    stage = s
+                    break
+        if stage is None:
+            stage = "sheet"  # legacy generic single run
+        stages = [stage]
+        if not args.prompt_file:
+            parser.error("single mode needs --prompt-file (or use --mode all)")
+
+    if args.mode == "all" and args.grid is not None:
+        print("[image_maker] warning: --grid is ignored in all mode; each "
+              "stage uses its prompt's GRID header.", flush=True)
 
     try:
-        prompt = _load_prompt(args.prompt_file)
-        ref_images = ref_images_from_args(args.ref_images)
+        # Reference validation.
+        all_refs = list(args.avatar or []) + list(args.ref_images or [])
+        all_refs = ref_images_from_args(all_refs)
+        args.avatar = ref_images_from_args(args.avatar)
+        args.ref_images = ref_images_from_args(args.ref_images)
+
+        args.trigger = (args.trigger or "").strip() or infer_trigger(all_refs)
+        if args.trigger == "chara" and all_refs:
+            print("[image_maker] warning: no trigger inferred from ref "
+                  "filenames; using 'chara'. Set --trigger.", flush=True)
+
+        training_dir = None if args.no_collect else training_dir_for(args)
+        out_dir = args.output_dir or os.path.join(
+            DEFAULT_OUTPUT_DIR,
+            datetime.date.today().strftime("%Y-%m-%d"),
+            datetime.datetime.now().strftime("%H%M%S"),
+        )
+
+        # Build the plan for dry-run / reporting.
+        plan = []
+        for st in stages:
+            if args.mode == "all":
+                flags = {"face": args.face_prompt_file,
+                         "upper": args.upper_prompt_file,
+                         "fullbody": args.fullbody_prompt_file}
+                if flags.get(st):
+                    text, src = _load_prompt(flags[st]), flags[st]
+                else:
+                    p = os.path.join(_ROOT_DIR, "tmp", f"lora_{st}.txt")
+                    if os.path.exists(p):
+                        text, src = _load_prompt(p), p
+                    else:
+                        text, src = EMBEDDED_PROMPTS[st], "<embedded>"
+            else:
+                text, src = _load_prompt(args.prompt_file), args.prompt_file
+
+            detected = detect_grid(text)
+            if args.mode == "all":
+                # All-mode orchestrates sheet prompts: use each prompt's grid.
+                grid = detected or STAGE_DEFAULTS.get(st, {}).get("grid", (3, 2))
+                if detected is None:
+                    print(f"[image_maker] warning: no grid in {src}; defaulting "
+                          f"to {grid[0]}x{grid[1]}.", flush=True)
+            elif args.grid is not None:
+                grid = tuple(args.grid)
+                if detected and detected != grid:
+                    print(f"[image_maker] warning: prompt declares "
+                          f"{detected[0]}x{detected[1]} but --grid "
+                          f"{grid[0]} {grid[1]} given; using --grid.",
+                          flush=True)
+            else:
+                # Single mode: split ONLY when --grid is passed explicitly.
+                grid = None
+                if detected:
+                    print(f"[image_maker] note: prompt looks like a "
+                          f"{detected[0]}x{detected[1]} grid sheet but --grid "
+                          f"was not given -> saving ONE full image per "
+                          f"variation (no split). Pass --grid {detected[0]} "
+                          f"{detected[1]} to split it into tiles.", flush=True)
+
+            refs = stage_refs(st, args)
+            text = substitute_placeholders(text, args)
+            cells = (grid[0] * grid[1] * args.variations) if grid \
+                else args.variations
+            plan.append({"stage": st, "src": src, "prompt": text,
+                         "grid": grid, "refs": refs, "cells": cells})
+
+        total = sum(p["cells"] for p in plan)
+
+        # ---------------- dry run ----------------
+        if args.dry_run:
+            print("\n[image_maker] PLAN (dry run, no API calls):", flush=True)
+            for p in plan:
+                g = (f"{p['grid'][0]}x{p['grid'][1]}" if p["grid"]
+                     else "full (no split)")
+                print(f"  {p['stage']:<9} grid {g:<16} "
+                      f"variations {args.variations}  refs {len(p['refs'])}  "
+                      f"-> {p['cells']} images   ({p['src']})", flush=True)
+            print(f"  TOTAL {total} training images"
+                  + (f" -> {training_dir}" if training_dir else " (raw only)"),
+                  flush=True)
+            samples = []
+            for p in plan:
+                panels = parse_panels(p["prompt"])
+                tags = (panels.get((1, 1), STAGE_TAGS.get(p["stage"], "")))
+                samples.append(make_caption(args, p["stage"], tags))
+            print("  sample captions:")
+            for s in samples:
+                print(f"    {s}", flush=True)
+            result = {
+                "ok": True, "dry_run": True, "trigger": args.trigger,
+                "training_dir": training_dir,
+                "stages": [{"stage": p["stage"],
+                            "grid": list(p["grid"]) if p["grid"] else None,
+                            "cells": p["cells"], "src": p["src"]}
+                           for p in plan],
+                "total_images": total,
+            }
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+            return 0
+
+        # ---------------- real run ----------------
         api_key = _resolve_api_key(args)
         if not api_key:
             raise RuntimeError(
                 "No Gemini API key. Set GEMINI_API_KEY, pass --api-key, or "
                 "configure config_states/gemini_nano_banana.txt."
             )
-
         client = _make_client(api_key)
-
-        out_dir = args.output_dir or os.path.join(
-            DEFAULT_OUTPUT_DIR,
-            datetime.date.today().strftime("%Y-%m-%d"),
-            datetime.datetime.now().strftime("%H%M%S"),
-        )
         os.makedirs(out_dir, exist_ok=True)
+        if training_dir:
+            os.makedirs(training_dir, exist_ok=True)
 
-        manifest_path = os.path.join(out_dir, "image_prompt.txt")
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            f.write("# Image Maker prompt\n")
-            f.write(prompt + "\n\n")
-            f.write(f"# Image model: {args.image_model}\n")
-            f.write(f"# Reference images ({len(ref_images)}):\n")
-            for p in ref_images:
-                f.write(f"#   {p}\n")
-            if args.grid is not None:
-                f.write(f"# Grid: {args.grid[0]} cols x {args.grid[1]} rows, "
-                        f"padding {args.grid_padding}px\n")
+        # Keep the used prompt beside the sheets for debugging.
+        prompt_log = os.path.join(out_dir, "image_prompt.txt")
+        with open(prompt_log, "w", encoding="utf-8") as f:
+            f.write("# image_maker merged run\n")
+            f.write(f"# trigger: {args.trigger}\n")
+            f.write(f"# image model: {args.image_model}\n")
+            for p in plan:
+                g = (f"grid {p['grid'][0]}x{p['grid'][1]}"
+                     if p["grid"] else "full image (no split)")
+                f.write(f"\n# --- {p['stage']} ({p['src']}) {g} "
+                        f"refs {len(p['refs'])} ---\n")
+                f.write(p["prompt"] + "\n")
 
-        variations = max(1, args.variations)
-        outputs, grid_outputs, errors = [], [], []
-        for v in range(1, variations + 1):
-            out_path = os.path.join(out_dir, f"image_v{v:02d}.png")
-            print(f"[image_maker] variation {v}/{variations}: generating "
-                  f"({len(ref_images)} reference images) ...", flush=True)
-            try:
-                with_retry(
-                    lambda: generate_image(
-                        client, args.image_model, prompt, ref_images, out_path,
-                        args.aspect_ratio, args.image_size,
-                    ),
-                    f"variation {v} image call", args.retries,
-                )
-                outputs.append(out_path)
-                print(f"[image_maker] variation {v} -> {out_path}", flush=True)
-                if args.grid is not None:
-                    tiles = split_grid(
-                        out_path, args.grid[0], args.grid[1], args.grid_padding,
-                        out_dir, v,
-                    )
-                    grid_outputs.extend(tiles)
-                    print(
-                        f"[image_maker] variation {v} split into "
-                        f"{args.grid[0]}x{args.grid[1]} grid -> "
-                        f"{len(tiles)} tiles (padding {args.grid_padding}px)",
-                        flush=True,
-                    )
-            except Exception as exc:  # noqa: BLE001 - continue next variation
-                errors.append((v, str(exc)))
-                print(f"[image_maker] variation {v} FAILED after retries: {exc}",
-                      flush=True)
+        stage_records, errors = [], []
+        for p in plan:
+            rec = run_stage(p["stage"], p["prompt"], p["grid"], p["refs"],
+                            args, client, out_dir, training_dir)
+            stage_records.append(rec)
+            errors.extend(rec["errors"])
 
+        images = [img for rec in stage_records for img in rec["images"]]
         ok = not errors
         result = {
             "ok": ok,
+            "trigger": args.trigger,
+            "outfit": args.outfit or None,
             "image_model": args.image_model,
-            "variations": variations,
             "output_dir": out_dir,
-            "manifest": manifest_path,
-            "outputs": outputs,            # [v1_path, v2_path, ...] full images
-            "grid_outputs": grid_outputs,  # [tile paths] when --grid is set
-            "errors": errors,              # [(variation, message), ...]
+            "training_dir": training_dir,
+            "stages": stage_records,
+            "total_images": len(images),
         }
+        if training_dir:
+            manifest = dict(result)
+            manifest["created"] = datetime.datetime.now().isoformat(timespec="seconds")
+            with open(os.path.join(training_dir, "manifest.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+        if errors:
+            result["errors"] = errors
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return 0 if ok else 1
 
     except Exception as exc:  # noqa: BLE001 - report any failure as JSON
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), flush=True)
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False),
+              flush=True)
         return 1
 
 

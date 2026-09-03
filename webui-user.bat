@@ -19,6 +19,9 @@ set OUTPUTS_DIR=%~dp0outputs
 set LOG_DIR=%~dp0log
 set CACHE_DIR=%~dp0cache
 
+rem Silence xformers' "A matching Triton is not available" warning (triton not installed on Windows)
+set XFORMERS_FORCE_DISABLE_TRITON=1
+
 set TORCH_COMMAND=pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 torchaudio==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
 set COMMANDLINE_ARGS=--listen --server-name 0.0.0.0 --gradio-auth-path "%AUTH_FILE%" --gradio-allowed-path "%OUTPUTS_DIR%" --gradio-allowed-path "%LOG_DIR%" --gradio-allowed-path "%CACHE_DIR%" --theme dark --timeout 600 --timeout-keep-alive 120 --no-gradio-queue
 

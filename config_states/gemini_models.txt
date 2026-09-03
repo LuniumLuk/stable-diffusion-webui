@@ -1,0 +1,2 @@
+TEXT_MODEL=gemini-3.6-flash
+IMAGE_MODEL=gemini-3.1-flash-image

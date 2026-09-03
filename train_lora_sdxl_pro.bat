@@ -6,7 +6,12 @@ REM  Reads bench_recommendations.json if present (run
 REM  benchmark_training.bat first), otherwise uses defaults
 REM  tuned for ~23 images on RTX 5070 Ti 16GB.
 REM
-REM  USAGE: train_lora_sdxl_fast.bat <dataset_dir> <output_name> [base_model]
+REM  USAGE: train_lora_sdxl_pro.bat <dataset_dir> <output_name> [base_model] [keep_tokens]
+REM    keep_tokens : number of leading caption tags protected from
+REM                  shuffling/dropout. Default 2 ("series, character name").
+REM                  Rana dataset uses 6 (quality + series + name + class).
+REM                  Pass "" as base_model to skip it, e.g.:
+REM                    train_lora_sdxl_pro.bat data\bangdream bangdream_v4 "" 6
 REM ============================================================
 setlocal EnableDelayedExpansion
 
@@ -18,9 +23,12 @@ set OUTPUT_DIR=%SCRIPT_DIR%models\Lora
 set HF_ENDPOINT=https://hf-mirror.com
 set HUGGINGFACE_HUB_VERBOSITY=warning
 
+rem Silence xformers' "A matching Triton is not available" warning (triton not installed on Windows)
+set XFORMERS_FORCE_DISABLE_TRITON=1
+
 if "%~1"=="" (
     echo ERROR: Missing dataset_dir.
-    echo Usage: train_lora_sdxl_fast.bat ^<dataset_dir^> ^<output_name^> [base_model]
+    echo Usage: train_lora_sdxl_pro.bat ^<dataset_dir^> ^<output_name^> [base_model] [keep_tokens]
     exit /b 1
 )
 if "%~2"=="" (
@@ -35,6 +43,11 @@ if "%~3"=="" (
 ) else (
     set BASE_MODEL=%~3
 )
+
+REM  Optional 4th argument: leading caption tags kept fixed during
+REM  shuffling/dropout. Default 2 = "series, character name" layout.
+set KEEP_TOKENS=2
+if not "%~4"=="" set KEEP_TOKENS=%~4
 
 for %%I in ("%DATASET_DIR%") do set DATASET_DIR=%%~fI
 for %%I in ("%BASE_MODEL%") do set BASE_MODEL=%%~fI
@@ -94,16 +107,14 @@ set MIN_SNR_GAMMA=5
 
 REM ---- Anti style-bleed options (keep the character, lose the style) ----
 REM  Shuffle tags and drop random tags each step so the model cannot memorize
-REM  the training style.  KEEP_TOKENS=N protects the first N tags
-REM  ("series, character name") from being shuffled/dropped - adjust if your
-REM  captions use a different prefix layout.
-REM  KEEP_TOKENS=6 protects the full quality+identity prefix
-REM  ("masterpiece, best quality, bangdream, mygo, kaname rana, 1girl")
-REM  from shuffling/dropping.
-set KEEP_TOKENS=6
+REM  the training style.
+REM  KEEP_TOKENS (set above from the 4th argument, default 2) = number of
+REM  leading caption tags protected from shuffling/dropout. Examples:
+REM    2 = "series, character name"
+REM    6 = "masterpiece, best quality, bangdream, mygo, kaname rana, 1girl"
 REM  TEST VALUES - set to 0 to disable (previous scheme had no dropout)
-set CAPTION_TAG_DROPOUT_RATE=0
-set NETWORK_DROPOUT=0
+set CAPTION_TAG_DROPOUT_RATE=0.1
+set NETWORK_DROPOUT=0.1
 
 REM  Optional prior-preservation (class images): put unrelated 1boy/1girl
 REM  images WITHOUT captions in a folder and set REG_DATA_DIR to it, e.g.
@@ -118,6 +129,7 @@ echo ============================================================
 echo  Dataset    : %DATASET_DIR%
 echo  Output     : %OUTPUT_DIR%\%OUTPUT_NAME%.safetensors
 echo  Base model : %BASE_MODEL%
+echo  Keep tokens: %KEEP_TOKENS%  (fixed prefix tags)
 echo  Batch size : %BATCH_SIZE%  (grad_ckpt=%GRADIENT_CHECKPOINTING%)
 echo  Epochs     : %MAX_TRAIN_EPOCHS%
 echo  Network    : dim=%NETWORK_DIM%  alpha=%NETWORK_ALPHA%
@@ -195,16 +207,27 @@ if "%GRADIENT_CHECKPOINTING%"=="1" set GC_FLAG=--gradient_checkpointing
     %GC_FLAG%
 
 set EXITCODE=%ERRORLEVEL%
+
+REM Decide success by the actual result: the final model file. kohya on Windows
+REM sometimes exits with a spurious "command not found" code (9009) AFTER the
+REM final model has already been saved, which would otherwise report a failure
+REM for a completed run.
+if exist "%OUTPUT_DIR%\%OUTPUT_NAME%.safetensors" goto :train_ok
+
+echo.
+if not "%EXITCODE%"=="0" (
+    echo Training FAILED with error code %EXITCODE%
+) else (
+    echo Training did not produce an output file.
+)
+exit /b 1
+
+:train_ok
 if not "%EXITCODE%"=="0" (
     echo.
-    echo Training FAILED with error code %EXITCODE%
-    exit /b %EXITCODE%
-)
-
-dir /b "%OUTPUT_DIR%\%OUTPUT_NAME%*.safetensors" >nul 2>&1
-if errorlevel 1 (
-    echo Training did not produce an output file.
-    exit /b 1
+    echo NOTE: kohya exited with code %EXITCODE% after the final model was saved.
+    echo This is a cosmetic Windows teardown issue (all epochs completed and the
+    echo checkpoint below is valid); treating the run as successful.
 )
 
 echo.
@@ -218,5 +241,8 @@ echo    - try earlier checkpoints first (epoch 4 or 6 files)
 echo    - use a lower weight (0.4-0.6) and pick the lowest
 echo      weight that still keeps the face consistent
 echo    - keep the same style keywords in prompts with/without LoRA
+echo    - PROVEN FIX: repeat the style keywords AFTER the lora tag:
+echo      "style block, ^<lora:%OUTPUT_NAME%:0.6^>, style block again"
+echo      (repetition acts like emphasis and overrides the LoRA style)
 echo ============================================================
 endlocal

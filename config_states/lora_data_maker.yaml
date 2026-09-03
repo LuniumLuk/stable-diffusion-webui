@@ -1,0 +1,96 @@
+# lora_data_maker.yaml - per-panel randomization settings.
+
+# Randomize art style per panel?
+#   true  -> every panel of a sheet gets its own random style
+#           (12 distinct styles per sheet).
+#   false -> one uniform style for every panel (the FIRST entry
+#           of the styles list below).
+# --style TAG on the command line overrides everything.
+randomize_panel_style: true
+
+styles:
+  - tag: anime screencap
+    text: "high-resolution anime style, soft cel shading, clean linework"
+  - tag: anime movie style
+    text: "modern anime movie style, painterly shading, soft gradients"
+  - tag: retro 90s anime
+    text: "retro 1990s anime style, thick bold lineart, flat cel shading"
+  - tag: light novel illustration
+    text: "light novel illustration style, delicate thin lineart, soft lighting"
+  - tag: watercolor anime
+    text: "watercolor anime style, gentle pastel colors, loose soft edges"
+  - tag: vibrant flat anime
+    text: "official anime production art, sharp linework, vibrant flat colors"
+  - tag: detailed hatching
+    text: "detailed ink hatching style, fine cross-hatched pen shading, bold outlines"
+  - tag: plain flat colors
+    text: "flat plain colors, minimal shading, clean simple coloring with bold shapes"
+  - tag: vibrant saturated colors
+    text: "vibrant saturated colors, high contrast, glowing highlights"
+  - tag: monochrome grayscale
+    text: "monochrome grayscale, elegant black and white ink with soft gray tones"
+  - tag: pastel anime
+    text: "soft pastel anime style, light airy colors, gentle blush shading"
+  - tag: cute simplified anime
+    text: "cute simplified anime style, big expressive eyes, clean simple shapes"
+  - tag: shoujo manga style
+    text: "classic shoujo manga style, large sparkling eyes, elegant thin lineart"
+  - tag: shonen action style
+    text: "dynamic shonen action style, bold speed-line shading, high energy"
+  - tag: Makoto Shinkai style
+    text: "in the style of Makoto Shinkai, luminous soft shading, dreamy lighting"
+  - tag: Akira Toriyama style
+    text: "in the style of Akira Toriyama, clean rounded lineart, bright cel shading"
+  - tag: Naoko Takeuchi style
+    text: "in the style of Naoko Takeuchi, elegant 90s shoujo art, sparkling eyes"
+  - tag: Yoshitaka Amano style
+    text: "in the style of Yoshitaka Amano, ethereal ink and watercolor, delicate lines"
+  - tag: Vanripper style
+    text: "in the style of Vanripper, clean bold lineart, dramatic rim lighting, high-contrast cel shading"
+  - tag: Kantoku style
+    text: "in the style of Kantoku, soft pastel colors, glossy detailed eyes, fine delicate shading"
+
+# Randomize background scene per panel?
+#   true  -> every panel gets its own random scene from the scenes
+#           list (panels no longer stay plain white).
+#   false -> panels stay on the plain white sheet.
+randomize_panel_scene: false
+
+scenes:
+  - tag: sunny park
+    text: "background: a sunny public park with green lawn and trees"
+  - tag: city street, daytime
+    text: "background: a busy city street in daytime with shops and signs"
+  - tag: city street, night
+    text: "background: a quiet city street at night with warm streetlights"
+  - tag: cozy cafe interior
+    text: "background: a cozy cafe interior with wooden tables and warm tones"
+  - tag: school classroom
+    text: "background: a school classroom with desks and a blackboard"
+  - tag: tidy bedroom
+    text: "background: a tidy bedroom with a bed and soft window light"
+  - tag: library
+    text: "background: a library with tall bookshelves full of books"
+  - tag: cherry blossom road
+    text: "background: a road lined with blooming cherry trees, petals in the air"
+  - tag: seaside
+    text: "background: a sunny seaside with soft waves on the shore"
+  - tag: mountain view
+    text: "background: distant green mountains under a clear sky"
+  - tag: starry night sky
+    text: "background: a night sky full of stars"
+  - tag: sunset sky
+    text: "background: an orange and pink sunset sky"
+  - tag: rainy street
+    text: "background: a rainy street with puddle reflections"
+  - tag: winter snow
+    text: "background: a snowy winter street with falling snow"
+  - tag: autumn park
+    text: "background: an autumn park with red and gold leaves"
+  - tag: soft gradient backdrop
+    text: "background: a plain soft-colored gradient backdrop"
+  - tag: rooftop at dusk
+    text: "background: a rooftop at dusk with city lights below"
+  - tag: traditional japanese room
+    text: "background: a traditional Japanese room with tatami and sliding doors"
+

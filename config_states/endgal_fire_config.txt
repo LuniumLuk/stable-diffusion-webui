@@ -1,0 +1,1 @@
+Enable Hires fix: true, Hires stage: "scale: 1.25; scale: 1.5", Hires upscale: 1.5, Hires steps: 20, Denoising strength: 0.5, Batch count: 1, Batch size: 1
