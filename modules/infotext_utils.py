@@ -21,7 +21,7 @@ type_of_gr_update = type(gr.update())
 
 
 class ParamBinding:
-    def __init__(self, paste_button, tabname, source_text_component=None, source_image_component=None, source_tabname=None, override_settings_component=None, paste_field_names=None):
+    def __init__(self, paste_button, tabname, source_text_component=None, source_image_component=None, source_tabname=None, override_settings_component=None, paste_field_names=None, send_dimensions=True):
         self.paste_button = paste_button
         self.tabname = tabname
         self.source_text_component = source_text_component
@@ -29,6 +29,7 @@ class ParamBinding:
         self.source_tabname = source_tabname
         self.override_settings_component = override_settings_component
         self.paste_field_names = paste_field_names or []
+        self.send_dimensions = send_dimensions
 
 
 class PasteField(tuple):
@@ -146,7 +147,7 @@ def connect_paste_params_buttons():
         destination_height_component = next(iter([field for field, name in fields if name == "Size-2"] if fields else []), None)
 
         if binding.source_image_component and destination_image_component:
-            need_send_dementions = destination_width_component and binding.tabname != 'inpaint'
+            need_send_dementions = destination_width_component and binding.tabname != 'inpaint' and binding.send_dimensions
             if isinstance(binding.source_image_component, gr.Gallery):
                 func = send_image_and_dimensions if need_send_dementions else image_from_url_text
                 jsfunc = "extract_image_from_gallery"

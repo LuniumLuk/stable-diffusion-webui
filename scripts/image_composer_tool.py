@@ -18,11 +18,12 @@ _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
 COMPOSER_HTML = """
 <style>
 /* ── Root layout ────────────────────────────── */
-#composer_root { display: grid; grid-template-columns: 292px 1fr; gap: 12px; }
+#composer_root { display: grid; grid-template-columns: 292px minmax(0, 1fr) 200px; gap: 12px; }
 #composer_left  { display: grid; gap: 8px; align-content: start; }
+#composer_right { display: grid; gap: 8px; align-content: start; }
 
 /* ── Box shell ──────────────────────────────── */
-#composer_left .composer-box {
+#composer_left .composer-box, #composer_right .composer-box {
   border: 1px solid var(--block-border-color, #334155);
   border-radius: 8px;
   overflow: hidden;
@@ -37,7 +38,20 @@ COMPOSER_HTML = """
   background: rgba(255,255,255,0.03);
   border-bottom: 1px solid var(--block-border-color, #334155);
   user-select: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
+.cmp-box-header::after {
+  content: "\\25BE";
+  font-size: 9px;
+  color: #475569;
+  margin-left: 8px;
+}
+.composer-box.collapsed .cmp-box-body { display: none; }
+.composer-box.collapsed .cmp-box-header { border-bottom-color: transparent; }
+.composer-box.collapsed .cmp-box-header::after { content: "\\25B8"; }
 .cmp-box-body   { padding: 8px 10px; display: grid; gap: 8px; }
 .cmp-section-label {
   font-size: 10px;
@@ -386,6 +400,80 @@ linear-gradient(45deg,transparent 75%,#1e293b 75%),
 linear-gradient(-45deg,transparent 75%,#1e293b 75%);
 background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
 }
+
+/* ── Compact upload row (moved into Upload panel) ── */
+#composer_upload_row {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px;
+  align-items: stretch;
+}
+/* Neutralize equal_height inline stretching and Gradio column sizing */
+#composer_upload_row > * {
+  min-width: 0 !important;
+  width: 100% !important;
+  height: auto !important;
+}
+
+/* Background image upload: Gradio's Image sets `.wrap { min-height: var(--size-60) }`
+   (240px) plus inline heights — cap the preview area. */
+#composer_bg_upload {
+  min-height: 0 !important;
+  height: auto !important;
+}
+#composer_bg_upload .wrap,
+#composer_bg_upload .image-container,
+#composer_bg_upload [class*="svelte-425ent"] {
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: 96px !important;
+  overflow: hidden;
+}
+#composer_bg_upload img {
+  max-height: 84px !important;
+  width: auto !important;
+}
+
+/* Character PNGs upload: Gradio's UploadButton wrap sets min-height: var(--size-60)
+   (240px) and the FilePreview table uses max-height 240px. */
+#composer_chars_upload {
+  min-height: 0 !important;
+  height: auto !important;
+}
+#composer_chars_upload .wrap.svelte-1ck5uk8,
+#composer_chars_upload [class*="svelte-1ck5uk8"] {
+  min-height: 0 !important;
+}
+#composer_chars_upload .file-preview,
+#composer_chars_upload .file-preview-holder {
+  max-height: 96px !important;
+  min-height: 0 !important;
+}
+
+/* ── Right panel actions ─────────────────────── */
+#composer_right .cmp-action-btn {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  border: 1px solid var(--block-border-color, #334155);
+  border-radius: 6px;
+  background: var(--block-background-fill, #1e293b);
+  color: var(--body-text-color, #e2e8f0);
+  cursor: pointer;
+  text-align: left;
+  transition: background .12s, border-color .12s;
+}
+#composer_right .cmp-action-btn:hover { background: #1e3a5f; border-color: #38bdf8; }
+#composer_right .cmp-action-btn--primary {
+  background: rgba(56,189,248,.15);
+  border-color: #38bdf8;
+  color: #7dd3fc;
+}
+#composer_right .cmp-action-btn--primary:hover { background: rgba(56,189,248,.25); }
+#composer_right .cmp-box-body { gap: 6px; }
+
+/* Hidden original Gradio action row (actions moved to right panel) */
+.composer-hidden-actions { display: none !important; }
 </style>
 
 <div id="composer_root">
@@ -687,6 +775,36 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
   <!-- ═══ CANVAS ═══════════════════════════════ -->
   <div id="composer_canvas_wrap">
     <canvas id="composer_canvas" width="1280" height="768"></canvas>
+  </div>
+
+  <!-- ═══ RIGHT PANEL ══════════════════════════ -->
+  <div id="composer_right">
+    <div class="composer-box">
+      <div class="cmp-box-header">Output</div>
+      <div class="cmp-box-body">
+        <button id="composer_right_compose" type="button" class="cmp-action-btn cmp-action-btn--primary"
+                title="Render and auto-save the composition">&#127912; Compose to Output</button>
+        <button id="composer_right_save" type="button" class="cmp-action-btn"
+                title="Save the latest composite output">&#128190; Save Output</button>
+        <button id="composer_right_save_config" type="button" class="cmp-action-btn"
+                title="Save the composer state without composing">&#9881; Save Config</button>
+        <button id="composer_right_load_config" type="button" class="cmp-action-btn"
+                title="Load a saved composer state">&#128194; Load Config…</button>
+        <button id="composer_right_caption" type="button" class="cmp-action-btn"
+                title="Generate a structured caption from the composition">&#128221; Generate Caption</button>
+      </div>
+    </div>
+    <div class="composer-box">
+      <div class="cmp-box-header">Send To</div>
+      <div class="cmp-box-body">
+        <button id="composer_right_send_img2img" type="button" class="cmp-action-btn"
+                title="Send the composite output to img2img (width/height untouched)">&#128444; Send to img2img</button>
+        <button id="composer_right_send_inpaint" type="button" class="cmp-action-btn"
+                title="Send the composite output to img2img Inpaint (width/height untouched)">&#128396; Send to Inpaint</button>
+        <button id="composer_right_send_extras" type="button" class="cmp-action-btn"
+                title="Send the composite output to Extras">&#10024; Send to Extras</button>
+      </div>
+    </div>
   </div>
 </div>
 <input id="composer_config_file_input" type="file" accept=".json" style="display:none" />
@@ -1037,6 +1155,21 @@ def generate_composition_caption(payload_json: str) -> str:
         return "\n".join(lines)
 
 
+def _composer_param_binding(paste_button, tabname, source_image_component, send_dimensions=False):
+        """Build a ParamBinding, tolerating core versions that predate the
+        `send_dimensions` argument (the webui script-reloader does not reload
+        core `modules/` files, only a full restart does)."""
+        kwargs = {
+                "paste_button": paste_button,
+                "tabname": tabname,
+                "source_image_component": source_image_component,
+        }
+        try:
+                return parameters_copypaste.ParamBinding(send_dimensions=send_dimensions, **kwargs)
+        except TypeError:
+                return parameters_copypaste.ParamBinding(**kwargs)
+
+
 def on_ui_tabs():
         with gr.Blocks(analytics_enabled=False) as composer_ui:
                 with gr.Row(elem_id="composer_upload_row", equal_height=True):
@@ -1049,13 +1182,14 @@ def on_ui_tabs():
 
                 payload_state = gr.Textbox(value="", visible=False, elem_id="composer_payload_state")
 
-                with gr.Row():
+                with gr.Row(elem_classes="composer-hidden-actions"):
                         compose_btn = gr.Button("Compose to Output", variant="primary", elem_id="composer_compose")
                         save_btn = gr.Button("Save Output", elem_id="composer_save")
                         save_config_btn = gr.Button("Save Config", elem_id="composer_save_config")
                         load_config_btn = gr.Button("Load Config…", elem_id="composer_load_config_btn")
                         caption_btn = gr.Button("Generate Caption", elem_id="composer_caption_btn")
                         send_to_img2img = gr.Button("Send Output to img2img", elem_id="composer_send_to_img2img")
+                        send_to_inpaint = gr.Button("Send Output to Inpaint", elem_id="composer_send_to_inpaint")
                         send_to_extras = gr.Button("Send Output to Extras", elem_id="composer_send_to_extras")
 
                 output_image = gr.Image(label="Composite Output", type="pil", image_mode="RGBA", interactive=False, elem_id="composer_output")
@@ -1099,12 +1233,18 @@ def on_ui_tabs():
                         show_progress=True,
                 )
 
-                parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
+                parameters_copypaste.register_paste_params_button(_composer_param_binding(
                         paste_button=send_to_img2img,
                         tabname="img2img",
                         source_image_component=output_image,
+                        send_dimensions=False,
                 ))
-                parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
+                parameters_copypaste.register_paste_params_button(_composer_param_binding(
+                        paste_button=send_to_inpaint,
+                        tabname="inpaint",
+                        source_image_component=output_image,
+                ))
+                parameters_copypaste.register_paste_params_button(_composer_param_binding(
                         paste_button=send_to_extras,
                         tabname="extras",
                         source_image_component=output_image,

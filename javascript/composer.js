@@ -2509,28 +2509,14 @@
         const layer = layerHit.layer;
         const imageLocal = toImageLocal(layer, p.x, p.y);
 
-        if (state.tool === "brush") {
-          state.dragMode = "brush";
-          state.brushLastPoint = imageLocal;
-          strokeOnLayer(layer, imageLocal, imageLocal);
-          draw();
-        } else if (state.tool === "line") {
-          state.dragMode = "line";
-          state.linePreview = {
-            layerId: layer.id,
-            start: imageLocal,
-            end: imageLocal,
-          };
-          draw();
-        } else if (state.tool === "crop") {
-          state.dragMode = "crop";
-          state.cropPreview = {
-            layerId: layer.id,
-            start: imageLocal,
-            end: imageLocal,
-          };
-          draw();
-        }
+        // Only crop reaches this path — brush/line/eraser return earlier.
+        state.dragMode = "crop";
+        state.cropPreview = {
+          layerId: layer.id,
+          start: imageLocal,
+          end: imageLocal,
+        };
+        draw();
 
         canvas.setPointerCapture(evt.pointerId);
         return;
@@ -3659,6 +3645,77 @@
         }
       });
     }
+
+    // Move the Gradio upload widgets into a dedicated "Upload" tool panel so
+    // they live with the other panels instead of floating above the tab.
+    function moveUploadsIntoPanel() {
+      const row = document.getElementById("composer_upload_row");
+      const left = document.getElementById("composer_left");
+      if (!row || !left || row.closest("#composer_left")) return;
+      const box = document.createElement("div");
+      box.className = "composer-box";
+      const header = document.createElement("div");
+      header.className = "cmp-box-header";
+      header.textContent = "Upload";
+      const body = document.createElement("div");
+      body.className = "cmp-box-body";
+      body.appendChild(row);
+      box.appendChild(header);
+      box.appendChild(body);
+      left.insertBefore(box, left.firstChild);
+    }
+    moveUploadsIntoPanel();
+
+    // ── Foldable panels: click a box header to collapse/expand (persisted). ─
+    // Left tool panels (incl. Upload) default folded; right action boxes stay
+    // open unless the user folded them before.
+    root.querySelectorAll(".composer-box > .cmp-box-header").forEach((header) => {
+      const box = header.parentElement;
+      if (!box) return;
+      const key = `composer_panel_${(header.textContent || "panel").trim()}`;
+      const isRight = !!header.closest("#composer_right");
+      try {
+        const saved = localStorage.getItem(key);
+        const shouldCollapse = isRight ? saved === "1" : (saved === null || saved === "1");
+        if (shouldCollapse) box.classList.add("collapsed");
+      } catch (e) {
+        if (!isRight) box.classList.add("collapsed");
+      }
+      header.addEventListener("click", () => {
+        box.classList.toggle("collapsed");
+        try {
+          localStorage.setItem(key, box.classList.contains("collapsed") ? "1" : "0");
+        } catch (e) {
+          // ignore storage errors
+        }
+      });
+    });
+
+    // ── Right panel actions forward clicks to the hidden Gradio buttons. ─
+    const rightPanelForward = [
+      ["#composer_right_compose", "composer_compose"],
+      ["#composer_right_save", "composer_save"],
+      ["#composer_right_save_config", "composer_save_config"],
+      ["#composer_right_load_config", "composer_load_config_btn"],
+      ["#composer_right_caption", "composer_caption_btn"],
+      ["#composer_right_send_img2img", "composer_send_to_img2img"],
+      ["#composer_right_send_inpaint", "composer_send_to_inpaint"],
+      ["#composer_right_send_extras", "composer_send_to_extras"],
+    ];
+    rightPanelForward.forEach(([srcId, tgtId]) => {
+      const src = root.querySelector(srcId);
+      if (!src) return;
+      src.addEventListener("click", () => {
+        // Look the target up lazily so late-rendered Gradio components work.
+        const tgt = document.getElementById(tgtId);
+        if (!tgt) return;
+        try {
+          tgt.click();
+        } catch (e) {
+          // ignore click forwarding failures
+        }
+      });
+    });
 
     root.__composer_state = state;
     _composerLog('  root.__composer_state set, layers=' + state.layers.length + ' assets=' + state.assets.length);
