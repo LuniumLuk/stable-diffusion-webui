@@ -44,6 +44,7 @@ import re
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 _WORKFLOW_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WORKFLOW_DIR not in sys.path:
@@ -381,9 +382,12 @@ def training_dir_for(args) -> str:
 # ---------------------------------------------------------------------------
 # Stage execution
 # ---------------------------------------------------------------------------
-def run_stage(stage: str, prompt_text: str, grid, refs, args, client,
+def run_stage(stage: str, prompt_text: str, grid, refs, args, api_key: str,
               out_dir: str, training_dir):
     """Generate the stage's variations and (optionally) split them.
+
+    Variations run sequentially by default, or CONCURRENTLY with --parallel
+    (each job is launched with a --parallel-delay gap, default 1 s).
 
     grid = (cols, rows): every generated image is split into that grid and
     each cell becomes one collected training image.
@@ -404,92 +408,122 @@ def run_stage(stage: str, prompt_text: str, grid, refs, args, client,
         "variations": args.variations,
         "sheets": [], "images": [], "errors": [],
     }
-    counter = 1
-    for v in range(1, args.variations + 1):
+    aspect = args.aspect_ratio or STAGE_DEFAULTS.get(stage, {}).get("aspect", "")
+    size = args.image_size
+
+    def do_variation(v):
+        """One variation job: generate, split, and describe the outputs."""
         sheet_path = os.path.join(out_dir, f"{sheet_name}_v{v:02d}.png")
         print(f"[image_maker] {stage} variation {v}/{args.variations}: "
               f"generating ({len(refs)} reference images) ...", flush=True)
+
+        def job():
+            # A FRESH client per attempt: when a direct connection fails and
+            # the proxy fallback activates (once, under a lock in
+            # generate.py), the next attempt rebuilds the client with the
+            # proxy environment already set - so parallel jobs reliably end
+            # up routed through the proxy.
+            client = _make_client(api_key)
+            return generate_image(client, args.image_model, prompt_text,
+                                  refs, sheet_path, aspect, size)
+
         try:
-            with_retry(
-                lambda: generate_image(
-                    client, args.image_model, prompt_text, refs, sheet_path,
-                    args.aspect_ratio or STAGE_DEFAULTS.get(stage, {}).get("aspect", ""),
-                    args.image_size,
-                ),
-                f"{stage} variation {v}", args.retries,
-            )
-            record["sheets"].append(os.path.basename(sheet_path))
-            print(f"[image_maker] {stage} variation {v} -> {sheet_path}", flush=True)
-        except Exception as exc:  # noqa: BLE001 - continue next variation
-            record["errors"].append((v, str(exc)))
-            print(f"[image_maker] {stage} variation {v} FAILED after retries: {exc}",
-                  flush=True)
-            continue
-
+            with_retry(job, f"{stage} variation {v}", args.retries)
+        except Exception as exc:  # noqa: BLE001 - report and move on
+            print(f"[image_maker] {stage} variation {v} FAILED after retries: "
+                  f"{exc}", flush=True)
+            return {"ok": False, "v": v, "error": str(exc)}
+        print(f"[image_maker] {stage} variation {v} -> {sheet_path}",
+              flush=True)
+        items = []
         if grid is None:
-            # One full image per variation - no grid split.
-            final_name = f"{out_name}_{counter:03d}.png"
             caption = make_caption(args, stage, STAGE_TAGS.get(stage, ""))
-            if training_dir:
-                shutil.copy2(sheet_path, os.path.join(training_dir, final_name))
-                if args.caption_style == "tags":
-                    with open(os.path.join(training_dir, final_name[:-4] + ".txt"),
-                              "w", encoding="utf-8") as f:
-                        f.write(caption + "\n")
-            record["images"].append({
-                "file": os.path.join(os.path.basename(training_dir), final_name)
-                        if training_dir else os.path.basename(sheet_path),
-                "caption": caption if args.caption_style == "tags" else "",
-                "variation": v,
-                "panel": "full",
-                "sheet": os.path.basename(sheet_path),
-            })
-            counter += 1
+            items.append({"tile": sheet_path, "panel": "full",
+                          "caption": caption})
+        else:
+            tile_dir = os.path.join(out_dir, f"tiles_{out_name}")
+            os.makedirs(tile_dir, exist_ok=True)
+            tiles = split_grid(sheet_path, cols, rows, args.grid_padding,
+                               tile_dir, v)
+            print(f"[image_maker] {stage} variation {v} split into "
+                  f"{cols}x{rows} grid -> {len(tiles)} tiles "
+                  f"(padding {args.grid_padding}px)", flush=True)
+            for i, tile_path in enumerate(tiles):
+                r, c = divmod(i, cols)
+                panel_tags = panels.get((r + 1, c + 1),
+                                        STAGE_TAGS.get(stage, ""))
+                items.append({"tile": tile_path,
+                              "panel": f"R{r + 1}C{c + 1}",
+                              "caption": make_caption(args, stage,
+                                                      panel_tags)})
+        return {"ok": True, "v": v,
+                "sheet": os.path.basename(sheet_path), "items": items}
+
+    variations = list(range(1, args.variations + 1))
+    use_parallel = bool(getattr(args, "parallel", False)) and \
+        len(variations) > 1
+    if use_parallel:
+        workers = int(getattr(args, "parallel_workers", 0) or 0)
+        if workers < 1:
+            workers = min(len(variations), 8)
+        delay = max(0.0, float(getattr(args, "parallel_delay", 1.0)))
+        print(f"[image_maker] {stage}: parallel run - {len(variations)} "
+              f"variations, {workers} workers, {delay}s launch delay",
+              flush=True)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = []
+            for v in variations:
+                futures.append(pool.submit(do_variation, v))
+                if delay and v != variations[-1]:
+                    time.sleep(delay)
+            results = [f.result() for f in futures]
+    else:
+        results = [do_variation(v) for v in variations]
+
+    for res in results:
+        v = res["v"]
+        if not res["ok"]:
+            record["errors"].append((v, res["error"]))
             continue
-
-        tile_dir = os.path.join(out_dir, f"tiles_{out_name}")
-        os.makedirs(tile_dir, exist_ok=True)
-        tiles = split_grid(sheet_path, cols, rows, args.grid_padding,
-                           tile_dir, v)
-        print(f"[image_maker] {stage} variation {v} split into {cols}x{rows} "
-              f"grid -> {len(tiles)} tiles (padding {args.grid_padding}px)", flush=True)
-
-        for i, tile_path in enumerate(tiles):
-            r, c = divmod(i, cols)
-            panel_tags = panels.get((r + 1, c + 1), STAGE_TAGS.get(stage, ""))
-            caption = make_caption(args, stage, panel_tags)
-            final_name = f"{out_name}_{counter:03d}.png"
-
+        record["sheets"].append(res["sheet"])
+        # Deterministic numbering: variation v owns numbers
+        # (v-1)*cells+1 .. v*cells, so parallel and sequential runs produce
+        # the same filenames (a failed variation leaves gaps instead of
+        # renumbering the following ones).
+        for j, item in enumerate(res["items"], 1):
+            final_name = f"{out_name}_{(v - 1) * cells + j:03d}.png"
             if training_dir:
-                dest_img = os.path.join(training_dir, final_name)
-                shutil.copy2(tile_path, dest_img)
+                shutil.copy2(item["tile"], os.path.join(training_dir,
+                                                        final_name))
                 if args.caption_style == "tags":
-                    with open(os.path.join(training_dir, final_name[:-4] + ".txt"),
+                    with open(os.path.join(training_dir,
+                                           final_name[:-4] + ".txt"),
                               "w", encoding="utf-8") as f:
-                        f.write(caption + "\n")
+                        f.write(item["caption"] + "\n")
             record["images"].append({
                 "file": os.path.join(os.path.basename(training_dir), final_name)
-                        if training_dir else os.path.basename(tile_path),
-                "caption": caption if args.caption_style == "tags" else "",
+                        if training_dir else os.path.basename(item["tile"]),
+                "caption": item["caption"] if args.caption_style == "tags" else "",
                 "variation": v,
-                "panel": f"R{r + 1}C{c + 1}",
-                "sheet": os.path.basename(sheet_path),
+                "panel": item["panel"],
+                "sheet": res["sheet"],
             })
-            counter += 1
 
     # Optional: keep the source sheets and refs inside the dataset folder.
     if training_dir and record["sheets"]:
         sheets_dir = os.path.join(training_dir, "sheets")
         os.makedirs(sheets_dir, exist_ok=True)
         for name in record["sheets"]:
-            shutil.copy2(os.path.join(out_dir, name), os.path.join(sheets_dir, name))
+            shutil.copy2(os.path.join(out_dir, name),
+                         os.path.join(sheets_dir, name))
         if args.include_refs and refs:
             refs_dir = os.path.join(training_dir, "refs")
             os.makedirs(refs_dir, exist_ok=True)
             for k, p in enumerate(refs, 1):
                 tag = "portrait" if stage == "face" else "full body"
                 base = f"ref_{k:02d}"
-                shutil.copy2(p, os.path.join(refs_dir, base + os.path.splitext(p)[1]))
+                shutil.copy2(p, os.path.join(refs_dir,
+                                             base + os.path.splitext(p)[1]))
                 if args.caption_style == "tags":
                     cap = make_caption(args, stage, tag)
                     with open(os.path.join(refs_dir, base + ".txt"), "w",
@@ -555,6 +589,62 @@ def selftest() -> int:
                 f"{stage}: {len(panels)} panels, want {expected[0] * expected[1]}"
             print(f"[selftest] {stage}: GRID {grid[0]}x{grid[1]}, "
                   f"{len(panels)} captioned panels OK")
+
+        # End-to-end run_stage in sequential AND parallel modes with a
+        # stubbed generator (no API): same deterministic file names, no
+        # overwrites, captions written, grid splitting intact.
+        def _fake_gen(_client, _model, _prompt, _refs, out_path, _aspect,
+                      _size):
+            Image.new("RGB", (900, 600), (235, 235, 235)).save(out_path)
+
+        real_gen = globals().get("generate_image")
+        try:
+            globals()["generate_image"] = _fake_gen
+
+            def run_case(parallel, grid, n_dir):
+                raw = os.path.join(work, f"raw_{n_dir}")
+                res = os.path.join(work, f"res_{n_dir}")
+                os.makedirs(raw, exist_ok=True)
+                os.makedirs(res, exist_ok=True)
+                a = argparse.Namespace(
+                    quality_tags="", trigger="t", outfit_desc="",
+                    caption_style="tags", include_refs=False,
+                    image_model="test-model", retries=1, variations=3,
+                    parallel=parallel, parallel_workers=3, parallel_delay=0.0,
+                    image_size="1K", aspect_ratio="", grid_padding=8)
+                rec = run_stage("sheet", "just a test prompt", grid, [], a,
+                                "test-key", raw, res)
+                assert not rec["errors"], f"{n_dir}: {rec['errors']}"
+                return rec, raw, res
+
+            # 3 full-image variations (no grid): 3 images.
+            for par in (False, True):
+                rec, raw, res = run_case(par, None, f"full_{par}")
+                assert len(rec["images"]) == 3, f"{par}: want 3 full images"
+                for img in rec["images"]:
+                    p = os.path.join(res, os.path.basename(img["file"]))
+                    assert os.path.isfile(p), f"missing {img['file']}"
+                    assert os.path.isfile(p[:-4] + ".txt"), "caption missing"
+                for v in (1, 2, 3):
+                    assert os.path.isfile(
+                        os.path.join(raw, f"image_v{v:02d}.png")), \
+                        f"sheet image_v{v:02d}.png missing"
+            # 3x2 grid x 3 variations in parallel: 18 tiles, unique names.
+            rec, raw, res = run_case(True, (3, 2), "grid_par")
+            assert len(rec["images"]) == 18, f"want 18 tiles, got {len(rec['images'])}"
+            names = [os.path.basename(img["file"]) for img in rec["images"]]
+            assert len(set(names)) == 18, "duplicate collected names"
+            for img in rec["images"]:
+                p = os.path.join(res, os.path.basename(img["file"]))
+                assert os.path.isfile(p), f"missing tile {img['file']}"
+            for v in (1, 2, 3):
+                assert os.path.isfile(
+                    os.path.join(raw, f"image_v{v:02d}.png")), \
+                    f"grid sheet image_v{v:02d}.png missing"
+            print("[selftest] run_stage sequential + parallel (stub) OK")
+        finally:
+            if real_gen is not None:
+                globals()["generate_image"] = real_gen
     except Exception as exc:  # noqa: BLE001
         ok = False
         print(f"[selftest] FAILED: {exc}")
@@ -596,6 +686,15 @@ def main() -> int:
     parser.add_argument("--variations", type=int, default=1,
                         help="Sheets per stage (default: 1; each sheet yields "
                              "cols x rows training images).")
+    parser.add_argument("--parallel", action="store_true",
+                        help="Generate the stage's variations concurrently "
+                             "instead of one after another.")
+    parser.add_argument("--parallel-workers", type=int, default=0,
+                        help="Max concurrent variation jobs (default: "
+                             "min(variations, 8)).")
+    parser.add_argument("--parallel-delay", type=float, default=1.0,
+                        help="Seconds to wait between LAUNCHING each parallel "
+                             "variation job, to pace API calls (default: 1.0).")
     parser.add_argument("--grid", nargs=2, type=int, metavar=("COLS", "ROWS"),
                         default=None,
                         help="Split every generated image into a COLS x ROWS "
@@ -658,6 +757,10 @@ def main() -> int:
         parser.error("--grid COLS ROWS: both must be >= 1")
     if args.grid_padding < 0:
         parser.error("--grid-padding must be >= 0")
+    if args.parallel_workers < 0:
+        parser.error("--parallel-workers must be >= 0")
+    if args.parallel_delay < 0:
+        parser.error("--parallel-delay must be >= 0")
 
     # Which stages run?
     if args.mode == "all":
@@ -788,7 +891,6 @@ def main() -> int:
                 "No Gemini API key. Set GEMINI_API_KEY, pass --api-key, or "
                 "configure config_states/gemini_nano_banana.txt."
             )
-        client = _make_client(api_key)
         os.makedirs(out_dir, exist_ok=True)
         if training_dir:
             os.makedirs(training_dir, exist_ok=True)
@@ -809,7 +911,7 @@ def main() -> int:
         stage_records, errors = [], []
         for p in plan:
             rec = run_stage(p["stage"], p["prompt"], p["grid"], p["refs"],
-                            args, client, out_dir, training_dir)
+                            args, api_key, out_dir, training_dir)
             stage_records.append(rec)
             errors.extend(rec["errors"])
 

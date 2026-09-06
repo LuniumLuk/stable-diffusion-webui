@@ -35,6 +35,7 @@ import base64
 import json
 import os
 import sys
+import threading
 
 _WORKFLOW_DIR = os.path.dirname(os.path.abspath(__file__))
 if _WORKFLOW_DIR not in sys.path:
@@ -46,11 +47,18 @@ from models_config import load_model_config  # noqa: E402
 # ---------------------------------------------------------------------------
 # Client construction (with optional local-proxy fallback)
 # ---------------------------------------------------------------------------
+# Guards the one-time "direct failed -> enable proxy" decision. Parallel
+# jobs (image_maker --parallel) share this module state, so the decision is
+# made exactly once under this lock instead of racing os.environ toggles.
+_PROXY_LOCK = threading.Lock()
+
+
 def _make_client(api_key: str):
     from google import genai
 
     # Some machines only reach the internet via a local proxy. If
-    # GEMINI_HTTP_PROXY is set (or direct access fails), route through it.
+    # GEMINI_HTTP_PROXY is set, route through it; otherwise direct access is
+    # attempted first and the proxy is enabled lazily on failure.
     proxy = os.environ.get("GEMINI_HTTP_PROXY", "").strip()
     if proxy:
         os.environ["HTTP_PROXY"] = proxy
@@ -94,27 +102,38 @@ def _encode_image(path: str):
 
 
 def _run_with_proxy_fallback(fn):
-    """Run fn(); if it fails with a CONNECTION error and no proxy was set,
-    retry once through the known-good local proxy 127.0.0.1:7897.
+    """Run fn(); on a CONNECTION error with no proxy configured yet, retry
+    once through the known-good local proxy 127.0.0.1:7897.
 
+    Thread-safe: the direct -> proxy decision is made exactly once under a
+    lock, so parallel jobs cannot race the shared environment variables. Any
+    later call just runs through whichever environment is configured.
     API-level errors (invalid key, quota, blocked prompt, ...) mean the
     request reached Google, so they are surfaced as-is without a retry.
     """
-    try:
+    if os.environ.get("GEMINI_PROXY_TRIED"):
+        # Route already decided (direct worked or proxy was enabled).
         return fn()
-    except Exception as first_err:
-        if _is_api_error(first_err):
-            raise
-        if os.environ.get("GEMINI_HTTP_PROXY") or "GEMINI_PROXY_TRIED" in os.environ:
-            raise
-        os.environ["GEMINI_HTTP_PROXY"] = "http://127.0.0.1:7897"
-        os.environ["GEMINI_PROXY_TRIED"] = "1"
+    with _PROXY_LOCK:
+        if os.environ.get("GEMINI_PROXY_TRIED"):
+            return fn()
         try:
             return fn()
-        except Exception as retry_err:
-            raise RuntimeError(
-                f"Direct and proxy attempts both failed.\nDirect: {first_err}\nProxy: {retry_err}"
-            ) from retry_err
+        except Exception as first_err:
+            if _is_api_error(first_err):
+                raise
+            proxy = "http://127.0.0.1:7897"
+            os.environ["GEMINI_HTTP_PROXY"] = proxy
+            os.environ["HTTP_PROXY"] = proxy
+            os.environ["HTTPS_PROXY"] = proxy
+            os.environ["GEMINI_PROXY_TRIED"] = "1"
+            try:
+                return fn()
+            except Exception as retry_err:
+                raise RuntimeError(
+                    "Direct and proxy attempts both failed.\n"
+                    f"Direct: {first_err}\nProxy: {retry_err}"
+                ) from retry_err
 
 
 # ---------------------------------------------------------------------------

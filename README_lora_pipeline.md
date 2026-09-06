@@ -111,6 +111,9 @@ All three runs collect into the same `training_data/lora_rana/` folder
 | `--avatar PATH` (repeatable) | - | identity picture, attached to every stage |
 | `--ref-images ...` | - | outfit fullbody pictures (face mode: face refs) |
 | `--variations N` | 1 | sheets per stage (images = N x cols x rows) |
+| `--parallel` | off | generate the stage's variations concurrently |
+| `--parallel-workers N` | min(variations, 8) | max concurrent variation jobs |
+| `--parallel-delay S` | 1.0 | seconds between launching each parallel job |
 | `--grid COLS ROWS` | none (no split) | split each image into a COLS x ROWS grid (single mode only) |
 | `--grid-padding P` | 8 | trim P px from each cell border |
 | `--image-size 1K\|2K\|4K` | 2K | Gemini output size |

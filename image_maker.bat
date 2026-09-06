@@ -14,6 +14,14 @@ REM   image_maker.bat --prompt-file .\tmp\lora_face.txt ^
 REM     --ref-images .\tmp\images.jpg .\tmp\img_chara_rana.png ^
 REM     --variations 1 --grid 3 2 --grid-padding 8 ^
 REM     --image-size 2K --aspect-ratio 1:1
+REM
+REM Parallel variations (optional):
+REM   image_maker.bat --prompt-file .\tmp\mujica.txt ^
+REM     --ref-images .\tmp\mujica.webp --variations 6 ^
+REM     --parallel --parallel-workers 3 --parallel-delay 1
+REM   --parallel          run the variations concurrently
+REM   --parallel-workers  max concurrent jobs (default: min(variations, 8))
+REM   --parallel-delay    seconds between launching each job (default: 1)
 REM   image_maker.bat --prompt-file .\tmp\lora_upper.txt ^
 REM     --ref-images .\tmp\img_chara_rana.png .\tmp\body_rana.png
 REM   image_maker.bat --prompt-file .\tmp\lora_fullbody.txt ^
