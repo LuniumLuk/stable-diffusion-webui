@@ -1,10 +1,126 @@
 import gradio as gr
+import html
 import json
 
 from modules import shared, ui_prompt_styles, prompt_presets
 import modules.images
 
 from modules.ui_components import ToolButton
+
+
+# Fields that can be staged in img2img. Order matters: it must match the order
+# of `stage_field_components` in modules/ui.py and the popup rendered by
+# javascript/img2imgStagePanel.js.
+IMG2IMG_STAGE_FIELDS = [
+    ("prompt", "Prompt"),
+    ("negative_prompt", "Negative prompt"),
+    ("steps", "Sampling steps"),
+    ("sampler_name", "Sampling method"),
+    ("scheduler", "Schedule type"),
+    ("seed", "Seed"),
+    ("cfg_scale", "CFG Scale"),
+    ("image_cfg_scale", "Image CFG Scale"),
+    ("width", "Width"),
+    ("height", "Height"),
+    ("resize_tab", "Resize To/By"),
+    ("scale_by", "Scale (Resize by)"),
+    ("batch_count", "Batch count"),
+    ("batch_size", "Batch size"),
+    ("denoising_strength", "Denoising strength"),
+    ("resize_mode", "Resize mode"),
+    ("mask_blur", "Mask blur"),
+    ("mask_mode", "Mask mode"),
+    ("masked_content", "Masked content"),
+    ("inpaint_area", "Inpaint area"),
+    ("only_masked_padding", "Only masked padding"),
+]
+
+IMG2IMG_STAGE_KEYS = [key for key, _ in IMG2IMG_STAGE_FIELDS]
+
+
+def stage_update_value(key, value, component):
+    """Convert a stored stage value into the value Gradio expects for `component`.
+
+    For index-typed radios the stored value is an index, but the frontend keeps
+    the choice label as the component value, so convert back to the label.
+    Returns None when the stored value cannot be mapped to a choice.
+    """
+    if isinstance(component, gr.Radio) and getattr(component, "type", None) == "index" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        idx = int(value)
+        if 0 <= idx < len(component.choices):
+            return component.choices[idx][1]
+        return None
+    return value
+
+
+class Img2imgStageManager:
+    """Keeps img2img generation-settings stages in memory and renders the stage list."""
+
+    def __init__(self):
+        self.stages = {}  # name -> {field_key: value}
+
+    def _next_default_name(self):
+        i = 1
+        while f"#{i}" in self.stages:
+            i += 1
+        return f"#{i}"
+
+    def list_html(self):
+        fields_json = json.dumps([{"key": key, "label": label} for key, label in IMG2IMG_STAGE_FIELDS])
+        fields_attr = html.escape(fields_json, quote=True)
+
+        if not self.stages:
+            body = '<span class="img2img-stage-empty">No stages yet</span>'
+        else:
+            rows = []
+            for i, (name, stage) in enumerate(self.stages.items(), start=1):
+                esc = html.escape(str(name), quote=True)
+                count = len(stage)
+                shortcut = f"Alt+{i}" if i <= 9 else ""
+                rows.append(
+                    '<div class="img2img-stage-item">'
+                    f'<span class="img2img-stage-idx" title="{shortcut}">{i}</span>'
+                    f'<span class="img2img-stage-name" title="{esc} ({count} fields)">{esc}</span>'
+                    f'<button type="button" class="img2img-stage-btn apply" data-stage="{esc}" onclick="window.img2imgStageApply(this)">Apply</button>'
+                    f'<button type="button" class="img2img-stage-btn drop" data-stage="{esc}" onclick="window.img2imgStageDrop(this)">Drop</button>'
+                    '</div>'
+                )
+            body = ''.join(rows)
+
+        return f'<div id="img2img_stage_list" class="img2img-stage-list" data-fields="{fields_attr}">{body}</div>'
+
+    def capture(self, payload, *values):
+        """Store a new stage from the currently selected fields. Returns (list html, cleared payload)."""
+        try:
+            data = json.loads(payload or "{}")
+        except Exception:
+            return gr.update(), gr.update(value="")
+
+        requested = {str(f) for f in (data.get("fields") or [])}
+        selected = [key for key in IMG2IMG_STAGE_KEYS if key in requested]
+        if not selected:
+            return gr.update(), gr.update(value="")
+
+        name = str(data.get("name") or "").strip()
+        if not name:
+            name = self._next_default_name()
+
+        values = list(values)
+        stage = {}
+        for i, key in enumerate(IMG2IMG_STAGE_KEYS):
+            if key in selected and i < len(values):
+                stage[key] = values[i]
+
+        self.stages[name] = stage
+        return self.list_html(), gr.update(value="")
+
+    def drop(self, payload):
+        name = str(payload or "").strip()
+        self.stages.pop(name, None)
+        return self.list_html()
+
+
+img2img_stage_manager = Img2imgStageManager()
 
 
 class Toprow:
@@ -38,6 +154,15 @@ class Toprow:
 
     submit_box = None
 
+    staging_add_btn = None
+    staging_list_html = None
+    staging_payload = None
+    staging_capture_btn = None
+    staging_apply_btn = None
+    staging_drop_btn = None
+    staging_created = False
+    stage_manager = None
+
     def __init__(self, is_img2img, is_compact=False, id_part=None):
         if id_part is None:
             id_part = "img2img" if is_img2img else "txt2img"
@@ -45,6 +170,8 @@ class Toprow:
         self.id_part = id_part
         self.is_img2img = is_img2img
         self.is_compact = is_compact
+        self.staging_created = False
+        self.stage_manager = img2img_stage_manager
 
         if not is_compact:
             with gr.Row(elem_id=f"{id_part}_toprow", variant="compact"):
@@ -79,6 +206,7 @@ class Toprow:
             return
 
         self.submit_box.render()
+        self.create_staging_panel()
 
     def create_prompts(self):
         def preset_choices():
@@ -207,10 +335,30 @@ class Toprow:
             self.interrupting.click(fn=interrupt_function)
 
         if not self.is_compact:
+            self.create_staging_panel()
+
             gr.HTML(
                 value=f"<div id=\"{self.id_part}_compare_dropzone\" class=\"prompt-compare-dropzone\" data-tabname=\"{self.id_part}\">Drop .txt or image here to compare against current prompt/settings</div>",
                 elem_id=f"{self.id_part}_compare_dropzone_wrap",
             )
+
+    def create_staging_panel(self):
+        """Stage panel below the Generate button (img2img only). Wiring happens in modules/ui.py."""
+        if not self.is_img2img or self.staging_created:
+            return
+
+        self.staging_created = True
+
+        with gr.Group(elem_id=f"{self.id_part}_staging_panel", elem_classes=["img2img-staging-panel"]):
+            with gr.Row(elem_id=f"{self.id_part}_staging_toolbar"):
+                self.staging_add_btn = gr.Button("➕ Add stage", elem_id=f"{self.id_part}_stage_add", size="sm", tooltip="Capture current prompt/settings into a stage")
+
+            self.staging_list_html = gr.HTML(value=self.stage_manager.list_html(), elem_id=f"{self.id_part}_stage_list_wrap")
+
+            self.staging_payload = gr.Textbox(value="", visible=False, elem_id=f"{self.id_part}_stage_payload")
+            self.staging_capture_btn = gr.Button(visible=False, elem_id=f"{self.id_part}_stage_capture_btn")
+            self.staging_apply_btn = gr.Button(visible=False, elem_id=f"{self.id_part}_stage_apply_btn")
+            self.staging_drop_btn = gr.Button(visible=False, elem_id=f"{self.id_part}_stage_drop_btn")
 
     def create_tools_row(self):
         with gr.Row(elem_id=f"{self.id_part}_tools"):

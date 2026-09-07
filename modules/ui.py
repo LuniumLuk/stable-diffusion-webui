@@ -673,7 +673,7 @@ def create_ui():
                     elif category == "dimensions":
                         with FormRow():
                             with gr.Column(elem_id="img2img_column_size", scale=4):
-                                selected_scale_tab = gr.Number(value=0, visible=False)
+                                selected_scale_tab = gr.Number(value=0, visible=False, elem_id="img2img_selected_scale_tab")
 
                                 with gr.Tabs(elem_id="img2img_tabs_resize"):
                                     with gr.Tab(label="Resize to", id="to", elem_id="img2img_tab_resize_to") as tab_scale_to:
@@ -710,6 +710,16 @@ def create_ui():
 
                             tab_scale_to.select(fn=lambda: 0, inputs=[], outputs=[selected_scale_tab])
                             tab_scale_by.select(fn=lambda: 1, inputs=[], outputs=[selected_scale_tab])
+
+                            # When the hidden tab selector changes (user click or stage
+                            # apply), visually switch the Resize To/By tabs accordingly.
+                            selected_scale_tab.change(
+                                fn=None,
+                                _js="syncImg2imgResizeTab",
+                                inputs=[selected_scale_tab],
+                                outputs=[],
+                                show_progress=False,
+                            )
 
                             if opts.dimensions_and_batch_together:
                                 with gr.Column(elem_id="img2img_column_batch"):
@@ -900,6 +910,95 @@ def create_ui():
             )
 
             steps = scripts.scripts_img2img.script('Sampler').steps
+
+            # --- img2img stage panel wiring (capture / apply / drop generation settings) ---
+            stage_sampler_script = scripts.scripts_img2img.script('Sampler')
+            stage_seed_script = scripts.scripts_img2img.script('Seed')
+
+            # Order must match IMG2IMG_STAGE_FIELDS in modules/ui_toprow.py.
+            stage_field_components = [
+                toprow.prompt,
+                toprow.negative_prompt,
+                stage_sampler_script.steps,
+                stage_sampler_script.sampler_name,
+                stage_sampler_script.scheduler,
+                stage_seed_script.seed,
+                cfg_scale,
+                image_cfg_scale,
+                width,
+                height,
+                selected_scale_tab,
+                scale_by,
+                batch_count,
+                batch_size,
+                denoising_strength,
+                resize_mode,
+                mask_blur,
+                inpainting_mask_invert,
+                inpainting_fill,
+                inpaint_full_res,
+                inpaint_full_res_padding,
+            ]
+
+            toprow.staging_add_btn.click(
+                fn=None,
+                _js="openImg2imgStagePopup",
+                inputs=[],
+                outputs=[],
+                show_progress=False,
+            )
+
+            toprow.staging_capture_btn.click(
+                fn=toprow.stage_manager.capture,
+                inputs=[toprow.staging_payload] + stage_field_components,
+                outputs=[toprow.staging_list_html, toprow.staging_payload],
+                show_progress=False,
+            )
+
+            def apply_stage(payload):
+                """Apply a stored stage to the img2img fields.
+
+                Index-typed radios store/return indexes internally, but Gradio's
+                frontend expects the choice label as the radio value, so convert
+                indexes back to labels here.
+                """
+                name = str(payload or "").strip()
+                stage = toprow.stage_manager.stages.get(name) or {}
+
+                updates = []
+                for key, comp in zip(ui_toprow.IMG2IMG_STAGE_KEYS, stage_field_components):
+                    if key not in stage:
+                        updates.append(gr.update())
+                        continue
+
+                    value = ui_toprow.stage_update_value(key, stage[key], comp)
+                    if value is None:
+                        updates.append(gr.update())
+                    else:
+                        updates.append(gr.update(value=value))
+                return updates
+
+            toprow.staging_apply_btn.click(
+                fn=apply_stage,
+                inputs=[toprow.staging_payload],
+                outputs=stage_field_components,
+                show_progress=False,
+            )
+
+            toprow.staging_drop_btn.click(
+                fn=toprow.stage_manager.drop,
+                inputs=[toprow.staging_payload],
+                outputs=[toprow.staging_list_html],
+                show_progress=False,
+            )
+
+            # On page (re)load, refresh the stage list from the in-memory manager.
+            img2img_interface.load(
+                fn=toprow.stage_manager.list_html,
+                inputs=[],
+                outputs=[toprow.staging_list_html],
+                show_progress=False,
+            )
 
             toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_token_counter), inputs=[toprow.prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.token_counter])
             toprow.ui_styles.dropdown.change(fn=wrap_queued_call(update_negative_prompt_token_counter), inputs=[toprow.negative_prompt, steps, toprow.ui_styles.dropdown], outputs=[toprow.negative_token_counter])

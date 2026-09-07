@@ -583,6 +583,144 @@ input[type="checkbox"].input-accordion-checkbox{
     color: #cbd5e1;
 }
 
+/* img2img staging panel (below Generate button) */
+.img2img-staging-panel {
+    padding: 6px 8px;
+    background: var(--panel-background-fill, rgba(255, 255, 255, 0.03));
+    border: 1px solid var(--border-color-primary, rgba(255, 255, 255, 0.08));
+    border-radius: 8px;
+}
+
+.img2img-staging-panel .img2img-stage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.img2img-stage-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--input-background-fill, rgba(255, 255, 255, 0.05));
+    border-radius: 6px;
+    padding: 3px 8px;
+}
+
+.img2img-stage-idx {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--body-text-color-subdued, #9a9a9a);
+    font-size: 10px;
+}
+
+.img2img-stage-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+.img2img-stage-btn {
+    cursor: pointer;
+    border: 1px solid var(--border-color-primary, rgba(255, 255, 255, 0.15));
+    border-radius: 4px;
+    background: transparent;
+    color: var(--body-text-color, #d0d0d0);
+    font-size: 11px;
+    padding: 2px 8px;
+}
+
+.img2img-stage-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.img2img-stage-btn.apply {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.4);
+}
+
+.img2img-stage-btn.drop {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.4);
+}
+
+.img2img-stage-empty {
+    font-size: 12px;
+    color: var(--body-text-color-subdued, #8a8a8a);
+}
+
+/* stage popup */
+.img2img-stage-popup {
+    min-width: 340px;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.img2img-stage-popup h3 {
+    margin: 0;
+}
+
+.img2img-stage-popup-name-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.img2img-stage-popup-name-row input {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color-primary, rgba(255, 255, 255, 0.15));
+    background: var(--input-background-fill, rgba(255, 255, 255, 0.05));
+    color: var(--body-text-color, #d0d0d0);
+}
+
+.img2img-stage-popup-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+    max-height: 52vh;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.img2img-stage-popup-field {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.img2img-stage-popup-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.img2img-stage-popup-buttons button {
+    cursor: pointer;
+    border-radius: 6px;
+    border: 1px solid var(--border-color-primary, rgba(255, 255, 255, 0.15));
+    padding: 6px 14px;
+}
+
+.img2img-stage-popup-buttons .img2img-stage-popup-apply {
+    background: var(--primary-600, #4f8ef7);
+    border-color: transparent;
+    color: white;
+}
+
 .prompt-compare-popup {
     width: min(1680px, calc(100vw - 32px));
     max-width: 100%;
@@ -1357,6 +1495,10 @@ table.popup-table .link{
 .modalControls span:hover, .modalControls span:focus{
     color: #999;
     text-decoration: none;
+}
+
+.modalControls .modalCompare.active{
+    color: #4ade80;
 }
 
 #lightboxModal > img {

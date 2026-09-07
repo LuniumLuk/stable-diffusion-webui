@@ -12,6 +12,9 @@ let _modalDragOriginY  = 0;
 let _modalDragMoved    = false;  // true if cursor moved >3px during drag
 let _modalImageNaturalW = 0;
 let _modalImageNaturalH = 0;
+let _modalCompareActive = false; // true while the modal shows the img2img input image
+let _modalResultSrc = null;      // the generated (result) image currently opened
+let _modalInputSrc = null;       // img2img input image src used for compare
 
 function _modalApplyTransform() {
     const img = gradioApp().getElementById('modalImage');
@@ -41,6 +44,57 @@ function _modalFitToViewport(img) {
     _modalApplyTransform();
 }
 
+function _updateModalCompareButton() {
+    const btn = gradioApp().getElementById('modalCompare');
+    if (!btn) return;
+    btn.classList.toggle('active', _modalCompareActive);
+    btn.title = _modalCompareActive ? 'Show result image (C)' : 'Compare with input image (C)';
+}
+
+function _findImg2imgInputImage() {
+    const mode = gradioApp().getElementById('mode_img2img');
+    if (!mode) return null;
+
+    // Look for the image inside the currently visible img2img sub-tab.
+    const panels = Array.from(mode.children || []);
+    for (const panel of panels) {
+        if (panel.style.display === 'block') {
+            const img = panel.querySelector('img');
+            if (img && img.src) return img;
+        }
+    }
+
+    const any = mode.querySelector('img');
+    return any && any.src ? any : null;
+}
+
+function _prepareModalCompare() {
+    const compareBtn = gradioApp().getElementById('modalCompare');
+    const tabImg2Img = gradioApp().getElementById('tab_img2img');
+    _modalCompareActive = false;
+    _modalInputSrc = null;
+
+    if (!compareBtn) return;
+
+    const onImg2img = tabImg2Img && tabImg2Img.style.display !== 'none';
+    if (!onImg2img) {
+        compareBtn.style.display = 'none';
+        _updateModalCompareButton();
+        return;
+    }
+
+    const inputImg = _findImg2imgInputImage();
+    if (!inputImg) {
+        compareBtn.style.display = 'none';
+        _updateModalCompareButton();
+        return;
+    }
+
+    _modalInputSrc = inputImg.src;
+    compareBtn.style.display = 'inline';
+    _updateModalCompareButton();
+}
+
 function closeModal() {
     gradioApp().getElementById("lightboxModal").style.display = "none";
     _modalDragging = false;
@@ -53,6 +107,8 @@ function showModal(event) {
     modalToggleLivePreviewBtn.innerHTML = opts.js_live_preview_in_modal_lightbox ? "&#x1F5C7;" : "&#x1F5C6;";
     const lb = gradioApp().getElementById("lightboxModal");
     modalImage.src = source.src;
+    _modalResultSrc = source.src;
+    _prepareModalCompare();
     if (modalImage.style.display === 'none') {
         lb.style.setProperty('background-image', 'url(' + source.src + ')');
     }
@@ -82,14 +138,20 @@ function negmod(n, m) {
 function updateOnBackgroundChange() {
     const modalImage = gradioApp().getElementById("modalImage");
     if (modalImage && modalImage.offsetParent) {
+        if (_modalCompareActive) {
+            _modalCompareActive = false;
+            _updateModalCompareButton();
+        }
         let currentButton = selected_gallery_button();
         let preview = gradioApp().querySelectorAll('.livePreview > img');
         if (opts.js_live_preview_in_modal_lightbox && preview.length > 0) {
             // show preview image if available
             modalImage.src = preview[preview.length - 1].src;
+            _modalResultSrc = modalImage.src;
             _modalFitToViewport(modalImage);
         } else if (currentButton?.children?.length > 0 && modalImage.src != currentButton.children[0].src) {
             modalImage.src = currentButton.children[0].src;
+            _modalResultSrc = modalImage.src;
             _modalFitToViewport(modalImage);
             if (modalImage.style.display === 'none') {
                 const modal = gradioApp().getElementById("lightboxModal");
@@ -111,6 +173,8 @@ function modalImageSwitch(offset) {
             const modalImage = gradioApp().getElementById("modalImage");
             const modal = gradioApp().getElementById("lightboxModal");
             modalImage.src = nextButton.children[0].src;
+            _modalResultSrc = modalImage.src;
+            _prepareModalCompare();
             _modalFitToViewport(modalImage);
             if (modalImage.style.display === 'none') {
                 modal.style.setProperty('background-image', `url(${modalImage.src})`);
@@ -161,6 +225,10 @@ function modalKeyHandler(event) {
         break;
     case "ArrowRight":
         modalNextImage(event);
+        break;
+    case "c":
+    case "C":
+        modalCompareToggle(event);
         break;
     case "Escape":
         closeModal();
@@ -256,6 +324,69 @@ function modalTileImageToggle(event) {
     event.stopPropagation();
 }
 
+function modalCompareToggle(event) {
+    if (event) event.stopPropagation();
+
+    const modalImage = gradioApp().getElementById("modalImage");
+    if (!modalImage) return;
+
+    // Toggle back to the result image.
+    if (_modalCompareActive) {
+        _modalCompareActive = false;
+        modalImage.style.display = 'block';
+        modalImage.src = _modalResultSrc;
+        _modalApplyTransform();
+        _updateModalCompareButton();
+        return;
+    }
+
+    if (!_modalInputSrc) return;
+
+    const targetW = modalImage.naturalWidth || _modalImageNaturalW;
+    const targetH = modalImage.naturalHeight || _modalImageNaturalH;
+
+    _modalCompareActive = true;
+    _updateModalCompareButton();
+
+    const showInput = function(src) {
+        const current = gradioApp().getElementById("modalImage");
+        if (!current || !_modalCompareActive) return;
+        current.style.display = 'block';
+        current.src = src;
+        // Keep the current zoom/pan so the comparison is aligned instead of
+        // resetting to the default fit on every toggle.
+        _modalApplyTransform();
+    };
+
+    if (!targetW || !targetH) {
+        showInput(_modalInputSrc);
+        return;
+    }
+
+    // Resize the input image to the result resolution when they don't match.
+    const probe = new Image();
+    probe.onload = function() {
+        if (probe.naturalWidth === targetW && probe.naturalHeight === targetH) {
+            showInput(_modalInputSrc);
+            return;
+        }
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = targetW;
+            canvas.height = targetH;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(probe, 0, 0, targetW, targetH);
+            showInput(canvas.toDataURL('image/png'));
+        } catch (err) {
+            showInput(_modalInputSrc);
+        }
+    };
+    probe.onerror = function() {
+        showInput(_modalInputSrc);
+    };
+    probe.src = _modalInputSrc;
+}
+
 onAfterUiUpdate(function() {
     var fullImg_preview = gradioApp().querySelectorAll('.gradio-gallery > div > img');
     if (fullImg_preview != null) {
@@ -290,6 +421,15 @@ document.addEventListener("DOMContentLoaded", function() {
     modalTileImage.title = "Preview tiling";
     modalControls.appendChild(modalTileImage);
 
+    const modalCompare = document.createElement('span');
+    modalCompare.className = 'modalCompare cursor';
+    modalCompare.id = 'modalCompare';
+    modalCompare.innerHTML = '&#8646;';
+    modalCompare.addEventListener('click', modalCompareToggle, true);
+    modalCompare.title = 'Compare with input image (C)';
+    modalCompare.style.display = 'none';
+    modalControls.appendChild(modalCompare);
+
     const modalSave = document.createElement("span");
     modalSave.className = "modalSave cursor";
     modalSave.id = "modal_save";
@@ -320,6 +460,14 @@ document.addEventListener("DOMContentLoaded", function() {
     modalImage.style.transformOrigin = 'center center';
     modalImage.style.transition = 'none';
     modalImage.addEventListener('keydown', modalKeyHandler, true);
+
+    // Track the natural size of whatever image is currently shown so the
+    // 1:1 zoom toggle works after compare switches without refitting.
+    modalImage.addEventListener('load', function() {
+        _modalImageNaturalW = modalImage.naturalWidth || _modalImageNaturalW;
+        _modalImageNaturalH = modalImage.naturalHeight || _modalImageNaturalH;
+        _modalApplyTransform();
+    });
 
     // ── Wheel zoom (cursor-anchored) ──────────────────────────
     modalImage.addEventListener('wheel', function(e) {
