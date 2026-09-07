@@ -240,7 +240,7 @@ def _retry_delay(exc, attempt: int) -> int:
     return 2 ** (attempt + 1)
 
 
-def with_retry(fn, what: str, retries: int = 3):
+def with_retry(fn, what: str, retries: int = 3, quiet: bool = False):
     for attempt in range(retries + 1):
         try:
             return fn()
@@ -248,12 +248,13 @@ def with_retry(fn, what: str, retries: int = 3):
             if attempt >= retries:
                 raise
             delay = _retry_delay(exc, attempt)
-            when = "immediately" if delay == 0 else f"in {delay}s"
-            print(
-                f"[image_maker] {what} failed (attempt {attempt + 1}/{retries + 1}): "
-                f"{str(exc)[:160]} — retrying {when}",
-                flush=True,
-            )
+            if not quiet:
+                when = "immediately" if delay == 0 else f"in {delay}s"
+                print(
+                    f"[image_maker] {what} failed (attempt {attempt + 1}/{retries + 1}): "
+                    f"{str(exc)[:160]} — retrying {when}",
+                    flush=True,
+                )
             if delay:
                 time.sleep(delay)
 
@@ -412,10 +413,10 @@ def run_stage(stage: str, prompt_text: str, grid, refs, args, api_key: str,
     size = args.image_size
 
     def do_variation(v):
-        """One variation job: generate, split, and describe the outputs."""
+        """One variation job: generate, split, and describe the outputs.
+        Console stays quiet during retries and prints exactly ONE status
+        line per variation at the end (ok / BLOCKED / FAILED)."""
         sheet_path = os.path.join(out_dir, f"{sheet_name}_v{v:02d}.png")
-        print(f"[image_maker] {stage} variation {v}/{args.variations}: "
-              f"generating ({len(refs)} reference images) ...", flush=True)
 
         def job():
             # A FRESH client per attempt: when a direct connection fails and
@@ -428,26 +429,29 @@ def run_stage(stage: str, prompt_text: str, grid, refs, args, api_key: str,
                                   refs, sheet_path, aspect, size)
 
         try:
-            with_retry(job, f"{stage} variation {v}", args.retries)
+            with_retry(job, f"{stage} variation {v}", args.retries,
+                       quiet=True)
         except Exception as exc:  # noqa: BLE001 - report and move on
-            print(f"[image_maker] {stage} variation {v} FAILED after retries: "
-                  f"{exc}", flush=True)
+            kind = classify_error(exc)
+            label = "BLOCKED" if kind == "blocked" else "FAILED"
+            print(f"[image_maker] {stage} v{v:02d} {label}: "
+                  f"{str(exc)[:140]}", flush=True)
             return {"ok": False, "v": v, "error": str(exc)}
-        print(f"[image_maker] {stage} variation {v} -> {sheet_path}",
-              flush=True)
         items = []
         if grid is None:
             caption = make_caption(args, stage, STAGE_TAGS.get(stage, ""))
             items.append({"tile": sheet_path, "panel": "full",
                           "caption": caption})
+            print(f"[image_maker] {stage} v{v:02d} ok -> "
+                  f"{os.path.basename(sheet_path)}", flush=True)
         else:
             tile_dir = os.path.join(out_dir, f"tiles_{out_name}")
             os.makedirs(tile_dir, exist_ok=True)
             tiles = split_grid(sheet_path, cols, rows, args.grid_padding,
                                tile_dir, v)
-            print(f"[image_maker] {stage} variation {v} split into "
-                  f"{cols}x{rows} grid -> {len(tiles)} tiles "
-                  f"(padding {args.grid_padding}px)", flush=True)
+            print(f"[image_maker] {stage} v{v:02d} ok -> "
+                  f"{os.path.basename(sheet_path)} ({len(tiles)} tiles)",
+                  flush=True)
             for i, tile_path in enumerate(tiles):
                 r, c = divmod(i, cols)
                 panel_tags = panels.get((r + 1, c + 1),
@@ -467,9 +471,8 @@ def run_stage(stage: str, prompt_text: str, grid, refs, args, api_key: str,
         if workers < 1:
             workers = min(len(variations), 8)
         delay = max(0.0, float(getattr(args, "parallel_delay", 1.0)))
-        print(f"[image_maker] {stage}: parallel run - {len(variations)} "
-              f"variations, {workers} workers, {delay}s launch delay",
-              flush=True)
+        print(f"[image_maker] {stage}: {len(variations)} variations, "
+              f"{workers} workers, {delay}s launch delay", flush=True)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = []
             for v in variations:
@@ -478,6 +481,8 @@ def run_stage(stage: str, prompt_text: str, grid, refs, args, api_key: str,
                     time.sleep(delay)
             results = [f.result() for f in futures]
     else:
+        print(f"[image_maker] {stage}: generating {len(variations)} "
+              f"variation(s)", flush=True)
         results = [do_variation(v) for v in variations]
 
     for res in results:
@@ -652,6 +657,65 @@ def selftest() -> int:
         shutil.rmtree(work, ignore_errors=True)
     print("[selftest] " + ("ALL OK" if ok else "FAILED"))
     return 0 if ok else 1
+
+
+# ---------------------------------------------------------------------------
+# Compact run summary (success / blocked / other failures)
+# ---------------------------------------------------------------------------
+_BLOCK_WORDS = ("blocked", "unsafe", "safety", "inappropriate", "flagged",
+                "recitation")
+
+
+def classify_error(message) -> str:
+    low = str(message).lower()
+    return "blocked" if any(w in low for w in _BLOCK_WORDS) else "other"
+
+
+def cells_for_record(record) -> int:
+    grid = record.get("grid")
+    return grid[0] * grid[1] if grid else 1
+
+
+def summarize_run(stage_records):
+    """Compress stage records into count-only summaries.
+
+    Returns (summary, stage_rows, failure_rows) where
+      summary   = {"expected", "succeeded", "blocked", "failed_other"}
+      stage_rows= per-stage counts
+      failure_rows = grouped failure reasons (kind, count, example)
+    """
+    totals = {"expected": 0, "succeeded": 0, "blocked": 0, "failed_other": 0}
+    stage_rows, failure_map = [], {}
+    for rec in stage_records:
+        cells = cells_for_record(rec)
+        expected = cells * rec.get("variations", 1)
+        succeeded = len(rec.get("images", []))
+        blocked = other = 0
+        for _v, msg in rec.get("errors", []):
+            kind = classify_error(msg)
+            if kind == "blocked":
+                blocked += cells
+            else:
+                other += cells
+            key = (kind, str(msg)[:160])
+            failure_map[key] = failure_map.get(key, 0) + cells
+        stage_rows.append({
+            "stage": rec.get("stage"),
+            "grid": rec.get("grid"),
+            "expected": expected,
+            "succeeded": succeeded,
+            "blocked": blocked,
+            "failed_other": other,
+        })
+        totals["expected"] += expected
+        totals["succeeded"] += succeeded
+        totals["blocked"] += blocked
+        totals["failed_other"] += other
+    failures = []
+    for (kind, example), count in sorted(failure_map.items(),
+                                         key=lambda kv: -kv[1]):
+        failures.append({"kind": kind, "count": count, "example": example})
+    return totals, stage_rows, failures
 
 
 # ---------------------------------------------------------------------------
@@ -915,9 +979,12 @@ def main() -> int:
             stage_records.append(rec)
             errors.extend(rec["errors"])
 
-        images = [img for rec in stage_records for img in rec["images"]]
+        summary, stage_rows, failures = summarize_run(stage_records)
         ok = not errors
-        result = {
+
+        # Full detail goes to the manifest file; stdout stays compact.
+        detail = {
+            "created": datetime.datetime.now().isoformat(timespec="seconds"),
             "ok": ok,
             "trigger": args.trigger,
             "outfit": args.outfit or None,
@@ -925,16 +992,24 @@ def main() -> int:
             "output_dir": out_dir,
             "training_dir": training_dir,
             "stages": stage_records,
-            "total_images": len(images),
+            "total_images": summary["succeeded"],
         }
+        manifest_path = os.path.join(out_dir, "manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(detail, f, ensure_ascii=False, indent=2)
         if training_dir:
-            manifest = dict(result)
-            manifest["created"] = datetime.datetime.now().isoformat(timespec="seconds")
-            with open(os.path.join(training_dir, "manifest.json"), "w",
-                      encoding="utf-8") as f:
-                json.dump(manifest, f, ensure_ascii=False, indent=2)
-        if errors:
-            result["errors"] = errors
+            shutil.copy2(manifest_path, os.path.join(training_dir,
+                                                     "manifest.json"))
+
+        result = {
+            "ok": ok,
+            "trigger": args.trigger,
+            "output_dir": out_dir,
+            "training_dir": training_dir,
+            "summary": summary,
+            "stages": stage_rows,
+            "failures": failures,
+        }
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return 0 if ok else 1
 

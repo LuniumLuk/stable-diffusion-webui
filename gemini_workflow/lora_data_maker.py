@@ -69,6 +69,7 @@ from image_maker import (  # noqa: E402 - shared pipeline helpers
     parse_panels,
     ref_images_from_args,
     infer_trigger,
+    summarize_run,
 )
 
 _ROOT_DIR = os.path.dirname(_WORKFLOW_DIR)
@@ -1165,25 +1166,36 @@ def main() -> int:
             stage_records.append(rec)
             errors.extend(rec["errors"])
 
-        images = [img for rec in stage_records for img in rec["images"]]
+        summary, stage_rows, failures = summarize_run(stage_records)
         ok = not errors
-        result = {
+
+        # Full detail goes to the manifest file; stdout stays compact.
+        detail = {
+            "created": datetime.datetime.now().isoformat(timespec="seconds"),
             "ok": ok,
             "trigger": args.trigger,
             "seed": args.seed,
             "image_model": args.image_model,
             "output_dir": raw_dir,
             "result_dir": result_dir,
+            "summary": summary,
             "stages": stage_records,
-            "total_images": len(images),
+            "failures": failures,
+            "total_images": summary["succeeded"],
         }
-        manifest = dict(result)
-        manifest["created"] = datetime.datetime.now().isoformat(timespec="seconds")
         with open(os.path.join(raw_dir, "manifest.json"), "w",
                   encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-        if errors:
-            result["errors"] = errors
+            json.dump(detail, f, ensure_ascii=False, indent=2)
+
+        result = {
+            "ok": ok,
+            "trigger": args.trigger,
+            "output_dir": raw_dir,
+            "result_dir": result_dir,
+            "summary": summary,
+            "stages": stage_rows,
+            "failures": failures,
+        }
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return 0 if ok else 1
 
