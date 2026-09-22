@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen-Image-2.1 — Local Deployment &amp; Best Practices Guide</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel2: #1d2129;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #7c9cff;
+    --accent2: #66d9a3;
+    --warn: #f2b84b;
+    --bad: #ef7a7a;
+    --border: #2a2f3a;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 "Segoe UI", system-ui, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #1b2340, #10131a 60%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 28px;
+    margin-bottom: 26px;
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: .3px; }
+  header.hero .sub { color: var(--muted); margin: 0; font-size: 14px; }
+  header.hero .tags { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  }
+  h2 {
+    font-size: 21px; margin: 34px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 16px; margin: 22px 0 8px; color: var(--accent); }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code {
+    font-family: var(--mono); font-size: 13px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+  }
+  pre {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: 0; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--muted); font-weight: 600; }
+  tr:nth-child(even) td { background: var(--panel); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; margin: 14px 0;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .do { border-left: 3px solid var(--accent2); }
+  .dont { border-left: 3px solid var(--bad); }
+  .tip { border-left: 3px solid var(--accent); }
+  .warn { border-left: 3px solid var(--warn); }
+  .do h4, .dont h4, .tip h4, .warn h4 { margin: 0 0 8px; font-size: 14px; }
+  .do h4 { color: var(--accent2); }
+  .dont h4 { color: var(--bad); }
+  .tip h4 { color: var(--accent); }
+  .warn h4 { color: var(--warn); }
+  .muted { color: var(--muted); }
+  .kbd { font-family: var(--mono); font-size: 12px; }
+  .pill {
+    display: inline-block; font-size: 11px; border-radius: 6px; padding: 1px 7px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+    margin-right: 6px;
+  }
+  footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  .toc { columns: 2; column-gap: 26px; font-size: 14px; }
+  @media (max-width: 760px) { .toc { columns: 1; } }
+  .toc a { text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Qwen-Image-2.1</h1>
+  <p class="sub">Prompting, sampling &amp; editing best practices + local deployment notes.
+  Compiled 2026-09-22 from the official Qwen guidance (GitHub / model card / PE system prompts),
+  ComfyUI docs, stable-diffusion.cpp docs, LightX2V, plus benchmarks measured on this machine
+  (RTX 5070 Ti 16&nbsp;GB, GGUF Q4_K_M).</p>
+  <div class="tags">
+    <span class="tag">7B DiT · 32 single-stream layers</span>
+    <span class="tag">Qwen3-VL-8B text encoder</span>
+    <span class="tag">native 2K · RGBA transparency</span>
+    <span class="tag">t2i + editing in one model</span>
+    <span class="tag">Qwen Research License</span>
+  </div>
+</header>
+
+<nav class="card">
+  <b>Contents</b>
+  <div class="toc">
+    <a href="#quickref">1. Quick reference</a><br>
+    <a href="#model">2. What the model is</a><br>
+    <a href="#prompting">3. Prompting (text-to-image)</a><br>
+    <a href="#text">4. Text inside images</a><br>
+    <a href="#negative">5. Negative prompts</a><br>
+    <a href="#size">6. Resolution &amp; aspect ratios</a><br>
+    <a href="#sampling">7. Sampler / CFG / steps</a><br>
+    <a href="#edit">8. Image editing</a><br>
+    <a href="#local">9. This machine's setup</a><br>
+    <a href="#sources">10. Sources</a>
+  </div>
+</nav>
+
+<h2 id="quickref">1 · Quick reference</h2>
+
+<table>
+  <tr><th>Setting</th><th>Recommendation</th></tr>
+  <tr><td><b>Prompt style</b></td>
+      <td>One long, literal <b>description of the finished image</b> (English, ~15–25 sentences / 300–500 words). Observer voice, present tense, no instructions, no “masterpiece / 8K / highly detailed”.</td></tr>
+  <tr><td><b>Prompt skeleton</b></td>
+      <td>Opening line: medium + style + subject + background/palette → walk the frame (top→bottom, left→centre→right) → lighting sentence → one closing composition sentence.</td></tr>
+  <tr><td><b>Negative prompt</b></td>
+      <td><b>Leave empty.</b> The official prompt-enhancer models never produce one, and ComfyUI’s templates run with CFG&nbsp;=&nbsp;1 (no negative guidance). Only relevant if you run true CFG (e.g. sd.cpp) — then keep it very short.</td></tr>
+  <tr><td><b>Image size</b></td>
+      <td>Native 2K (2048-class buckets, see §6). Use 1K only for drafts/iteration. Dimensions must be divisible by 32 in most stacks.</td></tr>
+  <tr><td><b>Sampler / scheduler</b></td>
+      <td><code>euler</code> + flow-matching schedule (<code>simple</code> in ComfyUI; automatic in sd.cpp/diffusers).</td></tr>
+  <tr><td><b>Steps</b></td>
+      <td>Official default <b>40</b>; ComfyUI templates use 25; locally verified good results at 20. More steps = fine detail; ~20 is the practical local default.</td></tr>
+  <tr><td><b>CFG</b></td>
+      <td>Per stack: ComfyUI <b>1</b> (disabled), diffusers/SGLang default, sd.cpp example <b>6.0</b> (<code>--cfg-scale 6.0</code>, verified on this machine).</td></tr>
+  <tr><td><b>Editing prompt</b></td>
+      <td>Lead with the <b>operation</b> (“Replace…”, “Change…”), address references as <code>&lt;image1&gt;</code>, <code>&lt;image2&gt;</code>, add one preservation clause (“keep X unchanged”).</td></tr>
+  <tr><td><b>Seed</b></td>
+      <td>42 in all official examples. Edits compose better when re-seeding between steps of a sequence (local edits stack).</td></tr>
+</table>
+
+<h2 id="model">2 · What the model is</h2>
+<div class="card">
+<ul>
+  <li><b>Architecture:</b> single-stream DiT, 32 layers, 7B parameters; block-causal attention (text token-level causal, image chunks bidirectional); flow matching with Euler discrete scheduling + dynamic shifting.</li>
+  <li><b>Text encoder:</b> Qwen3-VL-8B — encodes both text instructions and condition images into one representation. (Editing <i>requires</i> the vision part — mmproj weights in GGUF terms.)</li>
+  <li><b>VAE:</b> 64-channel RGBA autoencoder, 16× spatial compression → native transparency support.</li>
+  <li><b>One model, both jobs:</b> text-to-image generation and instruction-based editing share the same weights; no checkpoint swap.</li>
+  <li><b>Editing powers:</b> up to 10 reference images, local edits via circles / painted marks / separate masks, identity + product fidelity, outpainting, panorama / storyboard / infographic tasks.</li>
+  <li><b>Prefix KV cache:</b> reference images + instruction are encoded once at step 1 and cached for all denoising steps — this is why editing with several refs stays fast.</li>
+</ul>
+</div>
+
+<h2 id="prompting">3 · Prompting (text-to-image)</h2>
+<p>Qwen publishes two official “prompt enhancer” (PE) models (<code>Qwen-Image-2.1-PE-T2I</code>,
+<code>Qwen-Image-2.1-PE-I2I</code>) whose system prompts spell out exactly what the image model
+wants. The rules below are distilled from those prompts — you can follow them by hand.</p>
+
+<div class="card tip">
+<h4>The shape of a good prompt (official structure)</h4>
+<ol>
+  <li><b>Opening sentence (~20 words):</b> medium + style + subject + background/palette, and usually orientation.
+      <pre><code>The image is a vertical realistic photograph of a samurai walking a rainy
+old-town street at dusk, lantern light on wet stone, deep blue and amber palette.</code></pre></li>
+  <li><b>Background/surface next</b> — not at the end. What the scene sits on, how far it falls off.</li>
+  <li><b>Walk the frame in order</b> — for scenes with several regions: top band → left, centre, right → bottom band.
+      For one dominant subject: background → pose/placement → head/face → body &amp; garments → what it holds → edge details.
+      Roughly a third of sentences should start with a positional phrase (“On the right side of the frame, …”).</li>
+  <li><b>Use 8–14 positional phrases</b> (“upper-left”, “across the top”, “lower third”, “behind the left shoulder”) — they must reach corners, edges and centre.</li>
+  <li><b>Lighting gets its own sentence</b> — source, direction, quality, and the shadows/highlights it leaves.</li>
+  <li><b>Close with ONE summary sentence:</b> “The overall composition / mood / palette …” covering balance, palette, style, mood. Exactly one.</li>
+</ol>
+</div>
+
+<div class="grid2">
+  <div class="card do">
+    <h4>✔ Do</h4>
+    <ul>
+      <li>Write in <b>English</b> (description prose), present tense, third person, declarative — like an observer describing a picture you are looking at.</li>
+      <li>Name <b>materials</b> (brushed metal, coarse linen, weathered wood) and colours with modifiers (deep navy, muted olive) — almost never bare colours.</li>
+      <li><b>Enumerate, never summarise</b>: “three paper lanterns”, not “some decorations”.</li>
+      <li>For people: posture, gaze, expression, hair, skin tone, each garment + colour/material. Age as life stage (“young adult”), never a number.</li>
+      <li>Objects by class (“a silver laptop”), brands only if you mean that brand.</li>
+      <li>Aim ~15–25 sentences / 300–500 words. A short brief should become a full description — density is the point.</li>
+      <li>Hedge what is genuinely ambiguous (“a notebook or a tablet”) — the model reads it as plausible variety.</li>
+    </ul>
+  </div>
+  <div class="card dont">
+    <h4>✘ Don’t</h4>
+    <ul>
+      <li><b>No quality boosters</b> — “masterpiece, best quality, 8K, highly detailed, award-winning” do nothing (or hurt); the PE prompts explicitly ban them.</li>
+      <li>No instruction voice — “create”, “make sure”, “you should” — the prompt describes, it does not command.</li>
+      <li>No tag-soup comma lists (SD1.5/SDXL habits). Write sentences.</li>
+      <li>Don’t put resolution or ratios in the prompt text (“2K”, “16:9”) — target ratio belongs in the size fields, not the words.</li>
+      <li>Don’t leave the frame half-invented: name every element’s place; avoid “various”, “several”, “etc.”</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card">
+<h4>Short prompt → full prompt (official rewriting example)</h4>
+<p class="muted">Input: <code>a corgi playing guitar in the rain</code></p>
+<p>Output shape: a single dense paragraph — opening line fixes medium/style/subject/palette; then the
+scene is walked region by region; the rain, puddles and reflections are physical (shadows away from the light,
+wet surfaces reflect); the lighting sentence names direction and quality; final sentence covers composition and mood.</p>
+<p class="muted">The official rewriter also picks the ratio: <b>3:2 default for horizontal, 2:3 default for vertical</b>; 1:1 for
+icons/emblems/album covers; 16:9 for cinematic/presentation; 9:16 for phone banners.</p>
+</div>
+
+<h2 id="text">4 · Text inside images</h2>
+<div class="card">
+<ul>
+  <li>The model renders typography well — short strings, headlines, signage, UI mock text all work.</li>
+  <li><b>Quote the literal text</b> with straight double quotes: <code>a bold black headline across the top reads "SUMMER SALE"</code>. Text in the output stays in its own script (Chinese stays Chinese).</li>
+  <li>Give weight, colour, case and relative size; describe a line break as “a second line”, not a real newline.</li>
+  <li>If text is <i>not</i> meant to be read (distant signage, fine print) call it “blurred / indistinct / too small to read” instead of inventing letters.</li>
+  <li>Charts/tables/dashboards: treat axis labels, legends and cell values as text too — write them out.</li>
+  <li>sd.cpp note: quoted strings are preserved verbatim in practice (our edit test changed a sign’s text successfully).</li>
+</ul>
+</div>
+
+<h2 id="negative">5 · Negative prompts</h2>
+<div class="card warn">
+<p><b>Default: leave the negative prompt empty.</b></p>
+<ul>
+  <li>The official PE models <b>never emit a negative prompt</b> — their output schema even keeps the field only for tool compatibility, always <code>""</code>.</li>
+  <li>ComfyUI’s official Qwen-Image-2.1 workflows run <b>CFG = 1</b> (no classifier-free guidance), so the negative prompt does nothing there.</li>
+  <li>In setups that <i>do</i> run true CFG (stable-diffusion.cpp at <code>--cfg-scale 6.0</code>), a negative prompt technically acts — but the model was not tuned for one. If you must, keep it short and generic; don’t port SDXL negative tag essays.</li>
+  <li>What actually fixes most problems: a more precise positive description (spatial placement, lighting, materials) — see §3.</li>
+</ul>
+</div>
+
+<h2 id="size">6 · Resolution &amp; aspect ratios</h2>
+<p>Qwen-Image-2.1 is <b>trained for ~2K output</b>. The official buckets (all divisible by 32):</p>
+<table>
+  <tr><th>Ratio</th><th>Native (2K)</th><th>Practical 1K (fast draft)</th><th>Use for</th></tr>
+  <tr><td>1:1</td><td>2048×2048</td><td>1024×1024</td><td>square posts, icons, album art</td></tr>
+  <tr><td>3:2</td><td>2528×1696</td><td>1536×1024</td><td>horizontal scenes (default landscape)</td></tr>
+  <tr><td>2:3</td><td>1696×2528</td><td>1024×1536</td><td>portraits, posters (default portrait)</td></tr>
+  <tr><td>4:3</td><td>2400×1792</td><td>—</td><td>tablet, product</td></tr>
+  <tr><td>3:4</td><td>1792×2400</td><td>—</td><td>ID photo, vertical product</td></tr>
+  <tr><td>16:9</td><td>2752×1536</td><td>—</td><td>wallpaper, slides, cinematic</td></tr>
+  <tr><td>9:16</td><td>1536×2752</td><td>—</td><td>phone wallpaper, stories</td></tr>
+</table>
+<ul>
+  <li>Other ratios work if divisible by 32 (sd.cpp rounds/requires ÷32; LightX2V rounds down to ÷32).</li>
+  <li>“4K”, “8K” in a brief are <b>quality descriptors, not sizes</b> — render at 2K-class anyway.</li>
+  <li><b>Editing:</b> default is to follow the input image’s aspect ratio (at ~1024–2048-class pixel budget). Request a different canvas only when composing a new scene; for outpainting widen/tallten the ratio by roughly the extended area (+30–50%).</li>
+  <li>Local timings (RTX 5070 Ti, Q4_K_M, 20 steps) — see §9 table: 1K ≈ 51–83 s, 2K ≈ 5.2–5.5 min.</li>
+</ul>
+
+<h2 id="sampling">7 · Sampler / CFG / steps per stack</h2>
+<table>
+  <tr><th>Stack</th><th>Sampler / schedule</th><th>Steps</th><th>CFG</th><th>Notes</th></tr>
+  <tr><td>Official / diffusers <code>QwenImage21Pipeline</code></td><td>flow match (built in)</td><td><b>40</b></td><td>pipeline default</td><td>reference implementation; 2048² default size</td></tr>
+  <tr><td>ComfyUI (official templates)</td><td><code>euler</code> + <code>simple</code></td><td>25</td><td><b>1</b></td><td>CFG disabled; set Resolution Selector ≈ 4.0&nbsp;MP for 2048², ≈1.0&nbsp;MP for 1024²</td></tr>
+  <tr><td>stable-diffusion.cpp (this machine)</td><td><code>euler</code> + flow (auto)</td><td>20 (40 = max quality)</td><td><b>6.0</b> (<code>--cfg-scale</code>)</td><td>dims ÷32; tuned flags: <code>--diffusion-fa --vae-tiling</code></td></tr>
+  <tr><td>SGLang example</td><td>built-in</td><td>40</td><td><code>--guidance-scale 1</code></td><td>datacenter serving stack</td></tr>
+  <tr><td>LightX2V (accelerated)</td><td>built-in</td><td>40</td><td>disabled</td><td>FP8 on RTX 5090: ~5.9 s @ 1024²; uses FlashAttention3 etc.</td></tr>
+</table>
+<div class="card tip">
+<h4>Practical CFG guidance</h4>
+<ul>
+  <li>Modern Qwen workflows trend to <b>no CFG / guidance ≈ 1</b> because the model leans on its distilled guidance signal. ComfyUI ships exactly that.</li>
+  <li>stable-diffusion.cpp’s official Qwen-Image-2.1 example uses <code>--cfg-scale 6.0</code> — verified here to give excellent results, so keep it for the local GGUF setup unless you experiment.</li>
+  <li>Higher steps mostly refine micro-detail/typography; 20 → 40 steps is roughly linear in time.</li>
+</ul>
+</div>
+
+<h2 id="edit">8 · Image editing</h2>
+
+<div class="grid2">
+  <div class="card do">
+    <h4>✔ Edit prompts</h4>
+    <ul>
+      <li><b>Write it as an instruction</b>, leading with the operation: “Replace the background with…”, “Change the sky to…”.</li>
+      <li><b>Edit exactly one thing at full strength</b>, and pin everything else with a blanket preservation clause: <i>“keep the character, pose, facial identity and lighting unchanged”</i>.</li>
+      <li>Describe appearance in detail <b>only for what you are changing</b>; for things you preserve, name them by type/position/role — over-describing preserved content makes it drift.</li>
+      <li>Multiple references: address them as <code>&lt;image1&gt;</code>, <code>&lt;image2&gt;</code> (slot order matters) and state each role:
+        <pre><code>Keep the character and pose in &lt;image1&gt; unchanged, put the light
+blue denim shirt from &lt;image2&gt; on the character, preserve the
+original facial features, hair, body shape and pose.</code></pre></li>
+      <li>Text: commit to the exact characters in quotes; that is also how you edit existing text (“change the sign to read "qwen21"”).</li>
+      <li>Compose many references (up to 10) by naming the target canvas and the material sources: “These three characters are sitting around a campfire in a forest.”</li>
+    </ul>
+  </div>
+  <div class="card dont">
+    <h4>✘ Avoid</h4>
+    <ul>
+      <li><b>Leakage:</b> letting unrequested changes in (“clean up” defects nobody asked about).</li>
+      <li><b>Under-editing:</b> a result a viewer could mistake for the input because the change was applied faintly.</li>
+      <li>Vague degree words without commitment — “slightly different lighting” → say what the light does.</li>
+      <li>Natural-language image references when several are supplied (“the first image”, “图1”) — use the <code>&lt;imageN&gt;</code> tags.</li>
+      <li>Describing a person’s identity in words when you have their photo — point at the reference instead.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card">
+<h4>Local edit techniques (official examples)</h4>
+<ul>
+  <li><b>Circles:</b> mark regions and reference the mark colours in the prompt: “Remove the metal watch in the blue circle, change the hair in the red circle to black, replace the area in the green circle with gray short-sleeved linen pajamas.”</li>
+  <li><b>Painted annotation:</b> point at the marked area — “add a diver in the white marked area”.</li>
+  <li><b>Separate mask:</b> pass original + mask as two inputs and describe the change; keeps the untouched pixels intact.</li>
+  <li><b>Background removal:</b> instruction “Remove the background, and output a PNG image” (transparency needs the RGBA-capable stack — sd.cpp outputs RGBA PNGs).</li>
+  <li><b>Transparent generation from text</b> — use the official wrapper:
+    <pre><code>This is an RGBA image with transparency. &lt;your description&gt;. The image
+has alpha channel and the background is transparent.</code></pre></li>
+  <li><b>Sequential editing:</b> apply one local edit at a time, keeping the rest fixed — chained edits compose into simple animations/storyboards.</li>
+</ul>
+</div>
+
+<h2 id="local">9 · This machine’s setup (stable-diffusion.cpp)</h2>
+<div class="card">
+<ul>
+  <li><b>Models in use:</b> DiT <code>qwen-image-2.1-Q4_K_M.gguf</code> (4.6&nbsp;GB), text encoder <code>Qwen3VL-8B-Instruct-Q4_K_M.gguf</code> (5.0&nbsp;GB), vision <code>mmproj-Qwen3VL-8B-Instruct-F16.gguf</code> (1.16&nbsp;GB, editing), VAE <code>qwen_image_2.1_vae_bf16.safetensors</code> (676&nbsp;MB).</li>
+  <li><b>Server:</b> <code>qwen_image_server.bat</code> → web UI + A1111-compatible API on <code>127.0.0.1:7862</code>; managed by the WebUI tab <i>Qwen-Image 2.1</i> (Start/Stop/Restart).</li>
+  <li><b>CLI:</b> <code>qwen_image_txt2img.bat "prompt" 1k:2:3</code> — presets <code>1k:1:1 / 1k:2:3 / 1k:3:2 / 2k:1:1 / 2k:2:3 / 2k:3:2</code>; optional steps + seed after the preset.</li>
+  <li><b>Editing:</b> add reference images in the web UI (or <code>POST /sdapi/v1/img2img</code> with <code>init_images</code>). First-step encoding with refs is cached (prefix KV) — repeated edits on the same refs are faster.</li>
+</ul>
+
+<h4>Verified timings — RTX 5070 Ti 16 GB, Q4_K_M, 20 steps, cfg 6.0 euler</h4>
+<table>
+  <tr><th>Preset</th><th>Size</th><th>T2I time</th><th>Edit time (512 ref)</th></tr>
+  <tr><td>1k:1:1</td><td>1024×1024</td><td>~51 s</td><td>~7 s (12 steps)</td></tr>
+  <tr><td>1k:2:3</td><td>1024×1536</td><td>~82 s</td><td>—</td></tr>
+  <tr><td>1k:3:2</td><td>1536×1024</td><td>~83 s</td><td>—</td></tr>
+  <tr><td>2k:1:1</td><td>2048×2048</td><td>~5.3 min</td><td>—</td></tr>
+  <tr><td>2k:2:3</td><td>1696×2528</td><td>~5.5 min</td><td>—</td></tr>
+  <tr><td>2k:3:2</td><td>2528×1696</td><td>~5.2 min</td><td>—</td></tr>
+</table>
+<p class="muted">Local flags: <code>--diffusion-fa --vae-tiling</code> (flash attention in the DiT + tiled VAE decode; without tiling 1024²+ decode OOMs on 16&nbsp;GB). <code>--offload-to-cpu</code> exists but costs ~40% speed.</p>
+</div>
+
+<h2 id="sources">10 · Sources</h2>
+<ul>
+  <li>Official model card / repo — <a href="https://huggingface.co/Qwen/Qwen-Image-2.1">Qwen/Qwen-Image-2.1</a>, <a href="https://github.com/QwenLM/Qwen-Image-2.1">github.com/QwenLM/Qwen-Image-2.1</a> (quick start, defaults 40 steps / 2048², aspect table, RGBA format, multi-ref examples).</li>
+  <li>Official prompt guidance — <a href="https://github.com/QwenLM/Qwen-Image-2.1/tree/main/prompt_rewrite">prompt_rewrite/ system prompts</a> (<code>system_prompt_t2i.txt</code>, <code>system_prompt_edit.txt</code>) + PE models <code>Qwen-Image-2.1-PE-T2I</code> / <code>-PE-I2I</code>.</li>
+  <li>Blog — <a href="https://qwen.ai/blog?id=qwen-image-2.1">Qwen-Image-2.1: Compact, Efficient, and Unified Image Creation</a> (editing showcases, circle/paint/mask guidance).</li>
+  <li>ComfyUI — <a href="https://docs.comfy.org/tutorials/image/qwen/qwen-image-2-1">Qwen-Image-2.1 native workflow docs</a> (steps 25 / cfg 1 / euler / simple; resolution selector; edit prompting; KV cache node).</li>
+  <li>stable-diffusion.cpp — <a href="https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/qwen_image_2.1.md">docs/qwen_image_2.1.md</a> (cfg 6.0 euler example, ÷32 rule, <code>--llm_vision</code> for editing).</li>
+  <li>LightX2V — <a href="https://github.com/ModelTC/LightX2V/tree/main/scripts/qwen_image_21">Qwen-Image-2.1 deployment guide</a> (CFG-disabled inference, FP8 acceleration, size rules).</li>
+  <li>GGUF packaging — <a href="https://huggingface.co/abenzerps/Qwen-Image-2.1-GGUF">abenzerps/Qwen-Image-2.1-GGUF</a> (quants + companion files used here).</li>
+  <li>Local verification — this repo: <code>README_qwen_image_2.1.md</code>, <code>outputs/qwen-image-2.1/</code>, wiki analysis page. Benchmarks measured 2026-09-22.</li>
+</ul>
+
+<footer>
+  Compiled by Copilot · 2026-09-22 · Sources are official/first-party where possible; timings are local measurements and will vary by GPU.
+</footer>
+
+</div>
+</body>
+</html>

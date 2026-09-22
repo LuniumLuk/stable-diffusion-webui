@@ -113,6 +113,32 @@
     color: #22c55e;
 }
 
+/* Block-comment toggle icon rendered at the end of each '# ---' starter line. */
+.prompt-block-toggle {
+    display: inline-block;
+    width: 1.6ch;
+    margin-left: 0.75ch;
+    text-align: center;
+    color: #22c55e;
+    cursor: pointer;
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+    font-style: normal;
+}
+
+.prompt-block-toggle.is-commented {
+    color: #6b7280;
+}
+
+.prompt-block-toggle:hover {
+    opacity: 0.6;
+}
+
+.prompt-block-marker {
+    opacity: 0.75;
+}
+
 /* ── Hires stage config ─────────────────────────────────────────────────── */
 #txt2img_hr_stage_config.hires-stage-assist textarea {
     position: relative;
