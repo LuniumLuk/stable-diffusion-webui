@@ -1,6 +1,7 @@
 """Flask backend for local LLM chat interface."""
 import os
 import re
+import socket
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from pathlib import Path
@@ -449,7 +450,31 @@ def unload_gpu_route():
     return jsonify(result)
 
 
+def _port_is_available(host, port):
+    """Probe the port with a throwaway socket before handing it to Flask."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, port))
+        return True, None
+    except OSError as exc:
+        return False, exc
+    finally:
+        probe.close()
+
+
 if __name__ == "__main__":
+    host = os.getenv("LOCAL_LLM_HOST", "0.0.0.0")
+    port = int(os.getenv("LOCAL_LLM_PORT", "27820"))
+
     print("Starting Local LLM Chat Server...")
-    print("Open http://localhost:7820 in your browser")
-    app.run(debug=False, host="0.0.0.0", port=7820)
+    print(f"Open http://localhost:{port} in your browser")
+
+    available, bind_error = _port_is_available(host, port)
+    if not available:
+        print(f"[ERROR] Cannot bind {host}:{port}: {bind_error}")
+        print("Another process is holding this port. On Windows this also happens")
+        print("when the port sits inside the TCP dynamic range (ephemeral ports).")
+        print("Start on a different port instead, e.g.:  set LOCAL_LLM_PORT=27821")
+        raise SystemExit(1)
+
+    app.run(debug=False, host=host, port=port)

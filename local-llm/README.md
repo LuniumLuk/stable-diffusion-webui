@@ -47,13 +47,18 @@ python app.py
 You should see:
 ```
 Starting Local LLM Chat Server...
-Open http://localhost:7820 in your browser
+Open http://localhost:27820 in your browser
 ✓ Model loaded successfully
 ```
 
 ### 4. Open in Browser
 
-Navigate to: **http://localhost:7820**
+Navigate to: **http://localhost:27820**
+
+> The default port is `27820`, deliberately outside Windows' TCP dynamic port
+> range (ephemeral ports), which avoids intermittent "socket access forbidden"
+> bind failures. Override with the `LOCAL_LLM_PORT` environment variable if
+> needed (e.g. `set LOCAL_LLM_PORT=7820`).
 
 ## Usage
 

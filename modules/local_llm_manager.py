@@ -10,7 +10,7 @@ import urllib.request
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 _LOCAL_LLM_DIR = os.path.join(_ROOT_DIR, "local-llm")
-_LOCAL_LLM_URL = os.environ.get("LOCAL_LLM_EMBED_URL", "http://127.0.0.1:7820/")
+_LOCAL_LLM_URL = os.environ.get("LOCAL_LLM_EMBED_URL", "http://127.0.0.1:27820/")
 
 _process = None
 _lock = threading.Lock()
@@ -111,6 +111,11 @@ def start_server() -> dict:
     preexec_fn = None
     startupinfo = None
 
+    # Keep the managed server on the exact port the embed URL points at.
+    _, embed_port = _parse_host_port(get_local_llm_url())
+    child_env = os.environ.copy()
+    child_env["LOCAL_LLM_PORT"] = str(embed_port)
+
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         startupinfo = subprocess.STARTUPINFO()
@@ -127,6 +132,7 @@ def start_server() -> dict:
         creationflags=creationflags,
         startupinfo=startupinfo,
         preexec_fn=preexec_fn,
+        env=child_env,
     )
 
     with _lock:

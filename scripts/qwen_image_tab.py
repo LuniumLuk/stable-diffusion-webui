@@ -145,6 +145,7 @@ QWEN_IMAGE_TAB_HTML = """
         &nbsp;|&nbsp;
         2K — 1:1 <code>2048x2048</code> · 2:3 <code>1696x2528</code> · 3:2 <code>2528x1696</code>
         &nbsp;|&nbsp; CLI: <code>qwen_image_txt2img.bat "prompt" 1k:2:3</code>
+        &nbsp;|&nbsp; Generated images auto-save to <code>outputs/qwen/&lt;date&gt;/&lt;hh-mm-ss&gt;/&lt;n&gt;.jpg</code>
     </div>
 
     <div id="qwen_image_embed_frame_wrap">

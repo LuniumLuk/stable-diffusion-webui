@@ -2,6 +2,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -11,6 +12,7 @@ _ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 _SD_CPP_DIR = os.path.join(_ROOT_DIR, "sd_cpp")
 _MODELS_DIR = os.path.join(_ROOT_DIR, "models", "Qwen-Image-2.1")
 _LOG_PATH = os.path.join(_SD_CPP_DIR, "qwen_server.log")
+_RECEIVER_LOG_PATH = os.path.join(_SD_CPP_DIR, "qwen_save_receiver.log")
 
 _SERVER_HOST = os.environ.get("QWEN_IMAGE_SERVER_HOST", "127.0.0.1")
 _SERVER_PORT = int(os.environ.get("QWEN_IMAGE_SERVER_PORT", "7862"))
@@ -21,6 +23,12 @@ DIFFUSION_MODEL = os.path.join(_MODELS_DIR, "qwen-image-2.1-Q4_K_M.gguf")
 TEXT_ENCODER = os.path.join(_MODELS_DIR, "text_encoders", "Qwen3VL-8B-Instruct-Q4_K_M.gguf")
 VISION_ENCODER = os.path.join(_MODELS_DIR, "text_encoders", "mmproj-Qwen3VL-8B-Instruct-F16.gguf")
 VAE_MODEL = os.path.join(_MODELS_DIR, "vae", "qwen_image_2.1_vae_bf16.safetensors")
+
+# Patched frontend + local receiver that archives each generated batch as JPEGs in
+# outputs/qwen/<date>/<hh-mm-ss>/<n>.jpg (see sd_cpp/frontend/build_patched.py).
+FRONTEND_HTML = os.path.join(_SD_CPP_DIR, "frontend", "index.html")
+SAVE_RECEIVER = os.path.join(_SD_CPP_DIR, "save_receiver.py")
+SAVE_PORT = int(os.environ.get("QWEN_SAVE_PORT", "7863"))
 
 # Verified on RTX 5070 Ti 16GB: DiT stays fully in VRAM (fast sampling),
 # VAE tiling avoids the 1024px decode OOM, ~50s per 1024x1024 / 20 steps.
@@ -34,11 +42,13 @@ _SERVER_ARGS = [
     "--sampling-method", "euler",
     "--diffusion-fa",
     "--vae-tiling",
+    "--serve-html-path", FRONTEND_HTML,
     "--listen-ip", _SERVER_HOST,
     "--listen-port", str(_SERVER_PORT),
 ]
 
 _process = None
+_receiver_process = None
 _lock = threading.Lock()
 
 # Localhost checks must bypass HTTP_PROXY/HTTPS_PROXY env vars (e.g. a dead local
@@ -71,7 +81,51 @@ def _port_open(host: str, port: int) -> bool:
 
 
 def _missing_files() -> list:
-    return [path for path in (SD_SERVER_EXE, DIFFUSION_MODEL, TEXT_ENCODER, VISION_ENCODER, VAE_MODEL) if not os.path.isfile(path)]
+    return [
+        path
+        for path in (SD_SERVER_EXE, DIFFUSION_MODEL, TEXT_ENCODER, VISION_ENCODER, VAE_MODEL, FRONTEND_HTML, SAVE_RECEIVER)
+        if not os.path.isfile(path)
+    ]
+
+
+def _receiver_port_open() -> bool:
+    return _port_open("127.0.0.1", SAVE_PORT)
+
+
+def _ensure_receiver() -> None:
+    """Start the auto-save receiver if nothing is listening on its port yet."""
+    global _receiver_process
+    if _receiver_port_open():
+        return
+
+    command = [sys.executable, SAVE_RECEIVER]
+    creationflags = 0
+    startupinfo = None
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+    log_file = open(_RECEIVER_LOG_PATH, "ab", buffering=0)
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=_SD_CPP_DIR,
+            stdout=log_file,
+            stderr=log_file,
+            stdin=subprocess.DEVNULL,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+        )
+    finally:
+        log_file.close()
+
+    with _lock:
+        _receiver_process = proc
+
+    end = time.time() + 10.0
+    while time.time() < end and not _receiver_port_open():
+        time.sleep(0.3)
 
 
 def get_status() -> dict:
@@ -92,6 +146,7 @@ def get_status() -> dict:
         "port_open": port_open,
         "mode": mode,
         "missing_files": missing,
+        "save_receiver": _receiver_port_open(),
     }
 
 
@@ -128,6 +183,7 @@ def start_server() -> dict:
         return status
 
     command = [SD_SERVER_EXE] + _SERVER_ARGS
+    _ensure_receiver()
     creationflags = 0
     startupinfo = None
     if os.name == "nt":
@@ -193,6 +249,14 @@ def stop_server() -> dict:
     with _lock:
         if _process is proc:
             _process = None
+        receiver = _receiver_process
+        _receiver_process = None
+
+    if _is_process_alive(receiver):
+        try:
+            receiver.terminate()
+        except Exception:
+            pass
 
     status = get_status()
     status["message"] = "Managed Qwen-Image 2.1 server stopped."
@@ -214,9 +278,10 @@ def format_status_markdown(status: dict) -> str:
     reachable = "yes" if status.get("reachable") else "no"
     pid = status.get("pid") or "-"
     model = "Q4_K_M (qwen-image-2.1) + Qwen3VL-8B TE" if not status.get("missing_files") else "files missing"
+    save = "on" if status.get("save_receiver") else "off"
     message = status.get("message") or ""
     return (
-        f"Mode: {mode} | Reachable: {reachable} | PID: {pid} | Model: {model}"
+        f"Mode: {mode} | Reachable: {reachable} | PID: {pid} | Model: {model} | Auto-save: {save}"
         + (f"\n\n{message}" if message else "")
     )
 

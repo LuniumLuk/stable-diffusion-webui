@@ -3,6 +3,8 @@ REM Local LLM Chat Startup Script
 
 cd /d "%~dp0"
 
+if not defined LOCAL_LLM_PORT set LOCAL_LLM_PORT=27820
+
 echo.
 echo ============================================
 echo Local LLM Chat Interface - Startup
@@ -22,10 +24,10 @@ pip install -r requirements.txt -q
 
 echo.
 echo Starting Flask server...
-echo Opening http://localhost:7820 in browser
+echo Opening http://localhost:%LOCAL_LLM_PORT% in browser
 echo.
 timeout /t 2 /nobreak
 
-start http://localhost:7820
+start http://localhost:%LOCAL_LLM_PORT%
 
 python app.py

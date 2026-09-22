@@ -4,6 +4,8 @@
 
 cd "$(dirname "$0")"
 
+LOCAL_LLM_PORT="${LOCAL_LLM_PORT:-27820}"
+
 echo ""
 echo "============================================"
 echo "Local LLM Chat Interface - Startup"
@@ -23,16 +25,16 @@ pip install -r requirements.txt -q
 
 echo ""
 echo "Starting Flask server..."
-echo "Opening http://localhost:7820 in browser"
+echo "Opening http://localhost:${LOCAL_LLM_PORT} in browser"
 echo ""
 
 sleep 2
 
 # Try to open browser
 if command -v xdg-open &> /dev/null; then
-    xdg-open http://localhost:7820 &
+    xdg-open "http://localhost:${LOCAL_LLM_PORT}" &
 elif command -v open &> /dev/null; then
-    open http://localhost:7820 &
+    open "http://localhost:${LOCAL_LLM_PORT}" &
 fi
 
 python app.py

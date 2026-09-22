@@ -10,6 +10,8 @@ WebUI tab.
 | Path | What |
 |---|---|
 | `sd_cpp/` | stable-diffusion.cpp binaries (`sd-cli.exe`, `sd-server.exe`, ggml + CUDA runtime DLLs), release `master-890-74988b2` |
+| `sd_cpp/frontend/index.html` | patched web UI served via `--serve-html-path` (`build_patched.py` rebuilds it from `index.original.html`) |
+| `sd_cpp/save_receiver.py` | auto-save receiver on 127.0.0.1:7863 — writes JPEGs to `outputs/qwen/<date>/<hh-mm-ss>/<n>.jpg` |
 | `models/Qwen-Image-2.1/qwen-image-2.1-Q4_K_M.gguf` | DiT, 4.6GB (repo-recommended quant) |
 | `models/Qwen-Image-2.1/text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf` | text encoder, 5.0GB (GGUF, from `Qwen/Qwen3-VL-8B-Instruct-GGUF`) |
 | `models/Qwen-Image-2.1/text_encoders/mmproj-Qwen3VL-8B-Instruct-F16.gguf` | vision projector (mmproj), 1.16GB — required for reference-image editing |
@@ -35,6 +37,26 @@ Reference-image editing: use the server web UI (add a reference image next to th
 prompt) or the API, e.g. `POST /sdapi/v1/img2img` with `init_images: [base64]`. For CLI
 editing, call sd-cli directly with `-r ref.png` plus the `--llm_vision` flag (see the
 full argument set in `qwen_image_server.bat`).
+
+## Auto-save (web UI)
+
+The stock sd.cpp frontend keeps images in the browser only. This setup serves a
+patched frontend (`sd_cpp/frontend/index.html`, hook built by `build_patched.py`); every
+completed generation is POSTed to a small local receiver (`sd_cpp/save_receiver.py`,
+port 7863, started by the launcher and by the WebUI manager) and written as:
+
+```
+outputs/qwen/<YYYY-MM-DD>/<HH-MM-SS>/<batch_index>.jpg   (+ <batch_index>.txt sidecar)
+```
+
+- One generation batch = one timestamped folder; images inside are numbered `0.jpg`,
+  `1.jpg`, … (multi-image batches keep their index).
+- Sidecars carry the PNG `parameters` (prompt / steps / cfg / seed / size).
+- JPEG quality 95; RGBA generations are flattened onto white (JPEG has no alpha).
+- Saving is best-effort: if the receiver is down the UI works as before, nothing is written.
+- After a stable-diffusion.cpp update the patched frontend must be rebuilt (the hook lives
+  in the HTML, not the binary): re-fetch the original while the new server runs, then run
+  the build script — see `sd_cpp/frontend/build_patched.py` header for the two commands.
 
 The WebUI tab **Qwen-Image 2.1** has Start/Stop/Restart/Refresh buttons (managed
 subprocess) and embeds the sd-server web UI in an iframe.

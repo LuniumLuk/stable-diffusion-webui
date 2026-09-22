@@ -1,5 +1,5 @@
 (function () {
-  const defaultUrl = "http://127.0.0.1:7820/";
+  const defaultUrl = "http://127.0.0.1:27820/";
 
   function setupLocalLlmTab(root) {
     if (!root || root.dataset.localLlmReady === "1") return;

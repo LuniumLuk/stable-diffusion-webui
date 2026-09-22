@@ -325,6 +325,7 @@ has alpha channel and the background is transparent.</code></pre></li>
 <ul>
   <li><b>Models in use:</b> DiT <code>qwen-image-2.1-Q4_K_M.gguf</code> (4.6&nbsp;GB), text encoder <code>Qwen3VL-8B-Instruct-Q4_K_M.gguf</code> (5.0&nbsp;GB), vision <code>mmproj-Qwen3VL-8B-Instruct-F16.gguf</code> (1.16&nbsp;GB, editing), VAE <code>qwen_image_2.1_vae_bf16.safetensors</code> (676&nbsp;MB).</li>
   <li><b>Server:</b> <code>qwen_image_server.bat</code> → web UI + A1111-compatible API on <code>127.0.0.1:7862</code>; managed by the WebUI tab <i>Qwen-Image 2.1</i> (Start/Stop/Restart).</li>
+  <li><b>Auto-save:</b> every completed web-UI generation is archived as JPEG to <code>outputs/qwen/&lt;date&gt;/&lt;hh-mm-ss&gt;/&lt;n&gt;.jpg</code> (+ <code>&lt;n&gt;.txt</code> params sidecar) by the patched frontend + local receiver.</li>
   <li><b>CLI:</b> <code>qwen_image_txt2img.bat "prompt" 1k:2:3</code> — presets <code>1k:1:1 / 1k:2:3 / 1k:3:2 / 2k:1:1 / 2k:2:3 / 2k:3:2</code>; optional steps + seed after the preset.</li>
   <li><b>Editing:</b> add reference images in the web UI (or <code>POST /sdapi/v1/img2img</code> with <code>init_images</code>). First-step encoding with refs is cached (prefix KV) — repeated edits on the same refs are faster.</li>
 </ul>
