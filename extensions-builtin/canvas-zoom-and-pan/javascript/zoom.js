@@ -940,7 +940,7 @@ onUiLoaded(async() => {
     }
 
     applyZoomAndPan(elementIDs.sketch, false);
-    applyZoomAndPan(elementIDs.inpaint, false);
+    // applyZoomAndPan(elementIDs.inpaint, false); // Inpaint tab is handled by javascript/inpaintSamPanel.js (wheel zoom + RMB pan + SAM pick)
     applyZoomAndPan(elementIDs.inpaintSketch, false);
 
     // Make the function global so that other extensions can take advantage of this solution

@@ -4051,3 +4051,173 @@ body.resizing .resize-handle {
     border-radius: 4px;
 }
 
+/* ---- Inpaint SAM panel (javascript/inpaintSamPanel.js) ---- */
+
+/* kill the weird overlay scrollbars / resize grip on the inpaint canvas; zoom+pan is provided by the panel */
+#img2maskimg {
+    overflow: hidden !important;
+    resize: none !important;
+}
+
+#img2maskimg .wrap {
+    will-change: transform;
+}
+
+.inpsam-bar {
+    position: absolute;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: calc(100% - 12px);
+    padding: 4px 6px;
+    border: 1px solid var(--border-color-primary, #444);
+    border-radius: 8px;
+    background: rgba(20, 20, 24, 0.84);
+    color: #eee;
+    font-size: 11px;
+    line-height: 1.4;
+    user-select: none;
+}
+
+.inpsam-bar .inpsam-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.inpsam-btn {
+    padding: 2px 7px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #eee;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.inpsam-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.inpsam-btn.inpsam-active {
+    background: #2f7bd9;
+    border-color: #59a1f0;
+    color: #fff;
+    font-weight: 600;
+}
+
+.inpsam-icon {
+    min-width: 22px;
+    padding: 2px 5px;
+}
+
+.inpsam-mini {
+    min-width: 20px;
+    padding: 1px 4px;
+}
+
+.inpsam-sep {
+    width: 1px;
+    height: 14px;
+    margin: 0 2px;
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.inpsam-status {
+    overflow: hidden;
+    max-width: 240px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    opacity: 0.85;
+}
+
+.inpsam-status.inpsam-err {
+    color: #ff7a7a;
+}
+
+.inpsam-samrow label {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.inpsam-samrow select {
+    max-width: 150px;
+    padding: 1px 2px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #eee;
+    font-size: 11px;
+}
+
+.inpsam-expand {
+    width: 110px;
+    vertical-align: middle;
+}
+
+.inpsam-idx {
+    display: inline-flex;
+    gap: 2px;
+}
+
+.inpsam-hint {
+    font-size: 10px;
+    opacity: 0.55;
+}
+
+.inpsam-bar.inpsam-no-sam .inpsam-samrow {
+    opacity: 0.55;
+}
+
+.inpsam-cursor {
+    position: fixed;
+    z-index: 9999;
+    display: none;
+    box-sizing: border-box;
+    border: 1.5px solid rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    outline: 1px solid rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}
+
+.inpsam-outline {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    margin: auto;
+    z-index: 16; /* above the gradio interface canvas (15) */
+    pointer-events: none;
+}
+
+.inpsam-colorrow label {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.inpsam-colorrow input[type="color"] {
+    width: 26px;
+    height: 17px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.inpsam-size {
+    width: 90px;
+    vertical-align: middle;
+}
+
+/* keep the native cursor visible over the inpaint canvases (gradio hides it for its lazy brush) */
+#img2maskimg canvas {
+    cursor: crosshair !important;
+}
+
