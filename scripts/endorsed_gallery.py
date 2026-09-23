@@ -400,7 +400,6 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
     orig_url = _file_url(path)
     path_b64 = _b64(path)
     config_path = record.get("config_path", "")
-    config_path_b64 = _b64(config_path)
     has_config = bool(config_path)
 
     thumb_html = (
@@ -411,17 +410,15 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
 
     config_badge = (
-        '<span class="endgal-config-badge" title="Full composer state available — load to restore all layers">⚙</span>'
+        '<span class="endgal-config-badge" title="Composer state file available — restore via Composer → Load Config">⚙</span>'
         if has_config else ""
     )
 
-    composer_btn_attrs = (
-        f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'{config_path_b64}\')"'
-        if has_config
-        else 'disabled title="No composer config available for this image"'
-    )
-    composer_btn_class = "endgal-btn-send2img endgal-btn-composer" + ("" if has_config else " endgal-btn-disabled")
-    composer_btn_title = "Send to Composer and restore full state" if has_config else "No composer config available for this image"
+    # Image-only transfer: never pass the state sidecar here; full state can be
+    # restored from the Composer via its own "Load Config" action instead.
+    composer_btn_attrs = f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'\')"'
+    composer_btn_class = "endgal-btn-send2img endgal-btn-composer"
+    composer_btn_title = "Send to Composer as background (image only)"
 
     date_overlay = f'<div class="endgal-date endgal-date-overlay">{_html.escape(date)}</div>' if date else ""
 

@@ -2222,17 +2222,22 @@
          * target: 'txt2img' | 'img2img'
          * pathB64: optional base64(abs_file_path) – when provided and target is img2img,
          *          the source image is injected into the img2img image input.
+         * An empty infotext skips the param paste entirely (image-only transfer):
+         * pasting "" would make A1111 fall back to params.txt (the last generation's
+         * settings), leaking unrelated parameters into the target tab.
          */
         sendTo: function (infotextB64, target, pathB64) {
-            const infotext = b64Decode(infotextB64);
-            if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
-                console.warn('[endorsedGallery] infotext_apply textbox not found');
-                return;
+            const infotext = b64Decode(infotextB64 || '');
+            if (infotext) {
+                if (!setGradioTextbox('endorsed_gallery_infotext_apply', infotext)) {
+                    console.warn('[endorsedGallery] infotext_apply textbox not found');
+                    return;
+                }
+                const btnId = target === 'img2img'
+                    ? 'endorsed_gallery_apply_img2img_btn'
+                    : 'endorsed_gallery_apply_txt2img_btn';
+                clickGradioBtn(btnId);
             }
-            const btnId = target === 'img2img'
-                ? 'endorsed_gallery_apply_img2img_btn'
-                : 'endorsed_gallery_apply_txt2img_btn';
-            clickGradioBtn(btnId);
 
             // Switch to the target tab so the user sees the result
             setTimeout(() => {
