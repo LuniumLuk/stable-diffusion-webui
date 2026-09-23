@@ -50,5 +50,5 @@ trace.json
 .venv
 *.db
 /data
-training_data/# local secrets (never commit)
+training_data/
 /config_states/gemini_nano_banana.txt
