@@ -526,6 +526,88 @@ document.addEventListener("DOMContentLoaded", function() {
         _modalFitToViewport(modalImage);
     });
 
+    // ── Touch: 1-finger pan (+ swipe to prev/next when fitted),
+    //         2-finger pinch zoom, double-tap to toggle fit / 1:1 ──
+    if (window.mobileGestures) {
+        let pinchPrev = null;
+        let touchPan = null;
+
+        window.mobileGestures.attachPinch(modalImage, {
+            onStart: () => {
+                touchPan = null;
+                pinchPrev = { scale: 1, dx: 0, dy: 0 };
+            },
+            onMove: (g) => {
+                if (!pinchPrev) return;
+                const rect = modalImage.getBoundingClientRect();
+                const factor = pinchPrev.scale ? g.scale / pinchPrev.scale : 1;
+                if (Math.abs(factor - 1) > 0.0005) {
+                    const cx = g.centerX - (rect.left + rect.width / 2);
+                    const cy = g.centerY - (rect.top + rect.height / 2);
+                    const oldScale = _modalZoom;
+                    _modalZoom = Math.min(8, Math.max(0.15, _modalZoom * factor));
+                    const ratio = _modalZoom / oldScale;
+                    _modalPanX = _modalPanX * ratio - cx * (ratio - 1);
+                    _modalPanY = _modalPanY * ratio - cy * (ratio - 1);
+                }
+                _modalPanX += g.dx - pinchPrev.dx;
+                _modalPanY += g.dy - pinchPrev.dy;
+                pinchPrev = { scale: g.scale, dx: g.dx, dy: g.dy };
+                _modalApplyTransform();
+            },
+            onEnd: () => {
+                pinchPrev = null;
+            },
+        });
+
+        modalImage.addEventListener('touchstart', function(e) {
+            if (e.touches.length !== 1) {
+                touchPan = null;
+                return;
+            }
+            const t = e.touches[0];
+            touchPan = {
+                startX: t.clientX,
+                startY: t.clientY,
+                panX: _modalPanX,
+                panY: _modalPanY,
+                fitted: Math.abs(_modalZoom - 1) < 0.02 && Math.abs(_modalPanX) < 4 && Math.abs(_modalPanY) < 4,
+            };
+        }, { passive: true });
+
+        modalImage.addEventListener('touchmove', function(e) {
+            if (!touchPan || e.touches.length !== 1) return;
+            const t = e.touches[0];
+            const dx = t.clientX - touchPan.startX;
+            const dy = t.clientY - touchPan.startY;
+            if (touchPan.fitted && Math.abs(dx) > Math.abs(dy)) {
+                // candidate horizontal swipe to the previous/next image
+                e.preventDefault();
+                return;
+            }
+            _modalPanX = touchPan.panX + dx;
+            _modalPanY = touchPan.panY + dy;
+            _modalApplyTransform();
+            e.preventDefault();
+        }, { passive: false });
+
+        modalImage.addEventListener('touchend', function(e) {
+            if (!touchPan) return;
+            const t = e.changedTouches[0];
+            const dx = t ? t.clientX - touchPan.startX : 0;
+            const dy = t ? t.clientY - touchPan.startY : 0;
+            const fitted = touchPan.fitted;
+            touchPan = null;
+            if (fitted && Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+                modalImageSwitch(dx < 0 ? 1 : -1);
+            }
+        }, { passive: true });
+
+        window.mobileGestures.attachDoubleTap(modalImage, () => {
+            modalZoomToggle({ stopPropagation: () => {} });
+        });
+    }
+
     // ── Click on image: prevent bubbling to backdrop (backdrop click closes) ──
     modalImage.addEventListener('click', function(e) {
         e.stopPropagation();

@@ -461,7 +461,32 @@
       img.onerror = () => {
         console.warn("[censorPanel] failed to load dropped image src");
       };
-      img.src = src;
+
+      // Prefer the original bytes: fetch() is not affected by the display-only
+      // downscaling the server applies to <img> requests for remote clients, so
+      // saving always keeps the full-resolution source.
+      let objectUrl = null;
+      const releaseUrl = () => {
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+        }
+      };
+      if (src.startsWith("data:") || src.startsWith("blob:")) {
+        img.src = src;
+        return;
+      }
+      fetch(src, { cache: "force-cache" })
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("http " + r.status))))
+        .then((blob) => {
+          objectUrl = URL.createObjectURL(blob);
+          img.src = objectUrl;
+        })
+        .catch(() => {
+          img.src = src;
+        });
+      img.addEventListener("load", releaseUrl, { once: true });
+      img.addEventListener("error", releaseUrl, { once: true });
     }
 
     function loadImageFromFile(file) {
@@ -586,15 +611,125 @@
     canvas.addEventListener("mousedown", onPanStart);
     document.addEventListener("mousemove", onPanMove);
     document.addEventListener("mouseup", onPanEnd);
-    canvas.addEventListener("touchend", (evt) => {
-      const t = evt.changedTouches && evt.changedTouches[0];
-      if (!t) return;
-      handleCanvasClick({
+
+    // ── Touch: one finger draws (tap line / drag mosaic+blur),
+    // two fingers pinch-zoom and pan, double-tap resets the view. ──
+    function touchToMouse(t) {
+      return {
+        button: 0,
         clientX: t.clientX,
         clientY: t.clientY,
-        preventDefault: () => evt.preventDefault(),
+        preventDefault: () => {},
+        stopPropagation: () => {},
+      };
+    }
+
+    if (window.mobileGestures) {
+      let pinchPrev = null;
+      let touchDrag = false;
+
+      const abortTouchDrag = () => {
+        if (state.mosaicDrag || state.blurDrag) {
+          state.mosaicDrag = null;
+          state.blurDrag = null;
+          redraw();
+        }
+      };
+
+      window.mobileGestures.attachPinch(
+        canvas,
+        {
+          onStart: () => {
+            touchDrag = false;
+            abortTouchDrag();
+            pinchPrev = { scale: 1, dx: 0, dy: 0 };
+          },
+          onMove: (g) => {
+            if (!state.hasImage || !pinchPrev) return;
+            const rect = canvas.getBoundingClientRect();
+            const factor = pinchPrev.scale ? g.scale / pinchPrev.scale : 1;
+            if (Math.abs(factor - 1) > 0.0005) {
+              const canvasX = (g.centerX - rect.left) * (canvas.width / rect.width);
+              const canvasY = (g.centerY - rect.top) * (canvas.height / rect.height);
+              const oldScale = state.scale;
+              const nextScale = Math.min(8, Math.max(0.25, oldScale * factor));
+              const ratio = nextScale / oldScale;
+              state.panX = state.panX * ratio - canvasX * (ratio - 1);
+              state.panY = state.panY * ratio - canvasY * (ratio - 1);
+              state.scale = nextScale;
+            }
+            state.panX += (g.dx - pinchPrev.dx) * (canvas.width / (canvas.clientWidth || 1));
+            state.panY += (g.dy - pinchPrev.dy) * (canvas.height / (canvas.clientHeight || 1));
+            pinchPrev = { scale: g.scale, dx: g.dx, dy: g.dy };
+            redraw();
+          },
+          onEnd: () => {
+            pinchPrev = null;
+          },
+        },
+        { touchAction: false, capture: true }
+      );
+
+      canvas.addEventListener(
+        "touchstart",
+        (e) => {
+          if (e.touches.length >= 2 || !state.hasImage) return;
+          e.preventDefault();
+          touchDrag = true;
+          if (state.brushType === "mosaic" || state.brushType === "blur") {
+            onEffectMouseDown(touchToMouse(e.touches[0]));
+          }
+        },
+        { capture: true, passive: false }
+      );
+
+      canvas.addEventListener(
+        "touchmove",
+        (e) => {
+          if (e.touches.length >= 2 || !touchDrag) return;
+          e.preventDefault();
+          if (state.mosaicDrag || state.blurDrag) {
+            onEffectMouseMove(touchToMouse(e.touches[0]));
+          }
+        },
+        { capture: true, passive: false }
+      );
+
+      canvas.addEventListener(
+        "touchend",
+        (e) => {
+          if (!touchDrag) return;
+          if (e.touches.length > 0) return;
+          e.preventDefault();
+          touchDrag = false;
+          const t = e.changedTouches[0];
+          if (state.mosaicDrag || state.blurDrag) {
+            onEffectMouseUp(touchToMouse(t));
+            return;
+          }
+          if (state.brushType === "line") {
+            handleCanvasClick(touchToMouse(t));
+          }
+        },
+        { capture: true, passive: false }
+      );
+
+      canvas.addEventListener(
+        "touchcancel",
+        () => {
+          touchDrag = false;
+          abortTouchDrag();
+        },
+        { capture: true, passive: false }
+      );
+
+      window.mobileGestures.attachDoubleTap(canvas, () => {
+        state.scale = 1;
+        state.panX = 0;
+        state.panY = 0;
+        redraw();
       });
-    }, { passive: false });
+    }
 
     [wrap, canvas].forEach((el) => {
       el.addEventListener("dragover", (evt) => evt.preventDefault());

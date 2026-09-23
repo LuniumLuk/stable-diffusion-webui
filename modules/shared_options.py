@@ -389,6 +389,16 @@ options_templates.update(options_section(('ui', "Live previews", "ui"), {
     "prevent_screen_sleep_during_generation": OptionInfo(True, "Prevent screen sleep during generation"),
 }))
 
+options_templates.update(options_section(('image-bandwidth', "Image bandwidth", "ui"), {
+    "remote_img_opt_mode": OptionInfo("Auto (non-LAN only)", "Optimize images served to browsers", gr.Radio, {"choices": ["Off", "Auto (non-LAN only)", "Always"]}).info("downscales and re-encodes (WebP/JPEG) images served to clients outside the local network, so phones and remote sessions do not stream full-size PNGs; optimized copies are cached in cache/net_cache. Use 'Always' if your tunnel does not forward the real client IP"),
+    "remote_img_opt_max_px": OptionInfo(2048, "Max side for optimized images", gr.Slider, {"minimum": 256, "maximum": 4096, "step": 128}).info("largest width/height served to browsers for displayed images"),
+    "remote_img_opt_quality": OptionInfo(78, "WebP/JPEG quality for optimized images", gr.Slider, {"minimum": 30, "maximum": 95, "step": 1}),
+    "remote_img_opt_min_kb": OptionInfo(96, "Only optimize files larger than this", gr.Slider, {"minimum": 0, "maximum": 8192, "step": 16}).info("in KB - smaller files are served unchanged"),
+    "remote_img_opt_card_px": OptionInfo(512, "Max side for extra networks card previews", gr.Slider, {"minimum": 128, "maximum": 1024, "step": 32}).info("checkpoint/LoRA/embedding card previews for optimized clients"),
+    "remote_img_opt_local_ips": OptionInfo("", "Always treat these client IPs/CIDRs as LAN").info("comma separated, e.g. 192.168.1.0/24, 100.64.0.0/10"),
+    "remote_img_opt_remote_ips": OptionInfo("", "Always treat these client IPs/CIDRs as remote").info("comma separated, e.g. 203.0.113.7"),
+}))
+
 options_templates.update(options_section(('sampler-params', "Sampler parameters", "sd"), {
     "hide_samplers": OptionInfo([], "Hide samplers in user interface", gr.CheckboxGroup, lambda: {"choices": [x.name for x in shared_items.list_samplers()]}).needs_reload_ui(),
     "eta_ddim": OptionInfo(0.0, "Eta for DDIM", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}, infotext='Eta DDIM').info("noise multiplier; higher = more unpredictable results"),

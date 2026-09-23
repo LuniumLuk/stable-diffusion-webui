@@ -4063,6 +4063,12 @@ body.resizing .resize-handle {
     will-change: transform;
 }
 
+/* gradio's sketch overlay text ("Start drawing") sits on top of the image and
+   duplicates what the panel toolbar already explains - hide it */
+#img2maskimg .start-prompt {
+    display: none !important;
+}
+
 .inpsam-bar {
     position: absolute;
     z-index: 30;
@@ -4070,6 +4076,8 @@ body.resizing .resize-handle {
     flex-direction: column;
     gap: 3px;
     max-width: calc(100% - 12px);
+    max-height: calc(100% - 12px);
+    overflow: auto;
     padding: 4px 6px;
     border: 1px solid var(--border-color-primary, #444);
     border-radius: 8px;
@@ -4078,6 +4086,19 @@ body.resizing .resize-handle {
     font-size: 11px;
     line-height: 1.4;
     user-select: none;
+}
+
+.inpsam-bar.inpsam-collapsed .inpsam-row:not(.inpsam-row-main) {
+    display: none;
+}
+
+.inpsam-drag {
+    cursor: move;
+    touch-action: none;
+}
+
+.inpsam-drag:hover {
+    background: rgba(255, 255, 255, 0.2);
 }
 
 .inpsam-bar .inpsam-row {
@@ -4133,8 +4154,63 @@ body.resizing .resize-handle {
     opacity: 0.85;
 }
 
+/* collapsed (mobile) bar: keep the status on its own line so its length can
+   never rewrap the buttons and change the bar height (which moved the bar) */
+.inpsam-bar.inpsam-collapsed .inpsam-status {
+    flex: 1 1 100%;
+    max-width: 100%;
+    order: 9;
+}
+
 .inpsam-status.inpsam-err {
     color: #ff7a7a;
+}
+
+/* busy pill shown over the canvas while SAM works (segment / expand) */
+.inpsam-busy {
+    position: absolute;
+    z-index: 40; /* above the toolbar (30) */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 999px;
+    background: rgba(14, 14, 18, 0.84);
+    color: #fff;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+    animation: inpsam-busy-in 0.12s ease-out;
+}
+
+.inpsam-busy[hidden] {
+    display: none;
+}
+
+.inpsam-spin {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(255, 255, 255, 0.28);
+    border-top-color: #59a1f0;
+    border-radius: 50%;
+    animation: inpsam-spin 0.7s linear infinite;
+}
+
+@keyframes inpsam-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes inpsam-busy-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 .inpsam-samrow label {
@@ -4221,3 +4297,393 @@ body.resizing .resize-handle {
     cursor: crosshair !important;
 }
 
+
+/* ==== MOBILE / TOUCH INTERACTIONS ==== */
+/* Canvases and preview surfaces own their gestures (draw + two-finger
+   pinch/pan); the browser must not scroll or page-zoom them. */
+#img2maskimg canvas,
+#censor_canvas,
+#modalImage,
+#endgal_preview_image {
+    touch-action: none;
+}
+
+/* Finger-friendly hit targets on touch devices. */
+@media (pointer: coarse) {
+    .inpsam-btn {
+        min-height: 32px;
+        padding: 5px 9px;
+        font-size: 12px;
+    }
+
+    .inpsam-icon { min-width: 34px; }
+    .inpsam-mini { min-width: 30px; }
+    .inpsam-bar { font-size: 12px; }
+    .inpsam-samrow select { min-height: 30px; font-size: 12px; }
+    .inpsam-expand, .inpsam-size { width: 132px; height: 26px; }
+    .inpsam-colorrow input[type="color"] { width: 34px; height: 26px; }
+
+    .modalPrev,
+    .modalNext {
+        padding: 26px 14px;
+        font-size: 26px;
+    }
+
+    .endgal-preview-nav { width: 54px; height: 54px; font-size: 36px; }
+}
+
+/* ==== Prompt editor (chips mode) - javascript/promptEditor.js ==== */
+
+.pedit-host {
+    position: relative;
+}
+
+/* in chips mode the gradio textarea is hidden but stays the source of truth */
+.pedit-host.pedit-chips-mode > label {
+    display: none !important;
+}
+
+/* and so is the old keyword-suggestion dropdown that hangs off that textarea */
+.pedit-host.pedit-chips-mode .endgal-prompt-keyword-hints,
+.pedit-host.pedit-chips-mode .prompt-highlight-backdrop {
+    display: none !important;
+}
+
+.pedit-root {
+    display: none;
+    font-size: 13px;
+    color: inherit;
+}
+
+.pedit-host.pedit-chips-mode .pedit-root {
+    display: block;
+}
+
+.pedit-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 2px 5px;
+    font-size: 11px;
+    opacity: 0.9;
+}
+
+/* the token counter floats above the right corner of the prompt box */
+.token-counter-visible + .pedit-host .pedit-head {
+    padding-right: 68px;
+}
+
+.pedit-title {
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.6;
+}
+
+.pedit-head-btn,
+.pedit-act,
+.pedit-add,
+.pedit-gutter,
+.pedit-insert-ok,
+.pedit-insert-cancel {
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.07);
+    color: inherit;
+    font-size: 11px;
+    line-height: 1.2;
+    padding: 3px 7px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.pedit-head-btn:hover,
+.pedit-act:hover,
+.pedit-add:hover,
+.pedit-gutter:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.pedit-badge {
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(255, 170, 0, 0.22);
+    border: 1px solid rgba(255, 170, 0, 0.4);
+    font-size: 10px;
+}
+
+.pedit-body {
+    max-height: 46vh;
+    overflow: auto;
+    padding: 2px;
+    overscroll-behavior: contain;
+}
+
+.pedit-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 2px 0;
+}
+
+.pedit-gutter {
+    flex: 0 0 auto;
+    min-width: 26px;
+    min-height: 26px;
+    padding: 2px 4px;
+    opacity: 0.65;
+}
+
+.pedit-gutter.is-comment {
+    opacity: 1;
+    border-color: rgba(255, 200, 80, 0.55);
+    background: rgba(255, 200, 80, 0.16);
+}
+
+.pedit-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.pedit-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    padding: 3px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    touch-action: manipulation;
+    user-select: none;
+}
+
+.pedit-chip:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.pedit-chip.is-selected {
+    border-color: #59a1f0;
+    background: rgba(89, 161, 240, 0.24);
+}
+
+.pedit-chip.is-disabled {
+    opacity: 0.5;
+}
+
+.pedit-chip.is-disabled .pedit-chip-text {
+    text-decoration: line-through;
+}
+
+.pedit-chip-text {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    max-width: 52vw;
+}
+
+.pedit-chip-w {
+    padding: 0 4px;
+    border-radius: 6px;
+    background: rgba(89, 161, 240, 0.28);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.pedit-chip-kind {
+    opacity: 0.7;
+    font-size: 10px;
+}
+
+.pedit-chip-off {
+    font-size: 11px;
+}
+
+.pedit-sep {
+    opacity: 0.45;
+    font-size: 12px;
+}
+
+.pedit-add {
+    padding: 3px 8px;
+    opacity: 0.7;
+}
+
+.pedit-line.is-comment .pedit-chip {
+    opacity: 0.45;
+}
+
+/* sticky action bar for the selected chip - keyboard-free editing on touch */
+.pedit-actions {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: 5px;
+    padding: 5px 6px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    background: rgba(20, 20, 24, 0.9);
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.25);
+}
+
+.pedit-actions-text {
+    max-width: 40vw;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-weight: 600;
+}
+
+.pedit-actions-sep {
+    width: 1px;
+    height: 16px;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.pedit-act {
+    min-width: 30px;
+    min-height: 26px;
+    text-align: center;
+}
+
+.pedit-act.is-on {
+    border-color: #4ea36b;
+    background: rgba(78, 163, 107, 0.25);
+}
+
+.pedit-weight {
+    min-width: 46px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.pedit-quick {
+    opacity: 0.8;
+}
+
+.pedit-act-close {
+    margin-left: auto;
+}
+
+.pedit-insert {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin: 3px 0 3px 32px;
+}
+
+.pedit-input {
+    flex: 1 1 140px;
+    min-height: 30px;
+    padding: 4px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    color: inherit;
+    font-size: 13px;
+}
+
+.pedit-suggest {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-height: 138px;
+    overflow: auto;
+}
+
+.pedit-suggest-item {
+    padding: 4px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    touch-action: manipulation;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.pedit-suggest-item.is-active,
+.pedit-suggest-item:hover {
+    border-color: #59a1f0;
+    background: rgba(89, 161, 240, 0.22);
+}
+
+.pedit-suggest-empty {
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+/* small switch that lives in the classic textarea corner */
+.pedit-fab {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 6;
+    padding: 3px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+    background: rgba(20, 20, 24, 0.75);
+    color: #eee;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+.pedit-fab:hover {
+    opacity: 1;
+}
+
+.pedit-host.pedit-chips-mode .pedit-fab {
+    display: none;
+}
+
+@media (pointer: coarse) {
+    .pedit-chip {
+        padding: 6px 10px;
+        font-size: 14px;
+    }
+
+    .pedit-gutter {
+        min-width: 34px;
+        min-height: 34px;
+        font-size: 14px;
+    }
+
+    .pedit-act {
+        min-width: 38px;
+        min-height: 34px;
+        font-size: 14px;
+    }
+
+    .pedit-head-btn,
+    .pedit-add {
+        min-height: 30px;
+        font-size: 12px;
+    }
+
+    .pedit-input {
+        min-height: 36px;
+        font-size: 15px;
+    }
+
+    .pedit-suggest-item {
+        padding: 7px 11px;
+        font-size: 13px;
+    }
+}

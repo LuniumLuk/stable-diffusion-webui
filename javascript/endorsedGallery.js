@@ -1659,6 +1659,86 @@
                 e.preventDefault();
                 resetTransform();
             });
+
+            // Touch: 1 finger pan (+ horizontal swipe when fitted),
+            // 2 finger pinch zoom, double-tap reset (mobile).
+            if (window.mobileGestures) {
+                let pinchPrev = null;
+                let touchPan = null;
+
+                window.mobileGestures.attachPinch(previewImage, {
+                    onStart: () => {
+                        touchPan = null;
+                        pinchPrev = { scale: 1, dx: 0, dy: 0 };
+                    },
+                    onMove: (g) => {
+                        if (!pinchPrev) return;
+                        const rect = previewImage.getBoundingClientRect();
+                        const factor = pinchPrev.scale ? g.scale / pinchPrev.scale : 1;
+                        if (Math.abs(factor - 1) > 0.0005) {
+                            const cx = g.centerX - (rect.left + rect.width / 2);
+                            const cy = g.centerY - (rect.top + rect.height / 2);
+                            const oldScale = zoomScale;
+                            zoomScale = Math.min(8, Math.max(0.2, zoomScale * factor));
+                            const ratio = zoomScale / oldScale;
+                            panX = panX * ratio - cx * (ratio - 1);
+                            panY = panY * ratio - cy * (ratio - 1);
+                        }
+                        panX += g.dx - pinchPrev.dx;
+                        panY += g.dy - pinchPrev.dy;
+                        pinchPrev = { scale: g.scale, dx: g.dx, dy: g.dy };
+                        applyTransform();
+                    },
+                    onEnd: () => {
+                        pinchPrev = null;
+                    },
+                });
+
+                previewImage.addEventListener('touchstart', (e) => {
+                    if (e.touches.length !== 1) {
+                        touchPan = null;
+                        return;
+                    }
+                    const t = e.touches[0];
+                    touchPan = {
+                        startX: t.clientX,
+                        startY: t.clientY,
+                        panX: panX,
+                        panY: panY,
+                        fitted: Math.abs(zoomScale - 1) < 0.02 && Math.abs(panX) < 4 && Math.abs(panY) < 4,
+                    };
+                }, { passive: true });
+
+                previewImage.addEventListener('touchmove', (e) => {
+                    if (!touchPan || e.touches.length !== 1) return;
+                    const t = e.touches[0];
+                    const dx = t.clientX - touchPan.startX;
+                    const dy = t.clientY - touchPan.startY;
+                    if (touchPan.fitted && Math.abs(dx) > Math.abs(dy)) {
+                        // candidate horizontal swipe to the prev/next image
+                        e.preventDefault();
+                        return;
+                    }
+                    panX = touchPan.panX + dx;
+                    panY = touchPan.panY + dy;
+                    applyTransform();
+                    e.preventDefault();
+                }, { passive: false });
+
+                previewImage.addEventListener('touchend', (e) => {
+                    if (!touchPan) return;
+                    const t = e.changedTouches[0];
+                    const dx = t ? t.clientX - touchPan.startX : 0;
+                    const dy = t ? t.clientY - touchPan.startY : 0;
+                    const fitted = touchPan.fitted;
+                    touchPan = null;
+                    if (fitted && Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+                        stepPreview(dx < 0 ? 1 : -1);
+                    }
+                }, { passive: true });
+
+                window.mobileGestures.attachDoubleTap(previewImage, () => resetTransform());
+            }
         }
 
         document.addEventListener('mousemove', (e) => {

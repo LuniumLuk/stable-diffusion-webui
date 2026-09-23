@@ -393,6 +393,17 @@ COMPOSER_HTML = """
 /* ── Canvas ─────────────────────────────────── */
 #composer_canvas_wrap { border: 1px solid var(--block-border-color); border-radius: 8px; padding: 8px; background: #0f172a; overflow: hidden; cursor: grab; }
 #composer_canvas_wrap.panning { cursor: grabbing; }
+#composer_canvas { touch-action: none; }
+
+/* Finger-friendly controls on touch devices. */
+@media (pointer: coarse) {
+  .cmp-tool-btn { min-height: 52px; }
+  .cmp-toggle-btn { padding: 9px 10px; font-size: 12px; }
+  .cmp-icon-btn { padding: 9px 2px 8px; }
+  .cmp-icon-btn .cmp-isym { font-size: 17px; }
+  .cmp-sm-btn, .cmp-hsv-mode-btn { min-height: 30px; }
+  #composer_right .cmp-action-btn { padding: 10px; font-size: 13px; }
+}
 #composer_canvas { width: 100%; height: 70vh; min-height: 420px; display: block; background:
 linear-gradient(45deg,#1e293b 25%,transparent 25%),
 linear-gradient(-45deg,#1e293b 25%,transparent 25%),
@@ -462,6 +473,36 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
   cursor: pointer;
   text-align: left;
   transition: background .12s, border-color .12s;
+}
+
+/* ── Responsive layout (phones / narrow windows) ──────────────
+   The 3-column grid (292px | canvas | 200px) squeezed the canvas to a
+   sliver on vertical phones; stack everything and put the canvas first.
+   (The canvas pixel size itself is fitted by fitCanvasToParent().) */
+@media (max-width: 980px) {
+  #composer_root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #composer_canvas_wrap {
+    order: -1;
+  }
+  #composer_canvas {
+    height: auto;
+    min-height: 0;
+  }
+  #composer_left,
+  #composer_right {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .cmp-tool-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .cmp-icon-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 #composer_right .cmp-action-btn:hover { background: #1e3a5f; border-color: #38bdf8; }
 #composer_right .cmp-action-btn--primary {

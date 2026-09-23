@@ -42,10 +42,15 @@
         return /^\s*#\s*-{3,}/.test(line);
     }
 
-    /** True when the line's first non-whitespace character is '#'. */
+    /**
+     * True when the line's first non-whitespace character is '#' and it is not a
+     * disabled keyword group ('#(', '#[' or '#<') - those belong to the chip
+     * editor and must stay visible/active.
+     */
     function lineStartsWithHash(line) {
         const trimmed = line.trimStart ? line.trimStart() : line.replace(/^\s+/, '');
-        return trimmed.charAt(0) === '#';
+        if (trimmed.charAt(0) !== '#') return false;
+        return '([<'.indexOf(trimmed.charAt(1)) < 0;
     }
 
     /**
@@ -231,6 +236,8 @@
         // ── layout sync ─────────────────────────────────────────────────────
 
         function syncLayout() {
+            // chips mode owns the prompt UI: the backdrop is hidden there anyway
+            if (host.classList.contains('pedit-chips-mode')) return;
             var cs = window.getComputedStyle(textarea);
             // Account for the textarea's border so the backdrop content area
             // aligns pixel-for-pixel with the actual text inside the textarea.
@@ -253,6 +260,7 @@
         }
 
         function syncContent() {
+            if (host.classList.contains('pedit-chips-mode')) return;
             backdrop.innerHTML = buildCommentHighlightHtml(textarea.value || '');
             backdrop.scrollTop  = textarea.scrollTop;
             backdrop.scrollLeft = textarea.scrollLeft;
@@ -278,6 +286,15 @@
                 toggleLineComment(textarea);
                 syncContent();
             }
+        });
+
+        // the chip editor switches the host into 'pedit-chips-mode' at any time:
+        // re-sync the classic overlay when it switches back to text mode
+        host.addEventListener('pedit-set-mode', function () {
+            setTimeout(function () {
+                syncLayout();
+                syncContent();
+            }, 0);
         });
 
         // Resize observer to keep overlay in sync when Gradio resizes the textarea.

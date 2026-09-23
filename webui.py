@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import os
+import sys
 import re
 import time
 import uuid as uuid_module
 import base64
 import html
 from secrets import compare_digest
+
+# Windows consoles and redirected logs encode output with the legacy ANSI codepage by
+# default (cp1252, cp936, ...). Any non-ASCII character - a CJK filename, a prompt with
+# emoji, a status arrow - then raises UnicodeEncodeError from print() and can abort a
+# running generation. Unrepresentable characters become "?" instead of crashing.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 from modules import timer
 from modules import initialize_util
@@ -358,7 +369,7 @@ def webui():
     launch_api = cmd_opts.api
     initialize.initialize()
 
-    from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks
+    from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks, image_optimization
 
     while 1:
         if shared.opts.clean_temp_dir_at_start:
@@ -388,9 +399,9 @@ def webui():
             "docs_url": "/docs",
             "redoc_url": "/redoc",
         }
-        gateway_middleware = _build_access_gateway_middleware(gradio_auth_creds)
-        if gateway_middleware:
-            app_kwargs["middleware"] = gateway_middleware
+        # Order matters: the access gateway stays outermost, the bandwidth
+        # optimizer only sees requests that already passed it.
+        app_kwargs["middleware"] = _build_access_gateway_middleware(gradio_auth_creds) + image_optimization.build_middleware()
 
         app, local_url, share_url = shared.demo.launch(
             share=cmd_opts.share,
@@ -420,6 +431,7 @@ def webui():
 
         progress.setup_progress_api(app)
         ui.setup_ui_api(app)
+        image_optimization.register_routes(app)
 
         if launch_api:
             create_api(app)

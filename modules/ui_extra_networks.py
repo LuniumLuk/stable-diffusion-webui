@@ -12,6 +12,7 @@ from modules.images import read_info_from_image, save_image_with_geninfo
 import gradio as gr
 import json
 import html
+from fastapi import Request
 from fastapi.exceptions import HTTPException
 from PIL import Image
 
@@ -94,7 +95,7 @@ def register_page(page):
     allowed_dirs.update(set(sum([x.allowed_directories_for_previews() for x in extra_pages], [])))
 
 
-def fetch_file(filename: str = ""):
+def fetch_file(filename: str = "", request: Request = None):
     from starlette.responses import FileResponse
 
     if not os.path.isfile(filename):
@@ -106,6 +107,25 @@ def fetch_file(filename: str = ""):
     ext = os.path.splitext(filename)[1].lower()[1:]
     if ext not in allowed_preview_extensions():
         raise ValueError(f"File cannot be fetched: {filename}. Extensions allowed: {allowed_preview_extensions()}.")
+
+    # Non-LAN clients get a downscaled WebP card preview ("?px=" forces it).
+    if request is not None:
+        try:
+            from modules import image_optimization
+
+            px = request.query_params.get("px")
+            max_px = int(px) if px and px.isdigit() else None
+            optimized = image_optimization.serve_variant(
+                request,
+                filename,
+                max_px=max_px,
+                explicit=bool(max_px),
+                kind="card",
+            )
+            if optimized is not None:
+                return optimized
+        except Exception:
+            pass
 
     # would profit from returning 304
     return FileResponse(filename, headers={"Accept-Ranges": "bytes"})

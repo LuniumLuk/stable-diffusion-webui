@@ -884,7 +884,7 @@ def _print_save_result(filepath: str, elapsed: float, image=None):
     else:
         res_str = ""
 
-    parts = [f"  \u2192 {filepath}", f"{res_str}" if res_str else "", f"{size_str}", f"{time_str}"]
+    parts = [f"  -> {filepath}", f"{res_str}" if res_str else "", f"{size_str}", f"{time_str}"]
     line = " ".join(p for p in parts if p)
 
     # Use tqdm.write if tqdm is active, otherwise plain print
@@ -899,16 +899,45 @@ def _print_save_result(filepath: str, elapsed: float, image=None):
 
 
 def strip_prompt_comments(text: str) -> str:
-    """Strip comment lines (lines whose first non-whitespace character is '#') from a prompt.
+    """Remove prompt comments and disabled keywords from a prompt.
+
+    Two forms are understood (both produced by the chip editor in
+    javascript/promptEditor.js and by hand):
+
+    * whole-line comments - a line whose first non-whitespace character is '#'
+      (a line starting with '#' followed by '(', '[' or '<' is NOT a comment, it
+      starts with a disabled keyword group);
+    * inline disabled groups - ``#(keyword)``, ``#[keyword]``, ``#<lora:x:1>``
+      anywhere in a line; the group is dropped, the rest of the line is kept.
 
     Called in setup_prompts() so that scripts.process() and the diffusion model
     always receive clean prompts.  The originals (with comments) are preserved in
     all_prompts_with_comments / all_negative_prompts_with_comments for PNG metadata
     and gallery restore.
     """
-    lines = text.split('\n')
-    filtered = [line for line in lines if not line.lstrip().startswith('#')]
-    return '\n'.join(filtered)
+    if not text:
+        return text
+
+    # whole-line comments (keep lines that start with a disabled keyword group)
+    lines = [line for line in text.split('\n') if not re.match(r'^\s*#(?![\[(<])', line)]
+    out = '\n'.join(lines)
+
+    # inline disabled groups; loop because the pattern unwraps one nesting level per pass
+    pattern = re.compile(r'#\((?:[^()]|\([^()]*\))*\)|#\[(?:[^\[\]]|\[[^\[\]]*\])*\]|#<[^<>]*>')
+    previous = None
+    while previous != out:
+        previous = out
+        out = pattern.sub('', out)
+
+    # tidy the separators the removed groups left behind (generation only - the
+    # metadata keeps the untouched original text)
+    previous = None
+    while previous != out:
+        previous = out
+        out = re.sub(r',[ \t]*,[ \t]*', ', ', out)
+    out = re.sub(r'^[ \t]*,[ \t]*', '', out, flags=re.M)  # group was at the start of a line
+    out = re.sub(r'[ \t]+$', '', out, flags=re.M)
+    return out
 
 
 def process_images(p: StableDiffusionProcessing) -> Processed:
