@@ -399,6 +399,13 @@ options_templates.update(options_section(('image-bandwidth', "Image bandwidth", 
     "remote_img_opt_remote_ips": OptionInfo("", "Always treat these client IPs/CIDRs as remote").info("comma separated, e.g. 203.0.113.7"),
 }))
 
+options_templates.update(options_section(('mobile-lite', "Mobile lite", "ui"), {
+    "mobile_lite_mode": OptionInfo("Auto (mobile devices)", "Mobile lite UI", gr.Radio, {"choices": ["Auto (mobile devices)", "Always", "Disabled"]}).info("a lightweight mobile-first front-end at /mlite/ that covers Text, Image (img2img + inpaint), Gallery and Compose; 'Auto' redirects phones/tablets opening / to it, 'Always' redirects every browser, 'Disabled' never redirects. Use the 'Desktop UI' button inside the lite UI (or /?desktop=1) to opt out in one browser, /?mlite=1 to opt back in"),
+    "mobile_lite_info": OptionHTML("""
+<p><a href='/mlite/' target='_blank' rel='noopener'>Open the mobile lite UI</a> - it is independent of this Gradio page and talks to its own JSON API; generations land in the normal output folders and appear in the Gallery tab.</p>
+"""),
+}))
+
 options_templates.update(options_section(('sampler-params', "Sampler parameters", "sd"), {
     "hide_samplers": OptionInfo([], "Hide samplers in user interface", gr.CheckboxGroup, lambda: {"choices": [x.name for x in shared_items.list_samplers()]}).needs_reload_ui(),
     "eta_ddim": OptionInfo(0.0, "Eta for DDIM", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}, infotext='Eta DDIM').info("noise multiplier; higher = more unpredictable results"),

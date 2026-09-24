@@ -818,62 +818,6 @@ onUiLoaded(async() => {
             }
         });
 
-        // Touch: two-finger pinch zoom + pan (mobile); double-tap resets the view.
-        // Capture-phase listeners keep gradio's own touch painting from running
-        // while a gesture (or a leftover finger of it) is active.
-        if (window.mobileGestures) {
-            let pinchStart = null;
-            let pinchPrev = null;
-            let suppressFingers = false;
-
-            window.mobileGestures.attachPinch(targetElement, {
-                onStart: () => {
-                    suppressFingers = true;
-                    pinchStart = { scale: elemData[elemId].zoomLevel || 1 };
-                    pinchPrev = { scale: 1, dx: 0, dy: 0 };
-                },
-                onMove: (g) => {
-                    if (!pinchStart || !pinchPrev) return;
-                    const rect = targetElement.getBoundingClientRect();
-                    const factor = pinchPrev.scale ? g.scale / pinchPrev.scale : 1;
-                    if (Math.abs(factor - 1) > 0.0005) {
-                        elemData[elemId].zoomLevel = updateZoom(
-                            Math.max(0.1, Math.min(15, pinchStart.scale * g.scale)),
-                            g.centerX - rect.left,
-                            g.centerY - rect.top
-                        );
-                    }
-                    elemData[elemId].panX += g.dx - pinchPrev.dx;
-                    elemData[elemId].panY += g.dy - pinchPrev.dy;
-                    targetElement.style.transformOrigin = "0 0";
-                    targetElement.style.transform = `translate(${elemData[elemId].panX}px, ${elemData[elemId].panY}px) scale(${elemData[elemId].zoomLevel})`;
-                    pinchPrev = { scale: g.scale, dx: g.dx, dy: g.dy };
-                },
-                onEnd: () => {
-                    pinchStart = null;
-                    pinchPrev = null;
-                },
-            }, { capture: true, touchAction: false });
-
-            targetElement.addEventListener("touchstart", (e) => {
-                if (e.touches.length >= 2) {
-                    suppressFingers = true;
-                    e.stopPropagation();
-                }
-            }, { capture: true, passive: true });
-
-            ["touchmove", "touchend"].forEach((type) => {
-                targetElement.addEventListener(type, (e) => {
-                    if (suppressFingers || e.touches.length >= 2) {
-                        e.stopPropagation();
-                    }
-                    if (e.touches.length === 0) suppressFingers = false;
-                }, { capture: true, passive: true });
-            });
-
-            window.mobileGestures.attachDoubleTap(targetElement, () => resetZoom());
-        }
-
         // Handle the move event for pan functionality. Updates the panX and panY variables and applies the new transform to the target element.
         function handleMoveKeyDown(e) {
 

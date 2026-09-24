@@ -26,11 +26,11 @@ class ScriptSampler(scripts.ScriptBuiltinUI):
                 self.sampler_name = gr.Dropdown(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=sampler_names[0])
                 self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=scheduler_names[0])
             with FormRow(elem_id=f"sampler_steps_{self.tabname}"):
-                self.batch_steps = gr.Textbox(label="Batch steps (queue)", elem_id=f"{self.tabname}_batch_steps", placeholder="e.g., 24,26,28 (empty = single step)", scale=1)
+                self.batch_steps = gr.Textbox(label="Batch steps (queue)", elem_id=f"{self.tabname}_batch_steps", placeholder="e.g., 24,26,28 (leave empty to use single step)", scale=1)
                 self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20, scale=2)
         else:
             with FormGroup(elem_id=f"sampler_selection_{self.tabname}"):
-                self.batch_steps = gr.Textbox(label="Batch steps (queue)", elem_id=f"{self.tabname}_batch_steps", placeholder="e.g., 24,26,28 (empty = single step)")
+                self.batch_steps = gr.Textbox(label="Batch steps (queue)", elem_id=f"{self.tabname}_batch_steps", placeholder="e.g., 24,26,28 (leave empty to use single step)")
                 self.steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{self.tabname}_steps", label="Sampling steps", value=20)
                 self.sampler_name = gr.Radio(label='Sampling method', elem_id=f"{self.tabname}_sampling", choices=sampler_names, value=sampler_names[0])
                 self.scheduler = gr.Dropdown(label='Schedule type', elem_id=f"{self.tabname}_scheduler", choices=scheduler_names, value=scheduler_names[0])

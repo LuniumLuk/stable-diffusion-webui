@@ -318,7 +318,7 @@
                 + '</span>';
         }
 
-        function lineHtml(line, index) {
+        function lineHtml(line, index, lines) {
             const commented = /^\s*#(?!\()/.test(line);
             // a commented line shows its keywords without the leading '# ' - the
             // gutter button carries the state and the raw text stays untouched
@@ -335,8 +335,21 @@
                 .join('');
             const commentBtn = `<button type="button" class="pedit-gutter ${commented ? 'is-comment' : ''}" `
                 + `data-line="${index}" title="${commented ? 'Uncomment this line' : 'Comment this line'}">${commented ? '⏸' : '💬'}</button>`;
+            // '# ---' markers open a block up to the next marker: one tap toggles the whole block
+            let blockBtn = '';
+            const bounds = lines ? blockBounds(lines, index) : null;
+            if (bounds) {
+                const off = blockIsOff(lines, bounds.from, bounds.to);
+                const count = bounds.to - bounds.from;
+                const title = off
+                    ? 'Turn this block back on (' + count + ' line(s))'
+                    : 'Turn off this block until the next # marker (' + count + ' line(s))';
+                blockBtn = `<button type="button" class="pedit-gutter pedit-block-toggle ${off ? 'is-off' : ''}" `
+                    + `data-line="${index}" title="${title}">${off ? '⏸' : '▶'}</button>`;
+            }
             return `<div class="pedit-line ${commented ? 'is-comment' : ''}" data-line="${index}">`
                 + commentBtn
+                + blockBtn
                 + `<div class="pedit-chips">${chips}<button type="button" class="pedit-add" data-line="${index}" title="Add a keyword to this line">＋</button></div>`
                 + '</div>';
         }
@@ -380,7 +393,7 @@
 
         function render() {
             const lines = state.text.split('\n');
-            const body = lines.map((l, i) => lineHtml(l, i) + inputHtml(i)).join('');
+            const body = lines.map((l, i) => lineHtml(l, i, lines) + inputHtml(i)).join('');
             const disabledCount = countDisabled();
             const previous = root.querySelector('.pedit-body');
             const scrollTop = previous ? previous.scrollTop : state.scroll;
@@ -526,6 +539,59 @@
             commit(lines.join('\n'));
         }
 
+        // ── '# ---' block comments (same contract as javascript/promptComment.js) ──
+
+        function isBlockMarker(line) {
+            return /^\s*#\s*-{3,}/.test(line);
+        }
+
+        /** {"from", "to"} line indexes covered by the block opened at `index`, or null. */
+        function blockBounds(lines, index) {
+            if (index < 0 || index >= lines.length || !isBlockMarker(lines[index])) return null;
+            for (let i = index + 1; i < lines.length; i += 1) {
+                if (isBlockMarker(lines[i])) return { from: index + 1, to: i };
+            }
+            return null;
+        }
+
+        function startsWithLineHash(line) {
+            const trimmed = line.replace(/^\s+/, '');
+            if (trimmed.charAt(0) !== '#') return false;
+            return '([<'.indexOf(trimmed.charAt(1)) < 0;
+        }
+
+        function blockIsOff(lines, from, to) {
+            let any = false;
+            for (let i = from; i < to; i += 1) {
+                if (!lines[i].trim()) continue;
+                any = true;
+                if (!startsWithLineHash(lines[i])) return false;
+            }
+            return any;
+        }
+
+        /** Comment / uncomment every line between the marker at `index` and the next one. */
+        function toggleBlockComment(index) {
+            const lines = state.text.split('\n');
+            const bounds = blockBounds(lines, index);
+            if (!bounds) return;
+            const off = blockIsOff(lines, bounds.from, bounds.to);
+            const next = lines.slice();
+            for (let i = bounds.from; i < bounds.to; i += 1) {
+                const line = next[i];
+                if (!line.trim()) continue;
+                const trimmed = line.replace(/^\s+/, '');
+                const indent = line.slice(0, line.length - trimmed.length);
+                if (off) {
+                    if (trimmed.slice(0, 2) === '# ') next[i] = indent + trimmed.slice(2);
+                    else if (trimmed.charAt(0) === '#') next[i] = indent + trimmed.slice(1);
+                } else if (!startsWithLineHash(line)) {
+                    next[i] = indent + '# ' + trimmed;
+                }
+            }
+            commit(next.join('\n'));
+        }
+
         function addLine() {
             const base = state.text.replace(/\n*$/, '');
             const next = base + '\n';
@@ -667,6 +733,12 @@
                 const same = state.selected && state.selected.line === line && state.selected.seg === seg;
                 state.selected = same ? null : { line: line, seg: seg };
                 render();
+                e.preventDefault();
+                return;
+            }
+            const blockToggle = target.closest('.pedit-block-toggle');
+            if (blockToggle) {
+                toggleBlockComment(parseInt(blockToggle.dataset.line, 10));
                 e.preventDefault();
                 return;
             }

@@ -369,7 +369,7 @@ def webui():
     launch_api = cmd_opts.api
     initialize.initialize()
 
-    from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks, image_optimization
+    from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks, image_optimization, mobile_lite
 
     while 1:
         if shared.opts.clean_temp_dir_at_start:
@@ -401,7 +401,7 @@ def webui():
         }
         # Order matters: the access gateway stays outermost, the bandwidth
         # optimizer only sees requests that already passed it.
-        app_kwargs["middleware"] = _build_access_gateway_middleware(gradio_auth_creds) + image_optimization.build_middleware()
+        app_kwargs["middleware"] = _build_access_gateway_middleware(gradio_auth_creds) + image_optimization.build_middleware() + mobile_lite.build_middleware()
 
         app, local_url, share_url = shared.demo.launch(
             share=cmd_opts.share,
@@ -432,6 +432,7 @@ def webui():
         progress.setup_progress_api(app)
         ui.setup_ui_api(app)
         image_optimization.register_routes(app)
+        mobile_lite.register_routes(app)
 
         if launch_api:
             create_api(app)

@@ -743,8 +743,8 @@ def _restore_endorsement_row(conn, row):
 
 
 def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
-            cfg_scale, width, height, model_name, model_hash, infotext):
-    item_key = _item_key_from_path(image_path)
+            cfg_scale, width, height, model_name, model_hash, infotext, item_key=None):
+    item_key = str(item_key or "") or _item_key_from_path(image_path)
     endorsed_at = datetime.now()
 
     # Endorsing cancels staged status
@@ -827,6 +827,16 @@ def get_endorsed_paths() -> set:
         return {r[0] for r in rows}
 
 
+def get_endorsed_item_keys() -> set:
+    """Item keys with an endorsement row (endorsing copies the image elsewhere,
+    so the original path alone cannot identify an endorsed card)."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != ''"
+        ).fetchall()
+        return {r[0] for r in rows}
+
+
 def get_endorsed_id_by_path(path: str):
     item_key = _item_key_from_path(path)
     with _get_conn() as conn:
@@ -844,8 +854,8 @@ def get_endorsed_id_by_path(path: str):
 
 
 def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
-            cfg_scale, width, height, model_name, model_hash, infotext):
-    item_key = _item_key_from_path(image_path)
+            cfg_scale, width, height, model_name, model_hash, infotext, item_key=None):
+    item_key = str(item_key or "") or _item_key_from_path(image_path)
 
     # Disliking cancels staged status
     unstage_item(item_key)
@@ -898,6 +908,31 @@ def delete_dislike_by_path(path: str):
             conn.execute("DELETE FROM dislikes WHERE item_key=?", (item_key,))
         else:
             conn.execute("DELETE FROM dislikes WHERE image_path=?", (path,))
+        conn.commit()
+
+
+def delete_endorsement_by_key(item_key: str):
+    """Remove an endorsement by canonical item key, deleting its endorsed copy.
+
+    Endorsed copies get a `_N` filename suffix, so a key derived from the copy path
+    would not match the stored row (silently doing nothing)."""
+    key = str(item_key or "")
+    if not key:
+        return
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM endorsements WHERE item_key=?", (key,)).fetchall()
+        for row in rows:
+            _restore_endorsement_row(conn, row)
+        conn.execute("DELETE FROM endorsements WHERE item_key=?", (key,))
+        conn.commit()
+
+
+def delete_dislike_by_key(item_key: str):
+    key = str(item_key or "")
+    if not key:
+        return
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM dislikes WHERE item_key=?", (key,))
         conn.commit()
 
 

@@ -80,9 +80,6 @@
       requireLeftCtrlForZoom: false,
       // Track left-CTRL state (used to enable canvas zoom on scroll)
       leftCtrlDown: false,
-      // multi-touch: two fingers = pinch zoom + pan
-      touchPointers: new Set(),
-      touchGesture: false,
     };
 
     const canvas = root.querySelector("#composer_canvas");
@@ -714,48 +711,6 @@
       }
     }
 
-    // Viewport metrics for pinch math (same conventions as the wheel handler).
-    function composerViewportMetrics() {
-      const measureRect = (canvasWrap && canvasWrap.getBoundingClientRect)
-        ? canvasWrap.getBoundingClientRect()
-        : canvas.getBoundingClientRect();
-      const clientWidth = canvas.clientWidth || measureRect.width || 1;
-      const clientHeight = canvas.clientHeight || measureRect.height || 1;
-      return {
-        rect: measureRect,
-        cssToCanvasX: canvas.width / clientWidth,
-        cssToCanvasY: canvas.height / clientHeight,
-        minScale: typeof state.viewportScaleMin === 'number' ? state.viewportScaleMin : 0.25,
-        maxScale: Math.max(0.0001, (state.maxCanvasPixelScreen * canvas.width) / clientWidth),
-      };
-    }
-
-    // Anchor data for a two-finger gesture: the world point that sat under the
-    // initial midpoint stays glued to the current midpoint at any scale.
-    function composerPinchStart(g) {
-      const m = composerViewportMetrics();
-      const ptrCanvasX = (g.centerX - m.rect.left) * m.cssToCanvasX;
-      const ptrCanvasY = (g.centerY - m.rect.top) * m.cssToCanvasY;
-      return {
-        metrics: m,
-        scale: state.viewportScale,
-        worldX: (ptrCanvasX - state.viewportX * m.cssToCanvasX) / state.viewportScale,
-        worldY: (ptrCanvasY - state.viewportY * m.cssToCanvasY) / state.viewportScale,
-      };
-    }
-
-    function composerPinchApply(g, start) {
-      const m = start.metrics;
-      const nextScale = Math.min(m.maxScale, Math.max(m.minScale, start.scale * g.scale));
-      const ptrCanvasX = (g.centerX - m.rect.left) * m.cssToCanvasX;
-      const ptrCanvasY = (g.centerY - m.rect.top) * m.cssToCanvasY;
-      state.viewportX = (ptrCanvasX - start.worldX * nextScale) / m.cssToCanvasX;
-      state.viewportY = (ptrCanvasY - start.worldY * nextScale) / m.cssToCanvasY;
-      state.viewportScale = nextScale;
-      applyCanvasViewport();
-      setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
-    }
-
     function captureLayerSnapshot(layer) {
       if (!layer || !layer.img) return null;
       const editable = ensureEditableLayerCanvas(layer);
@@ -1080,29 +1035,23 @@
     function fitCanvasToParent() {
       const wrap = root.querySelector("#composer_canvas_wrap");
       if (!wrap) return;
-
+      
       // Get canvas internal aspect ratio
       const internalAspect = canvas.width / canvas.height;
-
-      // Calculate available space; 0 width = tab hidden, keep the current size
-      const availW = wrap.clientWidth - 16;
-      if (availW <= 0) return;
-
-      // Touch devices must fit the available width (the old 640px/420px floors
-      // overflowed phone screens and clipped the canvas)
-      const coarse = !!(window.mobileGestures && window.mobileGestures.isCoarsePointer());
-      const maxW = coarse ? Math.max(160, availW) : Math.max(640, availW);
-      const maxH = Math.max(coarse ? 200 : 420, Math.floor(window.innerHeight * (coarse ? 0.6 : 0.68)));
-
+      
+      // Calculate available space
+      const maxW = Math.max(640, wrap.clientWidth - 16);
+      const maxH = Math.max(420, Math.floor(window.innerHeight * 0.68));
+      
       // Fit to available space while preserving internal aspect ratio
       let cssW = maxW;
       let cssH = cssW / internalAspect;
-
+      
       if (cssH > maxH) {
         cssH = maxH;
         cssW = cssH * internalAspect;
       }
-
+      
       canvas.style.width = cssW + "px";
       canvas.style.height = cssH + "px";
       applyCanvasViewport();
@@ -2417,14 +2366,6 @@
       // track last pointer position for preview placement
       state.cursorClientX = evt.clientX;
       state.cursorClientY = evt.clientY;
-      if (evt.pointerType === "touch") {
-        state.touchPointers.add(evt.pointerId);
-        if (state.touchGesture || state.touchPointers.size > 1) {
-          // two-finger pinch/pan is owned by the touch gesture layer
-          evt.preventDefault();
-          return;
-        }
-      }
       if (evt.button === 2) {
         evt.preventDefault();
         // ALT + right-drag: resize brush/line horizontally (left shrink, right expand)
@@ -2614,9 +2555,6 @@
       // update cursor position used by size preview
       state.cursorClientX = evt.clientX;
       state.cursorClientY = evt.clientY;
-      if (evt.pointerType === "touch" && (state.touchGesture || state.touchPointers.size > 1)) {
-        return; // pinch/pan in progress
-      }
       if (state.dragMode === "pan_canvas") {
         state.viewportX = state.startViewportX + (evt.clientX - state.startClientX);
         state.viewportY = state.startViewportY + (evt.clientY - state.startClientY);
@@ -2719,10 +2657,6 @@
     });
 
     canvas.addEventListener("pointerup", (evt) => {
-      if (evt.pointerType === "touch") {
-        state.touchPointers.delete(evt.pointerId);
-        if (state.touchGesture || state.touchPointers.size > 0) return;
-      }
       const layer = getActiveLayer();
       if (state.dragMode === "pan_canvas") {
         if (canvasWrap) {
@@ -2818,8 +2752,7 @@
       draw();
     });
 
-    canvas.addEventListener("pointercancel", (evt) => {
-      if (evt && evt.pointerType === "touch") state.touchPointers.delete(evt.pointerId);
+    canvas.addEventListener("pointercancel", () => {
       if (canvasWrap) {
         canvasWrap.classList.remove("panning");
       }
@@ -2932,37 +2865,6 @@
 
       setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
     }, { passive: false });
-
-    // ── Two-finger pinch zoom + pan (mobile) ──────────────────
-    if (window.mobileGestures) {
-      let pinchStart = null;
-      window.mobileGestures.attachPinch(
-        canvas,
-        {
-          onStart: (g) => {
-            // Discard whatever the first finger started (a brush/eraser stroke
-            // already pushed its undo snapshot, so undo brings the layer back).
-            if (state.dragMode === "brush") undoPaint();
-            state.dragMode = null;
-            state.brushLastPoint = null;
-            state.linePreview = null;
-            state.cropPreview = null;
-            state.touchGesture = true;
-            hideSizePreview();
-            hideColorPreview();
-            pinchStart = composerPinchStart(g);
-          },
-          onMove: (g) => {
-            if (pinchStart) composerPinchApply(g, pinchStart);
-          },
-          onEnd: () => {
-            pinchStart = null;
-            state.touchGesture = false;
-          },
-        },
-        { touchAction: false }
-      );
-    }
 
 
     window.addEventListener("keydown", (evt) => {
@@ -3679,21 +3581,6 @@
     });
 
     window.addEventListener("resize", fitCanvasToParent);
-    // Refit when the canvas area appears/changes size (e.g. the tab was hidden
-    // at load, a phone rotates, or the side panels collapse)
-    if (typeof ResizeObserver === "function") {
-      try {
-        const canvasWrapEl = root.querySelector("#composer_canvas_wrap");
-        if (canvasWrapEl) {
-          const ro = new ResizeObserver(() => {
-            if (canvasWrapEl.clientWidth > 0) fitCanvasToParent();
-          });
-          ro.observe(canvasWrapEl);
-        }
-      } catch (e) {
-        // ignore observer setup failures
-      }
-    }
     bindUploadInputs();
     updateLockModeUi();
     updateBgLockUi();
