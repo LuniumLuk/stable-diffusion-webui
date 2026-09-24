@@ -52,6 +52,7 @@
 
   const state = {
     mode: "paint", // paint | sam | erase
+    preview: null, // null = undecided; true = small non-editable preview (mobile shell default); false = large editor
     model: "",
     models: [],
     maskIdx: 0,
@@ -144,6 +145,9 @@
       el.textContent = text;
       el.classList.toggle("inpsam-err", !!isErr);
     }
+    // the status/hint rows change the bar's height - re-anchor it so the last row
+    // cannot end up clipped by the bottom edge of the component
+    scheduleBarReposition();
   }
 
   /* ------------------------------- busy indicator -------------------------------- */
@@ -237,12 +241,25 @@
     const p = getParts();
     if (!p) return;
     const view = p.root.getBoundingClientRect();
+    if (view.width < 20 || view.height < 20) return; // component hidden (sheet open / tab away)
     const w = p.iface.offsetWidth || p.wrap.offsetWidth || 1;
     const h = p.iface.offsetHeight || p.wrap.offsetHeight || 1;
-    const scale = Math.min(1, (view.width * 0.98) / w, (view.height * 0.98) / h);
-    state.zoom = scale > 0 ? scale : 1;
-    state.panX = 0;
-    state.panY = 0;
+    const fit = Math.min((view.width * 0.98) / w, (view.height * 0.98) / h);
+    // the editor is a "fill my panel" view: scaling up is wanted there (the canvas buffer is
+    // much larger than its layout box), everywhere else keep the classic fit-never-upscale rule
+    const editing = p.root.classList.contains("inpsam-editing");
+    const scale = editing ? fit : Math.min(1, fit);
+    const z = scale > 0 ? scale : 1;
+    // gradio may lay the canvas box out anywhere inside the component (it centres a box that
+    // is often larger than the wrapper); the transform is applied about the canvas's own
+    // origin, so derive that origin from the current rect + pan and place the scaled box
+    // centred inside the view, otherwise a "fit" of a big canvas crops instead of fitting.
+    const cur = p.iface.getBoundingClientRect();
+    const layoutLeft = cur.left - state.panX;
+    const layoutTop = cur.top - state.panY;
+    state.zoom = z;
+    state.panX = (view.left - layoutLeft) + (view.width - w * z) / 2;
+    state.panY = (view.top - layoutTop) + (view.height - h * z) / 2;
     applyView();
   }
 
@@ -874,6 +891,7 @@
         <span class="inpsam-sep"></span>
         <button type="button" class="inpsam-btn inpsam-icon" data-act="undo" title="Undo last SAM pick / erase (restores mask snapshot; discards strokes painted after it)">\u21B6</button>
         <button type="button" class="inpsam-btn inpsam-icon" data-act="fit" title="Reset zoom (fit)">\u27F2</button>
+        <button type="button" class="inpsam-btn inpsam-icon" data-act="preview" title="Done - back to the small preview">\u2713</button>
         <span class="inpsam-status"></span>
         <button type="button" class="inpsam-btn inpsam-icon inpsam-drag" title="Drag to move this toolbar (double-click to reset its position)">\u283F</button>
         <button type="button" class="inpsam-btn inpsam-icon inpsam-collapse" title="Hide the option rows">\u25BE</button>
@@ -999,6 +1017,7 @@
     // action buttons
     bar.querySelector('[data-act="undo"]').addEventListener("click", undoLast);
     bar.querySelector('[data-act="fit"]').addEventListener("click", () => fitView());
+    bar.querySelector('[data-act="preview"]').addEventListener("click", () => enterPreviewMode());
 
     // colors + blink toggle
     const cBrush = bar.querySelector(".inpsam-c-brush");
@@ -1236,8 +1255,8 @@
           return;
         }
         if (!inCanvas(q, e)) return;
-        if (state.mode === "scroll") {
-          // hand mode: never swallow the gesture, the browser scrolls the pane instead
+        if (state.mode === "scroll" || state.preview === true) {
+          // hand mode / preview: never swallow the gesture, the browser scrolls the pane instead
           addGestureListeners(); // 2-finger pinch/pan on the canvas keeps working
           return;
         }
@@ -1279,7 +1298,7 @@
         }
         updateCursor(e);
         if (state.mode === "paint") drawBrushRing(e.clientX, e.clientY);
-        if (state.mode === "scroll") return; // let the browser scroll
+        if (state.mode === "scroll" || state.preview === true) return; // let the browser scroll
         if (inCanvas(q, e) || state.paint || state.erase || state.pan) {
           e.stopPropagation();
           e.preventDefault();
@@ -1294,7 +1313,7 @@
           if (e.__inpsamSynthetic) return; // sync stroke: gradio must receive it
           const q = getParts();
           if (!q || inBar(q, e)) return;
-          if (state.mode === "scroll") return; // hand mode: leave the gesture alone
+          if (state.mode === "scroll" || state.preview === true) return; // hand mode / preview: leave the gesture alone
           if (inCanvas(q, e)) {
             e.stopPropagation();
             e.preventDefault();
@@ -1314,6 +1333,7 @@
       (e) => {
         const q = getParts();
         if (!q || inBar(q, e)) return;
+        if (state.preview === true) return; // preview: let the page scroll
         e.preventDefault();
         e.stopPropagation();
         if (e.ctrlKey || e.altKey) {
@@ -1505,15 +1525,15 @@
           pinchPrev = null;
         },
       },
-      { capture: true, touchAction: false, filter: onCanvas }
+      { capture: true, touchAction: false, filter: (ev) => state.preview !== true && onCanvas(ev) }
     );
 
     p.root.addEventListener(
       "touchstart",
       (e) => {
         if (e.__inpsamSynthetic || !onCanvas(e)) return;
-        // hand mode: never preventDefault, the browser pans the pane instead
-        if (state.mode === "scroll") return;
+        // hand mode / preview: never preventDefault, the browser pans the pane instead
+        if (state.mode === "scroll" || state.preview === true) return;
         e.preventDefault();
         e.stopPropagation();
         if (e.touches.length >= 2) {
@@ -1530,7 +1550,7 @@
       "touchmove",
       (e) => {
         if (e.__inpsamSynthetic || !onCanvas(e)) return;
-        if (state.mode === "scroll") return;
+        if (state.mode === "scroll" || state.preview === true) return;
         e.preventDefault();
         e.stopPropagation();
         if (e.touches.length >= 2 || suppress || !stroke) return;
@@ -1543,7 +1563,7 @@
       "touchend",
       (e) => {
         if (e.__inpsamSynthetic || !onCanvas(e)) return;
-        if (state.mode === "scroll") return;
+        if (state.mode === "scroll" || state.preview === true) return;
         e.preventDefault();
         e.stopPropagation();
         if (e.touches.length > 0) return;
@@ -1579,6 +1599,133 @@
     setBrushRadius(brushRadiusNatural() + (deltaY > 0 ? -step : step), false);
   }
 
+  /* ------------------- preview / full editor mode (mobile shell) ------------------- */
+  // On a phone the inpaint surface is a *small non-editable preview* in the page flow; the
+  // "Edit mask" pill promotes the same component into a full-bleed panel between the shell
+  // bars where painting / SAM work exactly as before, and "Done" drops it back down.
+
+  function isMobileShell() {
+    return document.body.classList.contains("mshell");
+  }
+
+  // while the editor is open nothing behind it may render at all: no page element, whatever its
+  // stacking order, can cover or steal taps from the panel
+  function setPageHiddenWhileEditing(hidden) {
+    document.body.classList.toggle("mshell-inpaint-edit", !!hidden && isMobileShell());
+  }
+
+  // iOS Safari: 100vh is the *large* viewport (URL bar hidden), so an editor sized with vh extends
+  // behind the browser UI; innerHeight is the visible height - publish it for the CSS to use
+  function updateEditorViewportHeight() {
+    try {
+      document.documentElement.style.setProperty("--inpsam-vh", `${window.innerHeight}px`);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function ensurePreviewButton(p) {
+    let btn = p.root.querySelector(".inpsam-preview-btn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "inpsam-preview-btn";
+      btn.title = "Open the large mask editor";
+      btn.innerHTML = "\u270E Edit mask";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        enterEditMode();
+      });
+      // anchor to the component ROOT: the inner .image-container can be taller than the visible
+      // preview crop, which would push a host-anchored pill out of sight on some devices
+      p.root.appendChild(btn);
+    }
+    return btn;
+  }
+
+  function enterPreviewMode() {
+    const p = getParts();
+    if (!p) return;
+    state.preview = true;
+    setPageHiddenWhileEditing(false);
+    p.root.classList.remove("inpsam-editing");
+    p.root.classList.add("inpsam-preview");
+    applyModeAppearance();
+    requestAnimationFrame(() => {
+      fitView();
+      scheduleBarReposition();
+    });
+  }
+
+  function enterEditMode() {
+    const p = getParts();
+    if (!p) return;
+    // the editor is the top layer: if a shell sheet (Params/Prompt/...) is open, close it so the
+    // editor is not stuck behind it - this is also what makes the pill work from inside a sheet
+    if (document.body.classList.contains("mshell-sheet-active")) {
+      try {
+        if (window.mobileShell && window.mobileShell.close) window.mobileShell.close();
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    state.preview = false;
+    updateEditorViewportHeight();
+    setPageHiddenWhileEditing(true);
+    p.root.classList.remove("inpsam-preview");
+    p.root.classList.add("inpsam-editing");
+    applyModeAppearance();
+    requestAnimationFrame(() => {
+      fitView();
+      scheduleBarReposition();
+    });
+  }
+
+  // gradio sizes the sketch canvases to the wrapper, so their aspect can change with the layout
+  // (e.g. right after a sheet was open) and visibly squash the picture; pin every canvas to the
+  // drawing buffer's own aspect instead - the image, mask and outline always stay in proportion
+  function enforceCanvasAspect(p) {
+    const w = p.iface.width || 0;
+    const h = p.iface.height || 0;
+    if (!w || !h) return;
+    const want = `${w} / ${h}`;
+    p.wrap.querySelectorAll("canvas").forEach((cv) => {
+      if (cv.dataset.inpsamAspect === want) return;
+      cv.style.setProperty("aspect-ratio", want, "important");
+      cv.style.setProperty("width", "auto", "important");
+      cv.style.setProperty("height", "auto", "important");
+      cv.style.setProperty("max-width", "100%", "important");
+      cv.dataset.inpsamAspect = want;
+    });
+  }
+
+  function syncPreviewMode(p) {
+    if (!p) return;
+    if (!isMobileShell()) {
+      // desktop: the component stays inline and editable, exactly as before
+      state.preview = false;
+      setPageHiddenWhileEditing(false);
+      p.root.classList.remove("inpsam-preview", "inpsam-editing");
+      return;
+    }
+    ensurePreviewButton(p);
+    if (state.preview !== false) {
+      state.preview = true; // first run on a phone: start with the small preview
+      p.root.classList.add("inpsam-preview");
+      p.root.classList.remove("inpsam-editing");
+      // the preview can never be zoomed/panned by the user, so keeping it fitted on every
+      // reconcile is safe - and it recovers automatically from gradio re-layouts
+      requestAnimationFrame(() => {
+        const q = getParts();
+        if (q && state.preview === true) fitView();
+      });
+    } else {
+      p.root.classList.remove("inpsam-preview");
+      p.root.classList.add("inpsam-editing");
+    }
+  }
+
   /* ------------------------------------ ensure ------------------------------------ */
 
   function positionBar(bar, host) {
@@ -1598,7 +1745,15 @@
     // touch devices: the fitted image sits at the top of the (taller) component,
     // so default the bar to the bottom of the *visible* part of the component -
     // it stays reachable while the page is scrolled
-    const visibleBottom = Math.min(hostRect.bottom, window.innerHeight);
+    // the visible slice of the component often ends under the mobile shell's fixed bottom
+    // toolbar - dock the bar above it, or the lowest rows sit behind the bar's buttons
+    let bottomInset = 0;
+    const shellBottom = document.getElementById("mshell_bottom");
+    if (shellBottom && document.body.classList.contains("mshell")) {
+      const sr = shellBottom.getBoundingClientRect();
+      if (sr.height > 0 && sr.bottom >= window.innerHeight - 1) bottomInset = sr.height;
+    }
+    const visibleBottom = Math.min(hostRect.bottom, window.innerHeight - bottomInset);
     const wantY = visibleBottom - hostRect.top - barH - margin;
     const defY = coarse ? clamp(wantY, margin, maxY) : margin;
     const offX = barView.x === null ? margin : clamp(barView.x, margin, maxX);
@@ -1656,11 +1811,15 @@
       document.querySelectorAll(".inpsam-bar").forEach((b) => b.remove());
       clearBusy();
       document.querySelectorAll(".inpsam-busy").forEach((b) => b.remove());
+      document.querySelectorAll(".inpsam-preview-btn").forEach((b) => b.remove());
+      setPageHiddenWhileEditing(false);
       cursorEl().style.display = "none";
       return;
     }
     bindRootListeners(p);
     watchBrushRadius();
+    enforceCanvasAspect(p);
+    syncPreviewMode(p);
 
     // keep the silhouette layer sized to the mask canvas (also after gradio resizes/swaps the image)
     const oc = p.wrap.querySelector(".inpsam-outline");
@@ -1720,6 +1879,13 @@
     ensure();
     setMode(state.mode);
     updateBlinkLoop();
+    // opening a shell sheet while editing: leave the editor (it is a page mode) so the sheet is
+    // not covered; the preview stays and the editor can be re-opened from its pill
+    new MutationObserver(() => {
+      if (document.body.classList.contains("mshell-sheet-active") && state.preview === false) {
+        enterPreviewMode();
+      }
+    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
     if (typeof onAfterUiUpdate === "function") onAfterUiUpdate(ensure);
     document.addEventListener("scroll", scheduleBarReposition, { capture: true, passive: true });
     window.addEventListener("resize", () => {
@@ -1728,6 +1894,7 @@
         const bar = p.host.querySelector(".inpsam-bar");
         if (bar) positionBar(bar, p.host);
       }
+      if (state.preview === false) updateEditorViewportHeight();
     });
     setInterval(ensure, 1500);
   }

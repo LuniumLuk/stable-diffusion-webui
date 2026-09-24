@@ -4714,7 +4714,7 @@ body.mshell #tabs > .tab-nav {
     align-items: center;
     gap: 6px;
     padding: 6px 8px;
-    background: rgba(16, 16, 20, 0.96);
+    background: rgb(16, 16, 20);
     backdrop-filter: blur(8px);
     transition: transform 0.22s ease;
 }
@@ -5012,15 +5012,23 @@ body.mshell #img2img_gallery {
     min-height: 46vh;
 }
 
-body.mshell #img2img_image,
+/* the upload source is a thumbnail now: override the inline `height: <editor_height>px` */
+body.mshell #img2img_image {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: 21vh !important;
+}
+
 body.mshell #img2img_image > label,
 body.mshell #img2img_image .image-container {
     width: 100% !important;
+    max-height: 21vh;
 }
 
 body.mshell #img2img_image canvas,
 body.mshell #img2img_image img {
-    max-height: 46vh;
+    max-height: 19vh;
     object-fit: contain;
 }
 
@@ -5364,4 +5372,166 @@ body.mshell #img2maskimg.inpsam-scroll .wrap * {
     width: 100% !important;
     min-width: 0 !important;
     margin: 0 !important;
+}
+
+/* ---------- mobile workflow polish (2026-09-24 verification pass) ---------- */
+
+/* the bars are opaque: nothing may show through / ghost behind them */
+body.mshell #mshell_top,
+body.mshell #mshell_bottom {
+    background: rgb(16, 16, 20);
+}
+
+/* chips a touch tighter so all four + Generate fit on one 390px row
+   (the strips stay scrollable as a fallback on narrower screens) */
+body.mshell .mshell-strip {
+    gap: 4px;
+}
+
+body.mshell .mshell-chip {
+    padding: 5px 6px;
+}
+
+body.mshell .mshell-primary {
+    padding: 6px 10px;
+}
+
+/* nested tab strips (img2img/sketch/inpaint/upload/batch, resize tabs, extra tabs) must keep
+   their labels on one line - shrinking wrapped "Inpaint sketch" into a clipped "Inpaint" */
+body.mshell .gradio-tabs > .tab-nav button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* ... but a nowrap strip must live in a box that can actually scroll. The in-flow img2img
+   settings column is sized by content inside a flex chain, so its width grew to the strip's
+   min-content (433px) and the strip could not scroll at all - pin it to the viewport
+   (sheet mode is exempt: promoted sheets stay full-bleed). */
+body.mshell #img2img_settings:not(.mshell-sheet) {
+    max-width: calc(100vw - 12px) !important;
+}
+
+/* toast banners hang 12px from the top and would sit ON the top bar - keep them below it */
+body.mshell #global_banner_host {
+    top: 54px;
+}
+
+/* "Batch steps (queue)" placeholder wraps onto two lines - give the box room to show it
+   instead of clipping the second line halfway (mobile sheet only) */
+body.mshell #txt2img_batch_steps textarea,
+body.mshell #img2img_batch_steps textarea {
+    min-height: 3.4em;
+}
+
+/* ---------- inpaint: small preview + large editor (mobile) ---------- */
+
+/* compact in the page flow even with no image yet (the panel can only attach once the sketch
+   canvases exist) and whenever the preview class is applied - the editor overrides this */
+body.mshell #img2maskimg {
+    max-height: 24vh !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* default: a short, non-editable preview of the mask surface in the page flow */
+body.mshell #img2maskimg.inpsam-preview {
+    position: relative;
+    max-height: 24vh !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    border-radius: 10px;
+}
+
+/* the guts of the component may keep their built-in height while the root is cropped - cap
+   them too so the canvas, the mask and the pill all stay inside the visible box */
+body.mshell #img2maskimg.inpsam-preview .image-container,
+body.mshell #img2maskimg.inpsam-preview .wrap {
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden;
+}
+
+body.mshell #img2maskimg.inpsam-preview canvas {
+    pointer-events: none !important;
+}
+
+body.mshell #img2maskimg.inpsam-preview .wrap,
+body.mshell #img2maskimg.inpsam-preview .wrap * {
+    touch-action: pan-y !important;
+}
+
+body.mshell #img2maskimg.inpsam-preview .inpsam-bar {
+    display: none !important;
+}
+
+body.mshell #img2maskimg.inpsam-preview .inpsam-busy {
+    display: none !important;
+}
+
+/* the explicit way into the editor */
+.inpsam-preview-btn {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    z-index: 34;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 999px;
+    background: rgba(16, 16, 20, 0.92);
+    color: #f3f4f6;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+body.mshell #img2maskimg.inpsam-preview .inpsam-preview-btn {
+    display: inline-flex;
+}
+
+/* the Done / back-to-preview button only makes sense inside the mobile shell */
+body:not(.mshell) .inpsam-btn[data-act="preview"] {
+    display: none !important;
+}
+
+/* editing: the same component promoted to a full-bleed panel between the shell bars.
+   z-index 64 keeps it ABOVE the sheets (60) and the bars (55) but below the toasts (74) and
+   gradio's floating lists - the editor is a mode and must never be blocked by a popup. */
+body.mshell #img2maskimg.inpsam-editing {
+    position: fixed !important;
+    top: 47px;
+    bottom: 51px;
+    left: 0;
+    right: 0;
+    z-index: 64;
+    width: auto !important;
+    max-width: none !important;
+    height: calc(var(--inpsam-vh, 100vh) - 98px) !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    background: #0b0f19;
+}
+
+/* while the editor is open, NOTHING behind it may render: the whole gradio page is hidden and
+   only the editor subtree turns visibility back on (the shell bars/toasts live outside gradio-app
+   and stay usable). This makes it impossible for any page element, whatever its stacking order,
+   to cover the panel. */
+body.mshell-inpaint-edit gradio-app {
+    visibility: hidden;
+}
+
+body.mshell-inpaint-edit gradio-app #img2maskimg.inpsam-editing {
+    visibility: visible;
+}
+
+/* popups that live outside gradio-app are hidden as well for the duration */
+body.mshell-inpaint-edit [class*="global-popup"],
+body.mshell-inpaint-edit #lightboxModal {
+    display: none !important;
 }
