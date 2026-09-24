@@ -123,3 +123,7 @@ export function onShow() {
   renderResults();
   refreshSummary();
 }
+
+export function onHide() {
+  prompt.onHide();
+}

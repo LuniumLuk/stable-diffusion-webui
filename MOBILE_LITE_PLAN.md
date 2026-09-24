@@ -839,3 +839,28 @@ input 768×576 ×1.5          <- note for the active mode
 | 1 | iPhone WebKit probe: the mode control is inside the Output size field, Match input hides the custom fields and previews the input size, Custom reveals + pre-fills them, a preset keeps custom mode, Scale × hides them and previews `input × factor`, and a 0.5× inpaint still produces a half-size image | `node tmp\iosprobe\mlite.js` | ✅ **89/89**, no page errors |
 
 Screenshots: `tmp/iosprobe/mlite-08-inpaint-params.png`, `tmp/iosprobe/mlite-12-scale-size.png`.
+
+---
+
+## 22. Round 10: a usable text mode - growing area + fullscreen editor (2026-09-24, restart29)
+
+Text mode was a `rows="3"` textarea (~60 px on a phone): editing anything longer meant scrolling the
+box up and down constantly. Two changes:
+
+1. **The inline area is a real editing surface.** In text mode the textarea has a `40vh` floor
+   (`min-height`) and `fitTextarea()` resizes it to its content on every keystroke
+   (`height = auto` -> `scrollHeight`), so the page scrolls instead of a tiny box. Re-measured on
+   resize (orientation/keyboard via `window.resize`).
+2. **Fullscreen editor** (`⤢` button in the textarea's corner): a fixed overlay
+   (`.text-editor`, z-index 66, `body.text-editing` locks the page) with the whole screen as the input,
+   a `✓ Done` button, and a footnote (`2 lines · 28 chars`). Edits write through on every keystroke
+   (iOS can drop the page at any time), `Done` re-renders the chips view, `Escape` closes it, and the
+   screen's `onHide()` closes it if the tab changes underneath.
+
+### 22.1 Verification
+
+| # | Test | Command | Result |
+| --- | --- | --- | --- |
+| 1 | iPhone WebKit probe: text mode is ≥ 35% of the viewport tall, a 40-line prompt grows it past that floor, `⤢` opens an overlay whose area is > 60% of the screen with the page behind locked, the footer counts lines/chars, `Done` closes it and the typed text lands in the prompt + chips view | `node tmp\iosprobe\mlite.js` | ✅ **100/100**, no page errors |
+
+Screenshot: `tmp/iosprobe/mlite-13-fullscreen-text.png`.

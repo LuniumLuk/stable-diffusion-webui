@@ -10,7 +10,8 @@
  *   - ＋ per line        -> inline keyword input with suggestions; on a line without
  *                          keywords it also offers '#—', which inserts a
  *                          '# --- name ---' block divider above the line
- *   - [⌨ Text] toggle   -> plain textarea mode (the textarea stays the source of truth)
+ *   - [⌨ Text] toggle   -> plain textarea mode (the textarea stays the source of truth);
+ *                          the area grows with the content and ⤢ opens a fullscreen editor
  *
  * The MRU + endorsed keyword suggestions live in a fold that is COLLAPSED by default
  * (state.ui.suggestionsOpen persists the user's choice).
@@ -43,7 +44,7 @@ function loadSuggestions() {
 
 /* ------------------------------------------------------------------ chips field */
 
-function createChipsField(key, placeholder) {
+function createChipsField(key, placeholder, title) {
   const textarea = el('textarea', {
     class: 'pedit-textarea prompt-input',
     placeholder,
@@ -56,6 +57,7 @@ function createChipsField(key, placeholder) {
   textarea.addEventListener('input', () => {
     state.prompt[key] = textarea.value;
     persist();
+    fitTextarea();
   });
 
   const modeButton = el('button', { class: 'btn tiny', type: 'button' });
@@ -64,7 +66,35 @@ function createChipsField(key, placeholder) {
   const head = el('div', { class: 'pedit-head' }, [modeButton, addLineButton, offBadge]);
   const body = el('div', { class: 'pedit-body' });
   const actions = el('div', { class: 'pedit-actions' });
-  const root = el('div', { class: 'pedit' }, [head, body, actions, textarea]);
+
+  // text mode: the inline area grows with the content instead of scrolling inside 3 rows,
+  // and ⤢ hands the text over to a fullscreen editor (the whole screen becomes the input)
+  const expandButton = el('button', {
+    class: 'pedit-expand',
+    type: 'button',
+    text: '\u2922',
+    title: 'Open the fullscreen text editor',
+  });
+  const textWrap = el('div', { class: 'pedit-textarea-wrap' }, [textarea, expandButton]);
+
+  const editorArea = el('textarea', {
+    class: 'text-editor-area',
+    autocomplete: 'off',
+    autocapitalize: 'off',
+    spellcheck: false,
+  });
+  const editorCount = el('span', { class: 'small muted' });
+  const textEditor = el('div', { class: 'text-editor', hidden: true }, [
+    el('div', { class: 'text-editor-head' }, [
+      el('span', { class: 'text-editor-title', text: title }),
+      el('button', { class: 'btn tiny', type: 'button', text: '\u2713 Done', onClick: () => closeTextEditor() }),
+    ]),
+    el('div', { class: 'text-editor-body' }, [editorArea]),
+    el('div', { class: 'text-editor-foot' }, [editorCount]),
+  ]);
+  document.body.append(textEditor);
+
+  const root = el('div', { class: 'pedit' }, [head, body, actions, textWrap]);
 
   const selection = { line: null, seg: null, adding: null, editing: null };
   const mode = () => (state.ui.peditMode === 'text' ? 'text' : 'chips');
@@ -77,6 +107,51 @@ function createChipsField(key, placeholder) {
     persist();
     render();
   }
+
+  /** Text mode: size the inline area to its content (the CSS gives it a 40vh floor). */
+  function fitTextarea() {
+    if (mode() !== 'text') {
+      textarea.style.height = '';
+      return;
+    }
+    if (!textarea.clientWidth) return; // hidden behind chips mode - nothing to measure yet
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(textarea.scrollHeight, 1)}px`;
+  }
+
+  function updateEditorCount() {
+    const text = editorArea.value;
+    const lines = text ? text.split('\n').length : 0;
+    editorCount.textContent = `${lines} line${lines === 1 ? '' : 's'} \u00B7 ${text.length} chars`;
+  }
+
+  function openTextEditor() {
+    editorArea.value = value();
+    updateEditorCount();
+    textEditor.hidden = false;
+    document.body.classList.add('text-editing');
+    editorArea.focus();
+  }
+
+  function closeTextEditor() {
+    if (textEditor.hidden) return;
+    textEditor.hidden = true;
+    document.body.classList.remove('text-editing');
+    render(); // the chips view picks up whatever was typed
+  }
+
+  // every keystroke is written through - iOS can drop the page at any moment
+  editorArea.addEventListener('input', () => {
+    textarea.value = editorArea.value;
+    state.prompt[key] = editorArea.value;
+    persist();
+    updateEditorCount();
+  });
+  editorArea.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeTextEditor();
+  });
+  expandButton.addEventListener('click', () => openTextEditor());
+  window.addEventListener('resize', fitTextarea);
 
   function tokenAt(line, seg) {
     if (line === null || seg === null || line === undefined || seg === undefined) return null;
@@ -401,6 +476,7 @@ function createChipsField(key, placeholder) {
     if (mode() === 'text') {
       body.replaceChildren();
       actions.replaceChildren();
+      queueMicrotask(fitTextarea);
       return;
     }
 
@@ -571,6 +647,9 @@ function createChipsField(key, placeholder) {
       persist();
       render();
     },
+    onHide() {
+      closeTextEditor();
+    },
     appendKeyword(keyword) {
       const current = value().replace(/\s+$/, '');
       const lowered = keyword.toLowerCase();
@@ -629,8 +708,8 @@ export function createPromptEditor(kind) {
   const positiveKey = kind === 'text' ? 'text' : 'image';
   const negativeKey = `${positiveKey}Negative`;
 
-  const positiveField = createChipsField(positiveKey, 'Prompt');
-  const negativeField = createChipsField(negativeKey, 'Negative prompt');
+  const positiveField = createChipsField(positiveKey, 'Prompt', 'Prompt');
+  const negativeField = createChipsField(negativeKey, 'Negative prompt', 'Negative prompt');
   const suggestionsFold = createSuggestionsFold(positiveField);
 
   const negativeFold = el('details', { class: 'fold negative-fold' }, [
@@ -646,5 +725,9 @@ export function createPromptEditor(kind) {
     get negative() { return negativeField.value; },
     set positive(text) { positiveField.value = text; },
     set negative(text) { negativeField.value = text; },
+    onHide() {
+      positiveField.onHide();
+      negativeField.onHide();
+    },
   };
 }

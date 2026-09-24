@@ -882,8 +882,70 @@ body.mask-editing { overflow: hidden; }
 .pedit-weight { flex: 0 0 auto; min-width: 34px; text-align: center; font-size: 12px; color: var(--blue); }
 .pedit-empty { padding: 4px 2px; }
 .pedit-mode-chips .pedit-textarea { display: none; }
+.pedit-mode-chips .pedit-textarea-wrap { display: none; }
 .pedit-mode-text .pedit-body,
 .pedit-mode-text .pedit-actions { display: none; }
+
+/* text mode: a real editing area (40vh floor, grows with the content) + fullscreen escape hatch */
+.pedit-textarea-wrap { position: relative; }
+.pedit-mode-text .pedit-textarea {
+  min-height: 40vh;
+  height: auto;
+  resize: none;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.pedit-expand {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.text-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 66;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.text-editor-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  padding-top: calc(8px + var(--safe-top));
+  border-bottom: 1px solid var(--border);
+}
+.text-editor-title { font-size: 13px; color: var(--muted); }
+.text-editor-body { flex: 1 1 auto; min-height: 0; display: flex; padding: 6px; }
+.text-editor-area {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+}
+.text-editor-foot {
+  flex: 0 0 auto;
+  padding: 6px 10px calc(8px + var(--safe-bottom));
+  border-top: 1px solid var(--border);
+}
+body.text-editing { overflow: hidden; }
 
 /* ---------------------------------------------------------------- folds (suggestions / negative) */
 

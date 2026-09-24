@@ -972,4 +972,5 @@ export function onShow() {
 /** Leaving the Image tab closes the fullscreen mask editor. */
 export function onHide() {
   exitMaskEdit();
+  prompt.onHide();
 }
