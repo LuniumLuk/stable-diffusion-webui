@@ -587,11 +587,46 @@ async def _run_sync(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+class NoCacheHtmlMiddleware:
+    """ASGI middleware: never let the browser reuse the UI shell from its cache.
+
+    gradio stamps ``style.css`` / ``javascript/*.js`` with an ``?<mtime>`` query, but those
+    stamps live inside the index HTML. A phone that holds a cached copy of the page keeps
+    requesting the old asset URLs, so CSS/JS changes look like they never landed ("the fix
+    did nothing") until the user manually clears the cache. HTML is cheap to re-render, so
+    it is served with ``no-store``; hashed/static assets keep their normal caching.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                headers = message.setdefault("headers", [])
+                ctype = b""
+                for key, value in headers:
+                    if key.lower() == b"content-type":
+                        ctype = value.lower()
+                        break
+                if ctype.startswith(b"text/html"):
+                    headers[:] = [(k, v) for (k, v) in headers if k.lower() not in (b"cache-control", b"pragma", b"expires")]
+                    headers.append((b"cache-control", b"no-store, must-revalidate"))
+                    headers.append((b"pragma", b"no-cache"))
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 def build_middleware():
     """Return starlette middleware entries to pass via ``app_kwargs``."""
     from starlette.middleware import Middleware
 
-    return [Middleware(BandwidthMiddleware)]
+    return [Middleware(BandwidthMiddleware), Middleware(NoCacheHtmlMiddleware)]
 
 
 # --------------------------------------------------------------------------- explicit route

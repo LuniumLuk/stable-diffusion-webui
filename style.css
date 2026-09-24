@@ -4687,3 +4687,681 @@ body.resizing .resize-handle {
         font-size: 13px;
     }
 }
+
+/* ==================== mobile shell - javascript/mobileShell.js ==================== */
+/* everything below only applies while body has .mshell (narrow screen / coarse pointer) */
+
+body.mshell {
+    padding-top: 48px;
+    padding-bottom: 60px;
+    overscroll-behavior-y: contain;
+}
+
+/* the desktop tab strip wraps into several rows on a phone - the ☰ sheet replaces it */
+body.mshell #tabs > .tab-nav {
+    display: none !important;
+}
+
+/* ---------- bars ---------- */
+
+#mshell_top,
+#mshell_bottom {
+    position: fixed;
+    left: 0;
+    right: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    background: rgba(16, 16, 20, 0.96);
+    backdrop-filter: blur(8px);
+    transition: transform 0.22s ease;
+}
+
+#mshell_top {
+    top: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#mshell_bottom {
+    bottom: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.mshell-strip {
+    flex: 1 1 auto;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.mshell-strip::-webkit-scrollbar {
+    display: none;
+}
+
+.mshell-btn {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 5px 11px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #eee;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.mshell-btn:hover,
+.mshell-btn:active {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+#mshell_tab_btn {
+    font-size: 16px;
+    padding: 4px 11px;
+}
+
+.mshell-primary {
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 6px 15px;
+    border: none;
+    border-radius: 999px;
+    background: #2f7bd9;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.mshell-primary.is-busy {
+    background: #b0453c;
+}
+
+/* ---------- folding ---------- */
+
+body.mshell-folded #mshell_top {
+    transform: translateY(-110%);
+}
+
+body.mshell-folded #mshell_bottom {
+    transform: translateY(110%);
+}
+
+body.mshell-folded {
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+#mshell_handle {
+    display: none;
+    position: fixed;
+    right: 12px;
+    bottom: 14px;
+    z-index: 71;
+    width: 44px;
+    height: 44px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 50%;
+    background: rgba(16, 16, 20, 0.9);
+    color: #eee;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+body.mshell-folded #mshell_handle {
+    display: block;
+}
+
+/* tabs that are not generators keep the plain layout: only the tab switcher + fold remain */
+body.mshell.mshell-no-tab #mshell_bottom_strip,
+body.mshell.mshell-no-tab #mshell_generate,
+body.mshell.mshell-no-tab #mshell_top_strip {
+    display: none;
+}
+
+/* auto hidden while scrolling down */
+body.mshell-bars-hidden #mshell_top {
+    transform: translateY(-110%);
+}
+
+body.mshell-bars-hidden #mshell_bottom {
+    transform: translateY(110%);
+}
+
+/* ---------- sheets (pop up / pop down menus) ---------- */
+
+/* no dimming backdrop: the sheet itself must never sit under a tap-swallowing mask */
+#mshell_backdrop {
+    display: none !important;
+}
+
+body.mshell .mshell-sheet {
+    position: fixed !important;
+    left: 0 !important;
+    right: auto !important;
+    z-index: 73;
+    margin: 0 !important;
+    width: 100vw !important;
+    min-width: 100vw !important;
+    max-width: 100vw !important;
+    max-height: 78vh;
+    padding: 6px 10px 16px !important;
+    overflow: auto !important;
+    /* opaque: without the dimming mask this is the only thing separating the sheet
+       from the page behind it. `!important` is required because gradio's `.compact`
+       rule sets `background: transparent !important` on the same element. */
+    background: var(--background-fill-primary, #0b0f19) !important;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.75);
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+body.mshell .mshell-sheet-up {
+    bottom: 0 !important;
+    top: auto !important;
+    border-radius: 16px 16px 0 0;
+    animation: mshell-up 0.18s ease-out;
+}
+
+body.mshell .mshell-sheet-down {
+    top: 0 !important;
+    bottom: auto !important;
+    border-radius: 0 0 16px 16px;
+    animation: mshell-down 0.18s ease-out;
+}
+
+@keyframes mshell-up {
+    from { transform: translateY(28px); opacity: 0.4; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes mshell-down {
+    from { transform: translateY(-28px); opacity: 0.4; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.mshell-sheet-title {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 2px 8px;
+    background: inherit;
+    font-size: 11px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    opacity: 0.9;
+}
+
+.mshell-sheet-grip {
+    width: 34px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.mshell-sheet-name {
+    flex: 1 1 auto;
+}
+
+.mshell-sheet-close {
+    min-width: 30px;
+    min-height: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #eee;
+    cursor: pointer;
+}
+
+.mshell-flash {
+    position: fixed;
+    left: 50%;
+    bottom: 78px;
+    z-index: 74;
+    transform: translateX(-50%) translateY(8px);
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(20, 20, 24, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #eee;
+    font-size: 12px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.mshell-flash.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* tab list sheet */
+#mshell_tab_list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 6px;
+    /* the shell lives outside <gradio-app>, so text colours must be explicit and
+       theme-independent (the inherited value is the browser default: black) */
+    color: #f3f4f6;
+}
+
+.mshell-tab-item {
+    min-height: 40px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #f3f4f6;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.mshell-tab-item:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.mshell-tab-item.is-current {
+    border-color: #f97316;
+    background: rgba(255, 255, 255, 0.16);
+    font-weight: 600;
+}
+
+/* ---------- image-first flow ---------- */
+
+/* containers that the bottom-bar sheets own are not part of the page flow ... */
+body.mshell .mshell-sheetable {
+    display: none !important;
+}
+
+/* ... until they are promoted into a sheet (later rule wins) */
+body.mshell-sheet-active .mshell-sheet {
+    display: block !important;
+}
+
+/* the sheet content keeps a comfortable width inside the panel */
+body.mshell .mshell-sheet .form,
+body.mshell .mshell-sheet > div {
+    max-width: 100%;
+}
+
+/* keep the engine output (gallery) full width and photo-first */
+body.mshell #txt2img_results,
+body.mshell #img2img_results,
+body.mshell #txt2img_gallery_container,
+body.mshell #img2img_gallery_container {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+body.mshell #txt2img_gallery,
+body.mshell #img2img_gallery {
+    width: 100% !important;
+    min-height: 46vh;
+}
+
+body.mshell #img2img_image,
+body.mshell #img2img_image > label,
+body.mshell #img2img_image .image-container {
+    width: 100% !important;
+}
+
+body.mshell #img2img_image canvas,
+body.mshell #img2img_image img {
+    max-height: 46vh;
+    object-fit: contain;
+}
+
+/* the action column keeps only the essentials visible; the bottom bar mirrors Generate */
+body.mshell #txt2img_actions_column,
+body.mshell #img2img_actions_column {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+/* ---------- other pages: keep wide content scrollable instead of squashed ---------- */
+body.mshell .gradio-tabs,
+body.mshell .tabs {
+    overflow-x: auto;
+}
+
+body.mshell table,
+body.mshell .jq-table {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+body.mshell .extra-network-cards {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+body.mshell #settings .tab-nav,
+body.mshell .settings-nav {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+body.mshell #settings .tab-nav::-webkit-scrollbar {
+    display: none;
+}
+
+/* img2img: keep only the input-image tool in the page flow - the parameter children of the
+   settings column are shown when it is promoted into the "Params" sheet */
+body.mshell #img2img_settings > *:not(#mode_img2img) {
+    display: none !important;
+}
+
+body.mshell #img2img_settings.mshell-sheet > *:not(#mode_img2img) {
+    display: flex !important;
+}
+
+body.mshell #img2img_settings {
+    padding: 0 !important;
+    border: none !important;
+}
+
+body.mshell #img2img_image {
+    max-height: 48vh;
+    overflow: hidden;
+}
+
+/* ---------- viewport lock: the page itself never scrolls, the tab body does ---------- */
+/* dragging on a canvas can never scroll the page (there is nothing to scroll), so the
+   canvas keeps every gesture and the phone never fights the user */
+
+html.mshell,
+body.mshell {
+    overflow: hidden !important;
+    overscroll-behavior: none;
+}
+
+body.mshell .footer,
+body.mshell footer {
+    display: none !important;
+}
+
+body.mshell #tabs {
+    height: var(--mshell-pane-h, 62vh) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
+/* the pane must not add its own scrollbars around the content */
+body.mshell #tabs > .tabitem {
+    overflow: visible;
+}
+
+body.mshell #tabs::-webkit-scrollbar {
+    width: 3px;
+}
+
+/* ==================== compact phone controls ==================== */
+/* the desktop theme is roomy (4.5em buttons, 16px labels, 16px page padding, nested
+   tab panels with their own padding + border) - none of that suits a phone */
+
+body.mshell .gradio-container {
+    padding: 6px 6px 0 !important;
+}
+
+body.mshell #txt2img_generate,
+body.mshell #img2img_generate {
+    min-height: 2.3em !important;
+    padding: 4px 10px !important;
+    font-size: 14px !important;
+    line-height: 1.2 !important;
+}
+
+body.mshell .generate-box,
+body.mshell .generate-box.generate-box-compact {
+    min-height: 2.3em !important;
+}
+
+body.mshell .gradio-button.generate-box-skip,
+body.mshell .gradio-button.generate-box-interrupt,
+body.mshell .gradio-button.generate-box-interrupting {
+    font-size: 12px !important;
+}
+
+/* every other gradio "large" button: Quick Generate, refresh checkpoint, icon rows ... */
+body.mshell button.lg,
+body.mshell .gradio-button.lg {
+    min-height: 30px !important;
+    height: auto !important;
+    padding: 3px 10px !important;
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+}
+
+/* checkpoint selector: the desktop stacks label + input + refresh (113px) - make it one row */
+body.mshell #quicksettings {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+
+body.mshell #quicksettings .block {
+    padding: 2px 4px !important;
+    min-height: 0 !important;
+}
+
+body.mshell #quicksettings .block > label,
+body.mshell #quicksettings label span {
+    font-size: 10px !important;
+    line-height: 1.1 !important;
+}
+
+body.mshell #quicksettings input,
+body.mshell #quicksettings textarea {
+    min-height: 22px !important;
+    padding: 2px 4px !important;
+    font-size: 12px !important;
+}
+
+body.mshell #refresh_sd_model_checkpoint {
+    min-width: 34px !important;
+    min-height: 28px !important;
+    font-size: 13px !important;
+}
+
+/* inner tab strips (Generation / Textual Inversion / Hypernetworks / …) */
+body.mshell .gradio-tabs > .tab-nav {
+    flex-wrap: nowrap !important;
+    gap: 3px !important;
+    padding: 0 0 2px !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+}
+
+body.mshell .gradio-tabs > .tab-nav::-webkit-scrollbar {
+    display: none;
+}
+
+body.mshell .gradio-tabs > .tab-nav button {
+    min-height: 26px !important;
+    padding: 3px 9px !important;
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+}
+
+/* nested tab panels each add padding + a border: that was the "triple frame" around images */
+body.mshell .gradio-tabitem {
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+}
+
+body.mshell #txt2img_results,
+body.mshell #img2img_results {
+    margin-top: 4px !important;
+}
+
+body.mshell #txt2img_results_panel,
+body.mshell #img2img_results_panel {
+    padding: 4px !important;
+}
+
+/* the gallery's own frame is enough - drop the styler padding */
+body.mshell .styler {
+    padding: 0 !important;
+}
+
+/* checkpoint caption + dropdown on one line */
+body.mshell #setting_sd_model_checkpoint label {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 4px !important;
+    padding: 0 !important;
+}
+
+body.mshell #setting_sd_model_checkpoint label > span,
+body.mshell #setting_sd_model_checkpoint label > .svelte-1xsj8nn {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    flex: 0 1 auto !important;
+}
+
+body.mshell #setting_sd_model_checkpoint .wrap {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+}
+
+/* extra-networks search/sort controls: shrink so they stop stretching the tab strip */
+body.mshell .extra-networks-controls-div {
+    gap: 3px !important;
+}
+
+body.mshell .extra-networks-controls-div input,
+body.mshell .extra-networks-controls-div select,
+body.mshell .extra-networks-control-div input,
+body.mshell .extra-networks-control-div select {
+    min-height: 24px !important;
+    padding: 1px 4px !important;
+    font-size: 11px !important;
+    max-width: 96px !important;
+}
+
+/* the pane scrolls by touch; a 10px light scrollbar only eats width */
+body.mshell #tabs {
+    scrollbar-width: none !important;
+}
+
+body.mshell #tabs::-webkit-scrollbar {
+    display: none !important;
+}
+
+/* gradio gives the tab strip min-height: 2.5rem which stretches every tab button */
+body.mshell .gradio-tabs > .tab-nav {
+    min-height: 0 !important;
+}
+
+body.mshell .gradio-tabs > .tab-nav button {
+    height: auto !important;
+}
+
+/* pin the inner tab strip to a compact height (a theme rule stretches it to ~36px) */
+body.mshell .gradio-tabs > .tab-nav,
+body.mshell .gradio-tabs > .tab-nav button {
+    height: 28px !important;
+    min-height: 28px !important;
+    max-height: 28px !important;
+}
+
+body.mshell .gradio-tabs > .tab-nav button {
+    line-height: 24px !important;
+}
+
+/* ---------- overlay stack ----------
+   bars 55 < sheets / toasts 60+ < gradio floating lists (--layer-top)
+   There is no dimming backdrop any more (it used to swallow taps meant for the shell
+   bars and for gradio's own popups). Sheets sit above the bars so their last rows stay
+   visible, and gradio's popups keep their native (max) z-index. */
+
+body.mshell #mshell_top,
+body.mshell #mshell_bottom {
+    z-index: 55;
+}
+
+body.mshell .mshell-sheet {
+    z-index: 60;
+}
+
+/* ---------- hand mode on the inpaint canvas ---------- */
+/* in scroll mode a single-finger drag must pan the page, not the canvas */
+
+#img2maskimg.inpsam-scroll canvas,
+body.mshell #img2maskimg.inpsam-scroll canvas {
+    touch-action: pan-y !important;
+    cursor: grab !important;
+}
+
+/* ---------- the fork's own footer (#footer) is dead weight on a phone ---------- */
+
+body.mshell #footer {
+    display: none !important;
+}
+/* hand mode: the canvas must not receive pointer/touch events at all, otherwise
+   gradio's built-in sketch brush keeps painting under the finger. The element under
+   it (the block container) owns no gestures, so the browser pans the pane. */
+
+#img2maskimg.inpsam-scroll canvas,
+body.mshell #img2maskimg.inpsam-scroll canvas {
+    pointer-events: none !important;
+}
+/* the wrap behind the canvas also owns gestures while painting - in hand mode it
+   must allow vertical panning so a finger drag scrolls the pane */
+
+#img2maskimg.inpsam-scroll .wrap,
+#img2maskimg.inpsam-scroll .wrap *,
+body.mshell #img2maskimg.inpsam-scroll .wrap,
+body.mshell #img2maskimg.inpsam-scroll .wrap * {
+    touch-action: pan-y !important;
+}
+/* the tab list is a sheet only while it is open - the closed one must not linger at
+   the bottom of the page where the auto-hidden bottom bar would reveal it */
+
+#mshell_tab_list:not(.mshell-sheet) {
+    display: none !important;
+}
+
+/* "To <tab>" copy-image buttons: the squeezed label is gone, so let the buttons fill the
+   row - four in a line on desktop, two per line on a phone (auto-fit, no wrap surprises) */
+
+#img2img_copy_to_img2img,
+#img2img_copy_to_sketch,
+#img2img_copy_to_inpaint,
+#img2img_copy_to_inpaint_sketch {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 6px;
+}
+
+#img2img_copy_to_img2img > button,
+#img2img_copy_to_sketch > button,
+#img2img_copy_to_inpaint > button,
+#img2img_copy_to_inpaint_sketch > button {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+}

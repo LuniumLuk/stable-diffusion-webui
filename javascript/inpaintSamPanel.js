@@ -869,6 +869,7 @@
           <button type="button" class="inpsam-btn" data-mode="paint" title="Gradio mask paint brush">\u270E Paint</button>
           <button type="button" class="inpsam-btn" data-mode="sam" title="Click a point: segment it (SAM) and add to mask">\u2702 SAM pick</button>
           <button type="button" class="inpsam-btn" data-mode="erase" title="Erase mask (uses the gradio brush radius)">\u232B Erase</button>
+          <button type="button" class="inpsam-btn" data-mode="scroll" title="Scroll mode: drag on the canvas scrolls the page instead of painting">\u270B Scroll</button>
         </span>
         <span class="inpsam-sep"></span>
         <button type="button" class="inpsam-btn inpsam-icon" data-act="undo" title="Undo last SAM pick / erase (restores mask snapshot; discards strokes painted after it)">\u21B6</button>
@@ -1123,13 +1124,14 @@
   /* ---------------------------------- mode handling -------------------------------- */
 
   function setMode(mode) {
-    if (["paint", "sam", "erase"].indexOf(mode) === -1) mode = "paint";
+    if (["paint", "sam", "erase", "scroll"].indexOf(mode) === -1) mode = "paint";
     state.mode = mode;
     writeLS(LS.mode, mode);
     applyModeAppearance();
     refreshToolbarState();
     if (mode === "sam") setStatus("click a point to pick a segment");
     else if (mode === "erase") setStatus("drag to erase mask");
+    else if (mode === "scroll") setStatus("scroll mode: swipe the canvas to move the page");
     else setStatus("");
   }
 
@@ -1178,8 +1180,11 @@
   function applyModeAppearance() {
     const p = getParts();
     if (!p) return;
+    const scrolling = state.mode === "scroll";
+    // in scroll mode the canvas must let the browser pan the surrounding page
+    p.root.classList.toggle("inpsam-scroll", scrolling);
     p.wrap.querySelectorAll("canvas").forEach((cv) => {
-      cv.style.cursor = "crosshair"; // keep the native cursor visible in every mode
+      cv.style.cursor = scrolling ? "grab" : "crosshair";
     });
     if (state.mode !== "erase") cursorEl().style.display = "none";
     clearGradioCursor();
@@ -1231,6 +1236,11 @@
           return;
         }
         if (!inCanvas(q, e)) return;
+        if (state.mode === "scroll") {
+          // hand mode: never swallow the gesture, the browser scrolls the pane instead
+          addGestureListeners(); // 2-finger pinch/pan on the canvas keeps working
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         if (e.button !== 0) return;
@@ -1269,6 +1279,7 @@
         }
         updateCursor(e);
         if (state.mode === "paint") drawBrushRing(e.clientX, e.clientY);
+        if (state.mode === "scroll") return; // let the browser scroll
         if (inCanvas(q, e) || state.paint || state.erase || state.pan) {
           e.stopPropagation();
           e.preventDefault();
@@ -1283,6 +1294,7 @@
           if (e.__inpsamSynthetic) return; // sync stroke: gradio must receive it
           const q = getParts();
           if (!q || inBar(q, e)) return;
+          if (state.mode === "scroll") return; // hand mode: leave the gesture alone
           if (inCanvas(q, e)) {
             e.stopPropagation();
             e.preventDefault();
@@ -1500,6 +1512,8 @@
       "touchstart",
       (e) => {
         if (e.__inpsamSynthetic || !onCanvas(e)) return;
+        // hand mode: never preventDefault, the browser pans the pane instead
+        if (state.mode === "scroll") return;
         e.preventDefault();
         e.stopPropagation();
         if (e.touches.length >= 2) {
@@ -1516,6 +1530,7 @@
       "touchmove",
       (e) => {
         if (e.__inpsamSynthetic || !onCanvas(e)) return;
+        if (state.mode === "scroll") return;
         e.preventDefault();
         e.stopPropagation();
         if (e.touches.length >= 2 || suppress || !stroke) return;
@@ -1528,6 +1543,7 @@
       "touchend",
       (e) => {
         if (e.__inpsamSynthetic || !onCanvas(e)) return;
+        if (state.mode === "scroll") return;
         e.preventDefault();
         e.stopPropagation();
         if (e.touches.length > 0) return;
@@ -1685,7 +1701,7 @@
 
   function boot() {
     // restore persisted settings
-    state.mode = ["paint", "sam", "erase"].indexOf(readLS(LS.mode, "paint")) !== -1 ? readLS(LS.mode, "paint") : "paint";
+    state.mode = ["paint", "sam", "erase", "scroll"].indexOf(readLS(LS.mode, "paint")) !== -1 ? readLS(LS.mode, "paint") : "paint";
     readBarOffset();
     state.maskIdx = clamp(parseInt(readLS(LS.maskIdx, "0"), 10) || 0, 0, 2);
     state.expand = clamp(parseInt(readLS(LS.expand, String(DEFAULT_EXPAND)), 10) || 0, 0, 100);

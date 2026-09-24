@@ -569,15 +569,13 @@ def create_ui():
 
                 def add_copy_image_controls(tab_name, elem):
                     with gr.Row(variant="compact", elem_id=f"img2img_copy_to_{tab_name}"):
-                        gr.HTML("Copy image to: ", elem_id=f"img2img_label_copy_to_{tab_name}")
-
-                        for title, name in zip(['img2img', 'sketch', 'inpaint', 'inpaint sketch'], ['img2img', 'sketch', 'inpaint', 'inpaint_sketch']):
+                        for title, name in zip(['img2img', 'Sketch', 'Inpaint', 'Inpaint sketch'], ['img2img', 'sketch', 'inpaint', 'inpaint_sketch']):
                             if name == tab_name:
-                                gr.Button(title, interactive=False)
+                                gr.Button(f"To {title}", interactive=False)
                                 copy_image_destinations[name] = elem
                                 continue
 
-                            button = gr.Button(title)
+                            button = gr.Button(f"To {title}")
                             copy_image_buttons.append((button, name, elem))
 
                 scripts.scripts_img2img.prepare_ui()
