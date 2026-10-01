@@ -10,6 +10,8 @@
  *   - ＋ per line        -> inline keyword input with suggestions; on a line without
  *                          keywords it also offers '#—', which inserts a
  *                          '# --- name ---' block divider above the line
+ *   - long lines       -> folded to one row by default ('▸N' expands them again)
+ *   - ⚖ per line        -> weight for the WHOLE line (wraps it in '(…:w)'; 1.0 unwraps)
  *   - [⌨ Text] toggle   -> plain textarea mode (the textarea stays the source of truth);
  *                          the area grows with the content and ⤢ opens a fullscreen editor
  *
@@ -20,7 +22,7 @@
 import { api_ } from './api.js';
 import { el, toast } from './ui.js';
 import { on, persist, state } from './state.js';
-import { DEFAULT_WEIGHT, blockBounds, blockIsOff, blockMarker, classify, formatWeight, joinSegments, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
+import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
 
 const WEIGHT_STEP = 0.05;
 const MAX_SUGGEST = 8;
@@ -96,10 +98,43 @@ function createChipsField(key, placeholder, title) {
 
   const root = el('div', { class: 'pedit' }, [head, body, actions, textWrap]);
 
-  const selection = { line: null, seg: null, adding: null, editing: null };
+  const selection = { line: null, seg: null, adding: null, editing: null, lineWeight: null };
+  // lines the user unfolded again (folded is the default; index-based, transient state)
+  const expandedLines = new Set();
+  const LINE_WEIGHT_MAX = 10;
   const mode = () => (state.ui.peditMode === 'text' ? 'text' : 'chips');
   const value = () => textarea.value;
   const isNegative = key === 'textNegative' || key === 'imageNegative';
+
+  const isCommentedLine = (text) => /^\s*#(?!\()/.test(text);
+  const stripLineComment = (text) => text.replace(/^(\s*)#\s?/, '$1');
+
+  /** Line text as the chips view sees it: comment stripped, line weight unwrapped. */
+  function displayContent(rawLine) {
+    const stripped = isCommentedLine(rawLine) ? stripLineComment(rawLine) : rawLine;
+    const lineWeight = parseLineWeight(stripped);
+    return lineWeight ? lineWeight.inner : stripped;
+  }
+
+  /** Split a raw line into its untouched prefix (indent + comment marker) and its content. */
+  function lineParts(rawLine) {
+    const text = String(rawLine == null ? '' : rawLine);
+    const indent = text.slice(0, text.length - text.trimStart().length);
+    const rest = text.slice(indent.length);
+    if (/^#(?!\()/.test(rest)) {
+      const marker = rest.startsWith('# ') ? '# ' : '#';
+      return { prefix: indent + marker, content: rest.slice(marker.length) };
+    }
+    return { prefix: indent, content: rest };
+  }
+
+  /** Write a line's content back, re-applying the line-weight group when one exists. */
+  function writeLineContent(lines, lineIndex, contentText) {
+    const { prefix, content } = lineParts(lines[lineIndex]);
+    const lineWeight = parseLineWeight(content);
+    lines[lineIndex] = prefix + applyLineWeight(contentText, lineWeight ? lineWeight.weight : null);
+    return lines;
+  }
 
   function commit(text) {
     textarea.value = text;
@@ -157,7 +192,7 @@ function createChipsField(key, placeholder, title) {
     if (line === null || seg === null || line === undefined || seg === undefined) return null;
     const lines = value().split('\n');
     if (line < 0 || line >= lines.length) return null;
-    const segments = splitSegments(lines[line]);
+    const segments = splitSegments(displayContent(lines[line]));
     if (seg < 0 || seg >= segments.length) return null;
     const token = classify(segments[seg].body);
     token.line = line;
@@ -168,7 +203,7 @@ function createChipsField(key, placeholder, title) {
   function countDisabled() {
     let count = 0;
     value().split('\n').forEach((line) => {
-      splitSegments(line).forEach((segment) => {
+      splitSegments(displayContent(line)).forEach((segment) => {
         if (classify(segment.body).disabled) count += 1;
       });
     });
@@ -202,7 +237,7 @@ function createChipsField(key, placeholder, title) {
   function lineHasChips(lineIndex) {
     const line = value().split('\n')[lineIndex];
     if (line === undefined) return false;
-    return splitSegments(line).some((segment) => segment.body.trim());
+    return splitSegments(displayContent(line)).some((segment) => segment.body.trim());
   }
 
   /**
@@ -337,7 +372,7 @@ function createChipsField(key, placeholder, title) {
       render();
       return;
     }
-    const segments = splitSegments(lines[lineIndex]);
+    const segments = splitSegments(displayContent(lines[lineIndex]));
     const segment = segments[segIndex];
     if (!segment) {
       render();
@@ -345,7 +380,8 @@ function createChipsField(key, placeholder, title) {
     }
     const token = classify(segment.body);
     segment.body = rebuild({ kind: token.kind, text }, token.weight || DEFAULT_WEIGHT, token.disabled);
-    lines[lineIndex] = joinSegments(segments);
+    writeLineContent(lines, lineIndex, joinSegments(segments));
+    expandedLines.add(lineIndex);
     commit(lines.join('\n'));
   }
 
@@ -369,7 +405,7 @@ function createChipsField(key, placeholder, title) {
     if (lineIndex === null || lineIndex === undefined) return;
     const lines = value().split('\n');
     if (lineIndex < 0 || lineIndex >= lines.length) return;
-    const segments = splitSegments(lines[lineIndex]);
+    const segments = splitSegments(displayContent(lines[lineIndex]));
     const last = segments[segments.length - 1];
     if (last && !last.body.trim()) {
       last.body = keyword;
@@ -377,22 +413,25 @@ function createChipsField(key, placeholder, title) {
       if (last && !/,\s*$/.test(last.tail || '')) last.tail = (last.tail || '') + ', ';
       segments.push({ lead: '', body: keyword, tail: '' });
     }
-    lines[lineIndex] = joinSegments(segments);
+    writeLineContent(lines, lineIndex, joinSegments(segments));
+    expandedLines.add(lineIndex);
     commit(lines.join('\n'));
   }
 
   function lineNode(lineText, index, lines) {
-    const commented = /^\s*#(?!\()/.test(lineText);
-    // a commented line shows its keywords without the leading '# ' - the gutter carries state
-    const content = commented ? lineText.replace(/^(\s*)#\s?/, '$1') : lineText;
+    const commented = isCommentedLine(lineText);
+    // a commented line shows its keywords without the leading '# ' - the gutter carries state;
+    // displayContent also unwraps a line-weight group so per-keyword chips stay editable
+    const content = displayContent(lineText);
+    const lineWeight = commented ? null : parseLineWeight(lineText);
     const segments = splitSegments(content);
 
-    const chipsRow = el('div', { class: 'pedit-chips' });
+    const row = el('div', { class: 'pedit-row' });
     // '# --- ...' opens a block up to the next '# ---' line: one tap comments/uncomments it
     const bounds = blockBounds(lines, index);
     if (bounds) {
       const off = blockIsOff(lines, bounds.from, bounds.to);
-      chipsRow.append(el('button', {
+      row.append(el('button', {
         class: 'pedit-gutter pedit-block-toggle' + (off ? ' is-off' : ''),
         type: 'button',
         text: off ? '\u23F8' : '\u25B6',
@@ -403,24 +442,40 @@ function createChipsField(key, placeholder, title) {
         onClick: () => toggleBlockComment(index),
       }));
     }
+    // only the chips are clamped when the line is folded - the buttons stay reachable
+    const chips = el('div', { class: 'pedit-chips' });
     segments.forEach((segment, segIndex) => {
       if (!segment.body.trim()) {
-        if (segIndex < segments.length - 1) chipsRow.append(el('span', { class: 'pedit-sep', text: ',' }));
+        if (segIndex < segments.length - 1) chips.append(el('span', { class: 'pedit-sep', text: ',' }));
         return;
       }
-      chipsRow.append(chipNode(index, segIndex, classify(segment.body)));
+      chips.append(chipNode(index, segIndex, classify(segment.body)));
     });
-    chipsRow.append(el('button', {
+    row.append(chips);
+    row.append(el('span', { class: 'pedit-fold-slot' }));
+    row.append(el('button', {
       class: 'pedit-add',
       type: 'button',
       text: '\uFF0B',
       title: 'Add a keyword to this line',
       dataset: { act: 'add', line: String(index) },
     }));
+    if (!commented && content.trim()) {
+      row.append(el('button', {
+        class: 'pedit-line-weight' + (lineWeight ? ' is-on' : ''),
+        type: 'button',
+        text: lineWeight ? `\u00D7${formatWeight(lineWeight.weight)}` : '\u2696',
+        title: lineWeight
+          ? `Line weight \u00D7${formatWeight(lineWeight.weight)} - adjust the weight of the whole line`
+          : 'Set a weight for the whole line',
+        dataset: { act: 'line-weight', line: String(index) },
+      }));
+    }
 
-    const main = el('div', { class: 'pedit-line-main' }, [chipsRow]);
+    const main = el('div', { class: 'pedit-line-main' }, [row]);
     if (selection.adding && selection.adding.line === index) main.append(inputRowNode(index, 'add', selection.adding.value));
     else if (selection.editing && selection.editing.line === index) main.append(inputRowNode(index, 'edit', selection.editing.value));
+    else if (selection.lineWeight && selection.lineWeight.line === index) main.append(lineWeightRowNode(index));
 
     return el('div', { class: 'pedit-line' + (commented ? ' is-comment' : '') }, [
       el('button', {
@@ -432,6 +487,113 @@ function createChipsField(key, placeholder, title) {
       }),
       main,
     ]);
+  }
+
+  /* ---------------------------------------------------------------- line fold + weight */
+
+  /** Folded lines show one chip row; the fold button expands/collapses a single line. */
+  function toggleFold(lineIndex) {
+    if (lineIndex === null || lineIndex === undefined) return;
+    if (expandedLines.has(lineIndex)) expandedLines.delete(lineIndex);
+    else expandedLines.add(lineIndex);
+    render();
+  }
+
+  /**
+   * Clamp every line that wraps to more than one row. Measured after each render, so the
+   * '+N' badge is only offered when something is actually hidden; runs in a microtask (the
+   * fresh DOM can be measured then). Screens that are hidden (0 wide) are skipped - their
+   * `onShow` calls relayout().
+   */
+  function applyFolds() {
+    if (mode() !== 'chips' || !root.clientWidth) return;
+    root.querySelectorAll('.pedit-line').forEach((lineElement, index) => {
+      const slot = lineElement.querySelector('.pedit-fold-slot');
+      const wrap = lineElement.querySelector('.pedit-chips');
+      if (slot) slot.replaceChildren();
+      if (wrap) {
+        wrap.classList.remove('is-folded');
+        wrap.style.maxHeight = '';
+      }
+      if (!wrap || !slot) return;
+      const chipNodes = Array.from(wrap.querySelectorAll('.pedit-chip'));
+      if (chipNodes.length < 2) return;
+      const firstTop = chipNodes[0].offsetTop;
+      const firstRowBottom = Math.max(...chipNodes
+        .filter((chip) => chip.offsetTop === firstTop)
+        .map((chip) => chip.offsetTop + chip.offsetHeight));
+      const totalBottom = Math.max(...chipNodes.map((chip) => chip.offsetTop + chip.offsetHeight));
+      if (totalBottom <= firstRowBottom + 2) return; // fits on one row - nothing to fold
+      const hiddenCount = chipNodes.filter((chip) => chip.offsetTop > firstTop).length;
+      const expanded = expandedLines.has(index);
+      slot.append(el('button', {
+        class: 'pedit-fold',
+        type: 'button',
+        text: expanded ? '\u25BE' : `\u25B8${hiddenCount}`,
+        title: expanded ? 'Fold this line back to one row' : `Show ${hiddenCount} more keyword(s)`,
+        dataset: { act: 'fold', line: String(index) },
+      }));
+      if (!expanded) {
+        wrap.classList.add('is-folded');
+        wrap.style.maxHeight = `${firstRowBottom - firstTop}px`;
+      }
+    });
+  }
+
+  /** Inline editor for the line weight: stepper + quick values; changes apply immediately. */
+  function lineWeightRowNode(lineIndex) {
+    const current = selection.lineWeight ? selection.lineWeight.weight : 1.1;
+    const button = (act, label, extra = {}) => el('button', {
+      class: 'pedit-small-btn' + (extra.on ? ' is-on' : ''),
+      type: 'button',
+      text: label,
+      title: extra.title || '',
+      dataset: extra.weight === undefined
+        ? { act, line: String(lineIndex) }
+        : { act, line: String(lineIndex), weight: formatWeight(extra.weight) },
+    });
+    return el('div', { class: 'pedit-insert is-weight', dataset: { line: String(lineIndex) } }, [
+      el('span', { class: 'small muted', text: '\u2696 line weight' }),
+      button('lw-minus', '\u2212', { title: `Lower by ${WEIGHT_STEP}` }),
+      el('span', { class: 'pedit-weight', text: formatWeight(current) }),
+      button('lw-plus', '\uFF0B', { title: `Raise by ${WEIGHT_STEP}` }),
+      ...[0.8, 1.0, 1.1, 1.2, 1.5].map((weight) => button('lw-set', formatWeight(weight), {
+        weight,
+        on: Math.abs(weight - current) < 1e-9,
+        title: weight === 1.0 ? 'Remove the line weight' : `Set the line weight to ${formatWeight(weight)}`,
+      })),
+      button('lw-close', '\u2713', { title: 'Done' }),
+    ]);
+  }
+
+  function openLineWeight(lineIndex) {
+    const lines = value().split('\n');
+    if (lineIndex < 0 || lineIndex >= lines.length) return;
+    const { content } = lineParts(lines[lineIndex]);
+    const lineWeight = parseLineWeight(content);
+    selection.adding = null;
+    selection.editing = null;
+    selection.lineWeight = { line: lineIndex, weight: lineWeight ? lineWeight.weight : 1.1 };
+    render();
+  }
+
+  /** Wrap/unwrap the whole line; the row stays open so the stepper can be tapped again. */
+  function applyLineWeightValue(lineIndex, weight) {
+    const lines = value().split('\n');
+    if (lineIndex < 0 || lineIndex >= lines.length) return;
+    const { prefix, content } = lineParts(lines[lineIndex]);
+    lines[lineIndex] = prefix + applyLineWeight(content, weight);
+    if (selection.lineWeight && selection.lineWeight.line === lineIndex) selection.lineWeight.weight = weight;
+    expandedLines.add(lineIndex);
+    commit(lines.join('\n'));
+  }
+
+  function stepLineWeight(lineIndex, delta) {
+    const current = selection.lineWeight && selection.lineWeight.line === lineIndex
+      ? selection.lineWeight.weight
+      : 1.1;
+    const next = Math.min(LINE_WEIGHT_MAX, Math.max(0.05, Math.round((current + delta) * 1000) / 1000));
+    applyLineWeightValue(lineIndex, next);
   }
 
   function actionsChildren() {
@@ -482,6 +644,7 @@ function createChipsField(key, placeholder, title) {
 
     const lines = value().split('\n');
     body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines)));
+    queueMicrotask(applyFolds);
     if (!value().trim()) {
       body.append(el('div', {
         class: 'pedit-empty small muted',
@@ -500,9 +663,10 @@ function createChipsField(key, placeholder, title) {
 
     const write = (body) => {
       const lines = value().split('\n');
-      const segments = splitSegments(lines[selection.line]);
+      const segments = splitSegments(displayContent(lines[selection.line]));
       segments[selection.seg].body = body;
-      lines[selection.line] = joinSegments(segments);
+      writeLineContent(lines, selection.line, joinSegments(segments));
+      expandedLines.add(selection.line);
       commit(lines.join('\n'));
     };
 
@@ -526,21 +690,23 @@ function createChipsField(key, placeholder, title) {
         break;
       case 'duplicate': {
         const lines = value().split('\n');
-        const segments = splitSegments(lines[selection.line]);
+        const segments = splitSegments(displayContent(lines[selection.line]));
         const original = segments[selection.seg];
         if (!/,\s*$/.test(original.tail || '')) original.tail = (original.tail || '') + ', ';
         segments.splice(selection.seg + 1, 0, { lead: '', body: original.body, tail: '' });
-        lines[selection.line] = joinSegments(segments);
+        writeLineContent(lines, selection.line, joinSegments(segments));
+        expandedLines.add(selection.line);
         selection.seg += 1;
         commit(lines.join('\n'));
         break;
       }
       case 'delete': {
         const lines = value().split('\n');
-        const segments = splitSegments(lines[selection.line]);
+        const segments = splitSegments(displayContent(lines[selection.line]));
         segments.splice(selection.seg, 1);
         if (!segments.length) segments.push({ lead: '', body: '', tail: '' });
-        lines[selection.line] = joinSegments(segments);
+        writeLineContent(lines, selection.line, joinSegments(segments));
+        expandedLines.add(selection.line);
         const wasLastLine = selection.line === lines.length - 1;
         selection.line = null;
         selection.seg = null;
@@ -588,6 +754,7 @@ function createChipsField(key, placeholder, title) {
   function openAdd(lineIndex) {
     selection.adding = { line: lineIndex, value: '' };
     selection.editing = null;
+    selection.lineWeight = null;
     selection.line = null;
     selection.seg = null;
     render();
@@ -604,6 +771,7 @@ function createChipsField(key, placeholder, title) {
     if (action === 'chip') {
       selection.adding = null;
       selection.editing = null;
+      selection.lineWeight = null;
       selection.line = line;
       selection.seg = seg;
       render();
@@ -614,6 +782,12 @@ function createChipsField(key, placeholder, title) {
     if (action === 'insert-ok') { commitInput(); return; }
     if (action === 'insert-cancel') { cancelInput(); return; }
     if (action === 'insert-divider') { insertDivider(line); return; }
+    if (action === 'fold') { toggleFold(line); return; }
+    if (action === 'line-weight') { openLineWeight(line); return; }
+    if (action === 'lw-minus') { stepLineWeight(line, -WEIGHT_STEP); return; }
+    if (action === 'lw-plus') { stepLineWeight(line, WEIGHT_STEP); return; }
+    if (action === 'lw-set') { applyLineWeightValue(line, Number(target.dataset.weight)); return; }
+    if (action === 'lw-close') { selection.lineWeight = null; render(); return; }
     if (action === 'use-suggest') return; // the suggestion buttons commit themselves
     applyChipAction(action);
   });
@@ -650,6 +824,10 @@ function createChipsField(key, placeholder, title) {
     onHide() {
       closeTextEditor();
     },
+    /** Re-measure line folds (screens call this from onShow, the DOM is measurable then). */
+    relayout() {
+      applyFolds();
+    },
     appendKeyword(keyword) {
       const current = value().replace(/\s+$/, '');
       const lowered = keyword.toLowerCase();
@@ -657,6 +835,7 @@ function createChipsField(key, placeholder, title) {
         toast('already in the prompt', 'warn', 1400);
         return;
       }
+      expandedLines.add(Math.max(0, current.split('\n').length - 1)); // keep the edited line open
       commit(current ? `${current}, ${keyword}` : keyword);
     },
   };
@@ -725,6 +904,10 @@ export function createPromptEditor(kind) {
     get negative() { return negativeField.value; },
     set positive(text) { positiveField.value = text; },
     set negative(text) { negativeField.value = text; },
+    relayout() {
+      positiveField.relayout();
+      negativeField.relayout();
+    },
     onHide() {
       positiveField.onHide();
       negativeField.onHide();

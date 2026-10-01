@@ -4,7 +4,7 @@ import { api_ } from './api.js';
 import { hrFinalSize, hrStagePlan } from './hires.js';
 import { planInputResize, resolveInputSize, round8 } from './resize-plan.js';
 import { closeSheet, el, openSheet, toast } from './ui.js';
-import { emit, on, persist, resolveOutputSize, setParam, state } from './state.js';
+import { emit, imageParams, on, resolveOutputSize, setParam, state } from './state.js';
 
 const SIZE_PRESETS = [
   [512, 512],
@@ -14,21 +14,22 @@ const SIZE_PRESETS = [
   [1024, 1024],
 ];
 
-function sliderRow(label, key, min, max, step, { format = (value) => value } = {}) {
-  const number = el('input', { type: 'number', value: state.params[key], min, max, step, inputmode: 'decimal' });
-  const range = el('input', { type: 'range', value: state.params[key], min, max, step });
-  const valueLabel = el('span', { class: 'small', text: format(state.params[key]) });
+// The slider pair (range + number) for one parameter of `store`. min/max/step are assigned
+// BEFORE the value: WebKit snaps a range value against the element's *current* step, so
+// value-first ordering silently turned 0.75 into the maximum (the pinned denoise thumb).
+function sliderRow(store, label, key, min, max, step, { format = (value) => value } = {}) {
+  const number = el('input', { type: 'number', min, max, step, value: store[key], inputmode: 'decimal' });
+  const range = el('input', { type: 'range', min, max, step, value: store[key] });
+  const valueLabel = el('span', { class: 'small', text: format(store[key]) });
 
   const sync = (value, source) => {
     const numeric = Number(value);
     if (Number.isNaN(numeric)) return;
     const bounded = Math.min(max, Math.max(min, numeric));
-    state.params[key] = bounded;
+    setParam(key, bounded, store);
     if (source !== 'range') range.value = bounded;
     if (source !== 'number') number.value = bounded;
     valueLabel.textContent = format(bounded);
-    persist();
-    emit('params', state.params);
   };
 
   range.addEventListener('input', () => sync(range.value, 'range'));
@@ -87,7 +88,9 @@ export async function applyModel(title) {
 
 export function openParamsSheet(kind = 'text') {
   const body = el('div');
-  const params = state.params;
+  // image modes keep their own sets - everything in this sheet edits the store of the
+  // task being configured (img2img / inpaint / text)
+  const params = kind === 'image' ? imageParams() : state.params;
 
   body.append(selectRow(
     'Checkpoint',
@@ -96,12 +99,12 @@ export function openParamsSheet(kind = 'text') {
     (value) => applyModel(value),
   ));
 
-  body.append(selectRow('Sampler', state.boot.samplers || [], params.sampler, (value) => setParam('sampler', value)));
-  body.append(selectRow('Scheduler', state.boot.schedulers || ['Automatic'], params.scheduler, (value) => setParam('scheduler', value)));
+  body.append(selectRow('Sampler', state.boot.samplers || [], params.sampler, (value) => setParam('sampler', value, params)));
+  body.append(selectRow('Scheduler', state.boot.schedulers || ['Automatic'], params.scheduler, (value) => setParam('scheduler', value, params)));
 
-  body.append(sliderRow('Sampling steps', 'steps', 1, 80, 1));
-  body.append(sliderRow('CFG scale', 'cfg', 1, 20, 0.5, { format: (value) => Number(value).toFixed(1) }));
-  body.append(sliderRow('Batch count', 'batch', 1, 8, 1));
+  body.append(sliderRow(params, 'Sampling steps', 'steps', 1, 80, 1));
+  body.append(sliderRow(params, 'CFG scale', 'cfg', 1, 20, 0.5, { format: (value) => Number(value).toFixed(1) }));
+  body.append(sliderRow(params, 'Batch count', 'batch', 1, 8, 1));
 
   // Size block -------------------------------------------------------------
   const widthInput = el('input', { type: 'number', value: params.width, min: 64, max: 2048, step: 8, inputmode: 'numeric' });
@@ -136,7 +139,7 @@ export function openParamsSheet(kind = 'text') {
     sizeChips.classList.toggle('hidden', !custom);
     sizeRow.classList.toggle('hidden', !custom);
     if (scaleField) scaleField.classList.toggle('hidden', mode !== 'scale');
-    const size = resolveOutputSize();
+    const size = resolveOutputSize(state.image.source, params);
     sizePreview.textContent = `${size.width}\u00D7${size.height}`;
     const input = resolveInputSize(source, params);
     if (mode === 'scale') {
@@ -162,20 +165,20 @@ export function openParamsSheet(kind = 'text') {
     if (value === 'custom') {
       // start from what the previous mode resolved to instead of stale custom values
       // (resolve BEFORE switching the mode, or the fallback W/H wins)
-      const size = resolveOutputSize();
+      const size = resolveOutputSize(state.image.source, params);
       widthInput.value = size.width;
       heightInput.value = size.height;
-      setParam('width', size.width);
-      setParam('height', size.height);
+      setParam('width', size.width, params);
+      setParam('height', size.height, params);
     }
-    setParam('imageSizeMode', value);
+    setParam('imageSizeMode', value, params);
     if (sizeMode) sizeMode.set(value);
     updateSizeHint();
   };
 
   const applyCustomSize = () => {
     if (params.imageSizeMode !== 'custom') {
-      setParam('imageSizeMode', 'custom');
+      setParam('imageSizeMode', 'custom', params);
       if (sizeMode) sizeMode.set('custom');
     }
     updateSizeHint();
@@ -186,8 +189,8 @@ export function openParamsSheet(kind = 'text') {
     const height = Math.min(2048, Math.max(64, Math.round(Number(heightInput.value) / 8) * 8 || 512));
     widthInput.value = width;
     heightInput.value = height;
-    setParam('width', width);
-    setParam('height', height);
+    setParam('width', width, params);
+    setParam('height', height, params);
     // typing a size means the user wants it - switch off "match input" instead of ignoring it
     if (kind === 'image') applyCustomSize();
   };
@@ -234,7 +237,7 @@ export function openParamsSheet(kind = 'text') {
       const bounded = Math.min(4, Math.max(0.1, Math.round((Number.isNaN(numeric) ? 1 : numeric) * 100) / 100));
       inputScaleInput.value = bounded;
       inputScaleChips.forEach((button, index) => button.classList.toggle('on', Math.abs(INPUT_SCALE_PRESETS[index] - bounded) < 1e-9));
-      setParam('inputResizeScale', bounded);
+      setParam('inputResizeScale', bounded, params);
       syncInputResize();
     };
     inputScaleInput.addEventListener('change', () => applyInputScale(inputScaleInput.value));
@@ -259,7 +262,7 @@ export function openParamsSheet(kind = 'text') {
     const inputFit = segmentedControl('', [
       { value: 'fill', label: 'Aspect fill' },
       { value: 'stretch', label: 'Stretch (no aspect)' },
-    ], params.inputResizeFit, (value) => { setParam('inputResizeFit', value); syncInputResize(); });
+    ], params.inputResizeFit, (value) => { setParam('inputResizeFit', value, params); syncInputResize(); });
     const inputFitRow = el('div', { class: 'field hidden' }, [
       el('label', { text: 'Fit' }),
       inputFit.node,
@@ -271,8 +274,8 @@ export function openParamsSheet(kind = 'text') {
       if (!source) return;
       inW.value = round8(source.width);
       inH.value = round8(source.height);
-      setParam('inputResizeW', round8(source.width));
-      setParam('inputResizeH', round8(source.height));
+      setParam('inputResizeW', round8(source.width), params);
+      setParam('inputResizeH', round8(source.height), params);
     };
     const syncInputSize = () => {
       const source = state.image.source;
@@ -280,8 +283,8 @@ export function openParamsSheet(kind = 'text') {
       const height = Math.min(2048, Math.max(64, Math.round((Number(inH.value) || (source ? source.height : 512)) / 8) * 8));
       inW.value = width;
       inH.value = height;
-      setParam('inputResizeW', width);
-      setParam('inputResizeH', height);
+      setParam('inputResizeW', width, params);
+      setParam('inputResizeH', height, params);
       syncInputResize();
     };
     inW.addEventListener('change', syncInputSize);
@@ -317,7 +320,7 @@ export function openParamsSheet(kind = 'text') {
       { value: 'scale', label: 'Scale \u00D7' },
       { value: 'custom', label: 'Custom' },
     ], params.inputResize, (value) => {
-      setParam('inputResize', value);
+      setParam('inputResize', value, params);
       if (value === 'custom') seedInputSize();
       syncInputResize();
     });
@@ -346,15 +349,14 @@ export function openParamsSheet(kind = 'text') {
     title: 'Keep this seed for every run',
   });
   lockButton.addEventListener('click', () => {
-    params.seedLock = !params.seedLock;
-    lockButton.textContent = params.seedLock ? '\u{1F512} locked' : '\u{1F513} auto';
-    lockButton.classList.toggle('on', params.seedLock);
-    persist();
-    emit('params', params);
+    const locked = !params.seedLock;
+    lockButton.textContent = locked ? '\u{1F512} locked' : '\u{1F513} auto';
+    lockButton.classList.toggle('on', locked);
+    setParam('seedLock', locked, params);
   });
   seedInput.addEventListener('change', () => {
     const value = Number(seedInput.value);
-    setParam('seed', Number.isNaN(value) ? -1 : value);
+    setParam('seed', Number.isNaN(value) ? -1 : value, params);
   });
 
   body.append(el('div', { class: 'field' }, [
@@ -363,7 +365,7 @@ export function openParamsSheet(kind = 'text') {
       seedInput,
       el('button', {
         class: 'btn tiny dice', type: 'button', text: '\u{1F3B2}', title: 'Random seed',
-        onClick: () => { seedInput.value = -1; setParam('seed', -1); },
+        onClick: () => { seedInput.value = -1; setParam('seed', -1, params); },
       }),
       lockButton,
     ]),
@@ -411,10 +413,10 @@ export function openParamsSheet(kind = 'text') {
 
     hrBody.append(
       selectRow('Upscaler', upscalers, params.hrUpscaler, (value) => setParam('hrUpscaler', value)),
-      sliderRow('Upscale by (\u00D7)', 'hrScale', 1, 4, 0.05, { format: (value) => `${Number(value).toFixed(2)}\u00D7` }),
+      sliderRow(params, 'Upscale by (\u00D7)', 'hrScale', 1, 4, 0.05, { format: (value) => `${Number(value).toFixed(2)}\u00D7` }),
       el('div', { class: 'field' }, [el('label', { text: 'Hires target' }), hrPreview, hrNote]),
-      sliderRow('Hires steps (0 = same as base)', 'hrSteps', 0, 150, 1),
-      sliderRow('Hires denoising strength', 'hrDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
+      sliderRow(params, 'Hires steps (0 = same as base)', 'hrSteps', 0, 150, 1),
+      sliderRow(params, 'Hires denoising strength', 'hrDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
       el('div', { class: 'field' }, [
         el('label', { text: 'Stage config (one stage per line)' }),
         stageInput,
@@ -428,8 +430,8 @@ export function openParamsSheet(kind = 'text') {
 
   // img2img extras ---------------------------------------------------------
   if (kind === 'image') {
-    body.append(sliderRow('Denoising strength', 'denoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }));
-    body.append(sliderRow('Mask blur', 'maskBlur', 0, 32, 1));
+    body.append(sliderRow(params, 'Denoising strength', 'denoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }));
+    body.append(sliderRow(params, 'Mask blur', 'maskBlur', 0, 32, 1));
 
     // 'Scale x input': same idea as the desktop 'Resize By' scale slider
     const SCALE_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -445,7 +447,7 @@ export function openParamsSheet(kind = 'text') {
       const bounded = Math.min(4, Math.max(0.1, Math.round((Number.isNaN(numeric) ? 1 : numeric) * 100) / 100));
       scaleInput.value = bounded;
       scaleChips.forEach((button, index) => button.classList.toggle('on', Math.abs(SCALE_PRESETS[index] - bounded) < 1e-9));
-      setParam('sizeScale', bounded);
+      setParam('sizeScale', bounded, params);
       syncSizeControls();
     };
     scaleField = el('div', { class: 'field hidden' }, [
@@ -463,7 +465,7 @@ export function openParamsSheet(kind = 'text') {
       { value: 1, label: 'Crop and resize' },
       { value: 2, label: 'Resize and fill' },
       { value: 3, label: 'Just resize (latent upscale)' },
-    ], params.fitMode, (value) => setParam('fitMode', Number(value))));
+    ], params.fitMode, (value) => setParam('fitMode', Number(value), params)));
 
     // inpaint-only controls (masked by the mode active when the sheet opens)
     if (state.image.mode === 'inpaint') {
@@ -472,25 +474,25 @@ export function openParamsSheet(kind = 'text') {
         { value: 1, label: 'Original' },
         { value: 2, label: 'Latent noise' },
         { value: 3, label: 'Latent nothing' },
-      ], params.fill, (value) => setParam('fill', Number(value))));
+      ], params.fill, (value) => setParam('fill', Number(value), params)));
 
       let paddingField = null;
       body.append(segmented('Inpaint area', [
         { value: 'whole', label: 'Whole picture' },
         { value: 'masked', label: 'Only masked' },
       ], params.inpaintFullRes ? 'masked' : 'whole', (value) => {
-        setParam('inpaintFullRes', value === 'masked');
+        setParam('inpaintFullRes', value === 'masked', params);
         if (paddingField) paddingField.classList.toggle('hidden', value !== 'masked');
       }));
 
-      paddingField = sliderRow('Only masked padding, px', 'inpaintPadding', 0, 256, 4);
+      paddingField = sliderRow(params, 'Only masked padding, px', 'inpaintPadding', 0, 256, 4);
       paddingField.classList.toggle('hidden', !params.inpaintFullRes);
       body.append(paddingField);
 
       body.append(segmented('Mask mode', [
         { value: 'masked', label: 'Inpaint masked' },
         { value: 'inverted', label: 'Inpaint not masked' },
-      ], params.invertMask ? 'inverted' : 'masked', (value) => setParam('invertMask', value === 'inverted')));
+      ], params.invertMask ? 'inverted' : 'masked', (value) => setParam('invertMask', value === 'inverted', params)));
     }
   }
 

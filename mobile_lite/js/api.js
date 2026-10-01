@@ -35,6 +35,44 @@ export async function api(path, { method = 'GET', body = null } = {}) {
   return res.json();
 }
 
+/**
+ * POST a JSON body through XMLHttpRequest so upload progress can be surfaced.
+ * The generation calls carry multi-MB base64 init images / masks, and fetch()
+ * cannot report upload progress. `onProgress` receives { loaded, total, done }.
+ */
+export function apiUpload(path, body, { onProgress = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', url(path));
+    request.setRequestHeader('Content-Type', 'application/json');
+    if (onProgress && request.upload) {
+      request.upload.addEventListener('progress', (event) => {
+        onProgress({ loaded: event.loaded, total: event.lengthComputable ? event.total : 0, done: false });
+      });
+      request.upload.addEventListener('load', () => onProgress({ loaded: 0, total: 0, done: true }));
+    }
+    request.addEventListener('load', () => {
+      if (request.status >= 200 && request.status < 300) {
+        try {
+          resolve(request.responseText ? JSON.parse(request.responseText) : null);
+        } catch (_error) {
+          reject(new Error('invalid JSON response'));
+        }
+        return;
+      }
+      let detail = `${request.status} ${request.statusText}`;
+      try {
+        const data = JSON.parse(request.responseText);
+        if (data && data.detail) detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+      } catch (_error) { /* non-JSON error body */ }
+      reject(new Error(detail));
+    });
+    request.addEventListener('error', () => reject(new Error('network error')));
+    request.addEventListener('abort', () => reject(new Error('request aborted')));
+    request.send(JSON.stringify(body));
+  });
+}
+
 export function randomTaskId() {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let suffix = '';
@@ -48,8 +86,8 @@ export const api_ = {
   progress: (payload) => api('/mlite/api/progress', { method: 'POST', body: payload }),
   interrupt: (action = 'interrupt') => api('/mlite/api/interrupt', { method: 'POST', body: { action } }),
   result: (taskId) => api(`/mlite/api/result?id_task=${encodeURIComponent(taskId)}`),
-  txt2img: (payload) => api('/mlite/api/txt2img', { method: 'POST', body: payload }),
-  img2img: (payload) => api('/mlite/api/img2img', { method: 'POST', body: payload }),
+  txt2img: (payload, options) => apiUpload('/mlite/api/txt2img', payload, options),
+  img2img: (payload, options) => apiUpload('/mlite/api/img2img', payload, options),
   gallery: ({ view = 'all', q = '', page = 1, size = 48 } = {}) =>
     api(`/mlite/api/gallery?view=${encodeURIComponent(view)}&q=${encodeURIComponent(q)}&page=${page}&size=${size}`),
   galleryAction: (payload) => api('/mlite/api/gallery/action', { method: 'POST', body: payload }),

@@ -98,7 +98,7 @@ export function openResultViewer(result) {
     actions.push({
       label: 'Use seed',
       onClick: () => {
-        import('./state.js').then(({ setParam }) => setParam('seed', result.seed));
+        import('./state.js').then(({ setSeedEverywhere }) => setSeedEverywhere(result.seed));
         toast(`seed ${result.seed}`, 'ok', 1600);
       },
     });

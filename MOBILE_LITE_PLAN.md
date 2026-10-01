@@ -959,3 +959,135 @@ Screenshots: `tmp/iosprobe/mlite-14-input-resize.png`, `tmp/iosprobe/mlite-15-in
 Probe gotcha: the Input resize control introduced a second `Custom`/`Scale x` segmented control and
 duplicate factor chips in the sheet - the existing output-size probe checks are now scoped to the
 Output size field (`outputFieldLocator`), otherwise JS clicks silently hit the hidden twin.
+
+---
+
+## 25. Round 13: upload progress, separate img2img/inpaint parameters, slider fix (2026-10-01)
+
+Three user reports from on-device use:
+
+### 25.1 Upload wait was invisible
+
+A multi-MB `init_image`/`mask` body uploaded for tens of seconds while the strip only said
+`img2img / Waiting...` at 0%. Cause: `fetch()` cannot report upload progress and the progress poll
+has no task to find until the whole body arrived.
+
+- `api.js::apiUpload` posts the generation calls through `XMLHttpRequest` and turns
+  `upload.onprogress`/`onload` into `{ loaded, total, done }` callbacks (`txt2img`/`img2img` now
+  always use it).
+- `job.js` runs a 3-phase strip: **upload** ("uploading image 192 KB / 2.0 MB", bar = fraction,
+  the poll is skipped entirely so it cannot steal uplink), **sent** ("image sent - waiting for the
+  worker..." while the server decodes/prepares/queues), **generating** (existing step/ETA/live
+  preview display). Text jobs read "sending prompt..." / "request sent...".
+- The upload phase ends on `upload.onload` or when the last progress event reaches the total.
+
+### 25.2 img2img and inpaint shared one parameter set
+
+Both modes wrote `state.params`, so a tune-up for one task leaked into the other. They now keep
+**independent sets** (`state.imageParams = { img2img, inpaint }`, persisted) seeded from
+`state.params` on first use - like the desktop tabs. The params sheet edits the set of the mode it
+opened with; the Image screen, its summary, `resolveOutputSize()` and "send to inpaint/img2img"
+meta all target the active set; `runJob` carries the set so a finished run's seed lands in the
+right one. The viewer's "Use seed" writes to the shared set and every image set in use.
+
+### 25.3 Denoise slider sat at the far right
+
+`sliderRow` assigned `value` *before* `min`/`max`/`step`. WebKit sanitises the range value against
+the element's **current** step (default 1), so 0.75 snapped to 1.0 and the thumb pinned right while
+the number field still read 0.75. Isolated WebKit proof:
+`value first -> "1"`, `bounds first -> "0.75"`. Fix: assign `min`, `max`, `step` before `value`
+(also for the paired number input, for consistency). Every other slider in the app already used
+bounds-first.
+
+### 25.4 Verification (mock harness - no GPU)
+
+`tmp/mprobe/server.py` (stdlib mock of every `/mlite/api/*` route, throttled img2img body read for
+real upload backpressure) + `tmp/mprobe/probe.js`:
+
+| # | Test | Command | Result |
+| --- | --- | --- | --- |
+| 1 | Unit tests unchanged | `node tmp\lite_pedit_test.mjs`, `lite_hires_test.mjs`, `lite_resize_test.mjs` | all pass |
+| 2 | Focused probe on WebKit (iPhone 13) | `python tmp\mprobe\server.py` + `node tmp\mprobe\probe.js webkit` | OK **19/19**, no page errors |
+| 3 | Focused probe on Chromium (system Edge) | `node tmp\mprobe\probe.js msedge` | OK **19/19**, no page errors |
+
+The probe checks: slider holds 0.75 at open, arrow nudge, upload bytes/percent samples, "waiting
+for the worker" phase, generation progress, denoise 0.30 (img2img) vs 0.90 (inpaint) in the
+*request payloads*, mode-switch restores, reload persistence. Screenshots: `tmp/mprobe/fix-01..05-*.png`.
+Mock port must stay outside the Win dynamic range (1024-15000, see the local-llm 10013 note): 27889.
+
+---
+
+## 26. Round 14: folded prompt lines + line weights, live preview display (2026-10-01)
+
+Two on-device requests on the lite UI:
+
+### 26.1 Chips editor: default fold + whole-line weight
+
+- **Every line folds to one chip row by default.** The fold is measured after each render
+  (`prompt.js::applyFolds`): when a line wraps to more than one row a `▸N` badge appears (N =
+  hidden keywords) and the chips are clamped with an inline max-height; `▾` collapses again. Lines
+  that fit one row are untouched. Editing a line (add / rename / chip weight / duplicate / delete /
+  line weight) auto-expands it, and `relayout()` re-measures when a screen becomes visible (tracked
+  in `expandedLines`, index-based and transient).
+- **Line weight (⚖ button on every non-empty line)**: wraps the WHOLE line in one A1111 group -
+  `(alpha, beta:1.2)` - via an inline row with a -/+ stepper (0.05), quick values
+  0.8 / 1.0 / 1.1 / 1.2 / 1.5 and ✓ (applies live; 1.0 unwraps). The chips view unwraps the group so
+  per-keyword chips stay individually editable, and every edit re-wraps it (`writeLineContent`
+  threads the prefix + weight through all write paths). Only an EXPLICIT numeric tail counts as a
+  line weight, so a manually written `(cat)` / `((cat))` stays a keyword weight.
+- Pure helpers `parseLineWeight` / `applyLineWeight` in `mobile_lite/js/prompt-parse.js`
+  (+12 unit assertions in `tmp/lite_pedit_test.mjs`). Lite-only (the desktop chips editor is
+  unchanged).
+
+### 26.2 Live preview: persistent thumbnail + live fullscreen viewer
+
+- Root cause of the "blink of a preview": `progressapi` returns a frame only when it is newer than
+  the client's `id_live_preview`; polls between frames returned null and the strip hid the
+  thumbnail again. The last frame is now kept in `job.previewSrc` and the 50 px thumb (accent
+  border) stays visible for the whole generation.
+- Tapping the thumb opens a **live viewer** (tagged `job-preview`): `ui.js::updateViewer(tag, {src,
+  title})` repaints the image as new frames arrive and the title follows the job
+  (`live preview · 31%`; `live preview · finished` when the job ends). Zoom/pan are untouched.
+
+### 26.3 Verification (mock harness)
+
+| # | Test | Command | Result |
+| --- | --- | --- | --- |
+| 1 | Unit: 12 line-weight assertions (parse/re-weight/unwrap/nesting/edges) | `node tmp\lite_pedit_test.mjs` | all pass |
+| 2 | WebKit probe: fold default+expand, weight wrap/step/unwrap/close, live thumb + viewer repaint, no-blink samples, plus all round-13 checks | `node tmp\mprobe\probe.js webkit` | OK **34/34**, no page errors |
+| 3 | Edge probe (Chromium engine) | `node tmp\mprobe\probe.js msedge` | OK **34/34**, no page errors |
+
+The mock now serves distinct live-preview frames (one per second) and runs 9 s per job.
+Screenshots: `tmp/mprobe/fix-06-live-preview.png`, `fix-07-folded-line.png`, `fix-08-line-weight.png`.
+Gotchas: the weight quick-button `data-weight` must use `formatWeight` (`"1.0"`, not `"1"`), and
+`relayout` must be exposed on the `createPromptEditor` wrapper (screens hold the wrapper, not the
+per-field object).
+
+---
+
+## 27. Round 15: txt2img Generate was dead on arrival - missing import (2026-10-01)
+
+On-device report: "the txt2img generation button when pressed just stuck for a while with no
+action". Reproduced in the WebKit emulator against the **real running server** with
+`tmp/mprobe/real_txt2img.js`: tapping Generate threw
+`ReferenceError: Can't find variable: state`, the strip never appeared, no `/mlite/api/txt2img`
+POST was sent, and the button stayed disabled.
+
+- **Root cause**: round 13 added `store = state.params` **default parameters** to
+  `job.js::runJob` / `registerResult` but job.js was never given the `state` import. Default
+  expressions are lazy - img2img/inpaint always pass `store` explicitly (probe-covered), while
+  txt2img is the only caller that relies on the default, so only its click path evaluated
+  `state.params` and threw, before `runJob`'s body ran. Fix: add `state` to the import.
+- **Defensive follow-up**: `screen-text.js` / `screen-image.js` now wrap the `runJob` await in
+  `try/catch/finally` - any unexpected error re-enables Generate and shows a
+  `could not start: ...` toast instead of leaving the button stuck.
+- **No more false 100% while waiting**: after the body is sent, the strip shows
+  `request sent · waiting for the worker… (12s)` with an **elapsed counter** (`sentDetail()` +
+  poll refresh), so a long server-side preparation (e.g. checkpoint loading) visibly ticks.
+- **Suite coverage**: the mock probe now always runs a txt2img leg (strip appears / waiting
+  counter / result + button re-enabled) and FAILS on any page error (`no page errors during the
+  run`). The mock gained a 3 s "prepare" window during which `/progress` reports inactive,
+  mirroring a real checkpoint load.
+- **Real-server evidence**: before the fix - ReferenceError, no request, stuck button; after -
+  strip → 20% → 60% → 100% → result in ~3 s, no page errors (`real_txt2img.js` timeline).
+- **Verification**: probe **38/38** on WebKit + **38/38** on Edge, no page errors; unit tests pass.

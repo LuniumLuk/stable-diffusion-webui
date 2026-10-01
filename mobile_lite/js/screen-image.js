@@ -5,7 +5,7 @@ import { isJobActive, runJob } from './job.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
 import { planInputResize } from './resize-plan.js';
-import { on, persist, resolveOutputSize, setParam, state } from './state.js';
+import { on, persist, imageParams, resolveOutputSize, setParam, state } from './state.js';
 import { busy, clamp, el, fileToImageSource, pickFile, toast } from './ui.js';
 import { metaFromItem, openResultViewer } from './send.js';
 
@@ -59,7 +59,7 @@ function isInpaint() {
 }
 
 function outputSize() {
-  return resolveOutputSize(activeSource());
+  return resolveOutputSize(activeSource(), imageParams());
 }
 
 function brushRadius() {
@@ -294,6 +294,7 @@ function updateMaskBlink() {
 /** Adopt a gallery/result item's prompt and generation params (desktop "send to inpaint" parity). */
 function applySourceMeta(meta) {
   if (!meta) return;
+  const store = imageParams();
   const applied = [];
   if (meta.prompt) {
     prompt.positive = String(meta.prompt);
@@ -304,22 +305,22 @@ function applySourceMeta(meta) {
     applied.push('negative');
   }
   if (meta.steps) {
-    setParam('steps', Math.max(1, Math.round(Number(meta.steps))));
+    setParam('steps', Math.max(1, Math.round(Number(meta.steps))), store);
     applied.push(`${Math.round(Number(meta.steps))} steps`);
   }
   if (meta.cfg) {
-    setParam('cfg', Number(meta.cfg));
+    setParam('cfg', Number(meta.cfg), store);
     applied.push(`CFG ${Number(meta.cfg)}`);
   }
   if (meta.sampler) {
-    setParam('sampler', String(meta.sampler));
+    setParam('sampler', String(meta.sampler), store);
     applied.push(String(meta.sampler));
   }
   const seed = Number(meta.seed);
   if (Number.isFinite(seed) && seed >= 0) {
     // lock it so re-running the inpaint keeps the same noise (unlock in the params sheet)
-    setParam('seed', seed);
-    setParam('seedLock', true);
+    setParam('seed', seed, store);
+    setParam('seedLock', true, store);
     applied.push(`seed ${seed} (locked)`);
   }
   if (applied.length) toast(`loaded ${applied.join(', ')}`, 'ok', 2800);
@@ -411,7 +412,7 @@ function updateMaskVisibility() {
 }
 
 function updateSummary() {
-  const params = state.params;
+  const params = imageParams();
   const size = outputSize();
   const input = planInputResize(activeSource(), params);
   summary.replaceChildren();
@@ -745,7 +746,7 @@ async function generate() {
     return;
   }
 
-  const params = state.params;
+  const params = imageParams();
   const size = outputSize();
   const payload = {
     task_id: randomTaskId(),
@@ -778,9 +779,14 @@ async function generate() {
   }
 
   generateButton.disabled = true;
-  await runJob('img2img', payload, { label: isInpaint() ? 'inpaint' : 'img2img' });
-  generateButton.disabled = false;
-  updateSummary();
+  try {
+    await runJob('img2img', payload, { label: isInpaint() ? 'inpaint' : 'img2img', store: params });
+  } catch (error) {
+    toast(`could not start: ${error.message}`, 'err', 5000);
+  } finally {
+    generateButton.disabled = false;
+    updateSummary();
+  }
 }
 
 // ------------------------------------------------------------------ screen init
@@ -975,6 +981,7 @@ export function onShow() {
   fitStageFrame();
   updateSummary();
   renderResults();
+  prompt.relayout();
 }
 
 /** Leaving the Image tab closes the fullscreen mask editor. */

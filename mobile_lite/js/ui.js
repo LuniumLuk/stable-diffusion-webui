@@ -56,6 +56,13 @@ export function formatElapsed(seconds) {
   return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
 }
 
+export function formatBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value >= 1048576) return `${(value / 1048576).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${Math.round(value)} B`;
+}
+
 /* ------------------------------------------------------------------ toasts */
 
 const toastHost = () => document.getElementById('toasts');
@@ -136,7 +143,7 @@ export function confirmSheet({ title = 'Are you sure?', message = '', confirmLab
 
 /* ------------------------------------------------------------------ viewer */
 
-const VIEWER = { scale: 1, x: 0, y: 0, pointers: new Map(), lastTap: 0 };
+const VIEWER = { scale: 1, x: 0, y: 0, pointers: new Map(), lastTap: 0, tag: '' };
 
 export function closeViewer() {
   document.getElementById('viewer').hidden = true;
@@ -144,6 +151,7 @@ export function closeViewer() {
   img.src = '';
   VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0;
   VIEWER.pointers.clear();
+  VIEWER.tag = '';
   applyViewerTransform();
 }
 
@@ -152,7 +160,7 @@ function applyViewerTransform() {
     `translate(${VIEWER.x}px, ${VIEWER.y}px) scale(${VIEWER.scale})`;
 }
 
-export function openViewer({ src, title = '', meta = null, actions = [] }) {
+export function openViewer({ src, title = '', meta = null, actions = [], tag = '' }) {
   document.getElementById('viewerTitle').textContent = title;
   const img = document.getElementById('viewerImg');
   img.src = src;
@@ -173,8 +181,20 @@ export function openViewer({ src, title = '', meta = null, actions = [] }) {
   }
 
   VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0; VIEWER.pointers.clear();
+  VIEWER.tag = tag;
   applyViewerTransform();
   document.getElementById('viewer').hidden = false;
+}
+
+/**
+ * Refresh a viewer that is still open and was opened with this tag (live previews keep
+ * repainting while the job runs). The zoom/pan state is deliberately left untouched.
+ */
+export function updateViewer(tag, { src = null, title = null } = {}) {
+  const viewer = document.getElementById('viewer');
+  if (!viewer || viewer.hidden || VIEWER.tag !== tag) return;
+  if (src) document.getElementById('viewerImg').src = src;
+  if (title !== null) document.getElementById('viewerTitle').textContent = title;
 }
 
 function viewerGestureInit() {

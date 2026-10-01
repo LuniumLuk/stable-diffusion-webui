@@ -48,6 +48,10 @@ export const state = {
     source: null, // { dataUrl, width, height, name, meta } - meta carries the prompt/params
     mode: 'img2img', // img2img | inpaint
   },
+  // img2img and inpaint keep their own parameter sets (like the desktop tabs), so
+  // values set for one task never leak into the other. Each set is seeded from
+  // `params` the first time that mode is used; null until then.
+  imageParams: { img2img: null, inpaint: null },
   ui: {
     brush: 28,
     samCandidate: 0,
@@ -75,7 +79,7 @@ export function emit(name, detail = null) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords'];
+const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams'];
 
 export function loadPersisted() {
   try {
@@ -118,10 +122,38 @@ window.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushPersist();
 });
 
-export function setParam(name, value) {
-  state.params[name] = value;
+export function setParam(name, value, store = state.params) {
+  store[name] = value;
   persist();
-  emit('params', state.params);
+  emit('params', store);
+}
+
+/**
+ * Parameter set of an image mode ('img2img' / 'inpaint'). The two tasks are independent
+ * (like the desktop tabs) - a set is seeded from the shared `state.params` on first use,
+ * so upgrades and first switches keep the values the user already sees.
+ */
+export function imageParams(mode = state.image.mode) {
+  const key = mode === 'inpaint' ? 'inpaint' : 'img2img';
+  let store = state.imageParams[key];
+  if (!store) {
+    store = { ...state.params };
+    state.imageParams[key] = store;
+  } else {
+    // a set persisted by an older build may lack freshly added keys - fill from the shared set
+    for (const name of Object.keys(state.params)) {
+      if (store[name] === undefined) store[name] = state.params[name];
+    }
+  }
+  return store;
+}
+
+/** Apply a seed to the shared set and to every image mode set already in use ("Use seed"). */
+export function setSeedEverywhere(seed) {
+  setParam('seed', seed);
+  for (const store of Object.values(state.imageParams)) {
+    if (store) setParam('seed', seed, store);
+  }
 }
 
 /**
@@ -130,7 +162,7 @@ export function setParam(name, value) {
  * 'auto' matches it, 'scale' multiplies it by `sizeScale`, 'custom' uses the W/H fields.
  * Dimensions snap to multiples of 8 and stay within 64-2048.
  */
-export function resolveOutputSize(source = state.image.source, params = state.params) {
+export function resolveOutputSize(source = state.image.source, params = imageParams()) {
   const input = resolveInputSize(source, params);
   if (input && params.imageSizeMode === 'scale') {
     const factor = Math.min(4, Math.max(0.1, Number(params.sizeScale) || 1));

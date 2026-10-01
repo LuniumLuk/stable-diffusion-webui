@@ -170,6 +170,50 @@ export function rebuild(token, weight, disabled) {
   return `(${inner})`;
 }
 
+/* ------------------------------------------------------------------ line weights
+ *
+ * A line can carry one weight for the whole line: every keyword wrapped in a single group,
+ * `(keyword, keyword:1.2)` - the same syntax A1111 uses for `(a, b:1.2)`. The chips editor
+ * unwraps such lines for display (per-keyword chips stay editable) and re-applies the group
+ * after every edit. Only an EXPLICIT numeric tail counts, so a manually written
+ * single-keyword group like `(cat)` keeps being a keyword weight, not a line weight.
+ */
+
+/** `{ inner, weight }` when the whole line is one weighted group, else null. */
+export function parseLineWeight(line) {
+  const text = String(line == null ? '' : line).trim();
+  if (text.length < 4 || text[0] !== '(' || text[text.length - 1] !== ')') return null;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      depth -= 1;
+      if (depth < 0) return null;
+      if (depth === 0 && index !== text.length - 1) return null; // the group closes early
+    }
+  }
+  if (depth !== 0) return null;
+  const colon = colonWeight(text.slice(1, -1));
+  if (!colon.hasColon || !colon.text.trim()) return null;
+  return { inner: colon.text, weight: colon.weight };
+}
+
+/** Wrap a line's content in a line-weight group (weight null / 1.0 removes the group). */
+export function applyLineWeight(line, weight) {
+  const text = String(line == null ? '' : line);
+  const core = text.trim();
+  if (!core) return text;
+  const leading = text.slice(0, text.length - text.trimStart().length);
+  const trailing = text.slice(text.trimEnd().length);
+  const current = parseLineWeight(core);
+  const inner = current ? current.inner.replace(/\s+$/, '') : core;
+  const numeric = weight == null ? null : Number(weight);
+  const flat = numeric === null || Number.isNaN(numeric) || Math.abs(numeric - DEFAULT_WEIGHT) < 1e-9;
+  if (flat || !inner) return leading + inner + trailing;
+  return `${leading}(${inner}:${formatWeight(numeric)})${trailing}`;
+}
+
 /* ------------------------------------------------------------------ block comments
  *
  * Same contract as the desktop text-mode overlay (javascript/promptComment.js):

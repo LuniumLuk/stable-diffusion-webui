@@ -575,7 +575,7 @@ body.mask-editing { overflow: hidden; }
 
 #jobstrip[hidden] { display: none; }
 
-.job-preview { flex: 0 0 auto; width: 46px; height: 46px; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #000; }
+.job-preview { flex: 0 0 auto; width: 50px; height: 50px; padding: 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; background: #000; }
 .job-preview img { width: 100%; height: 100%; object-fit: cover; }
 
 .job-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -813,7 +813,27 @@ body.mask-editing { overflow: hidden; }
 .pedit-block-toggle.is-off { border-style: dashed; opacity: 0.75; }
 .pedit-line.is-comment .pedit-chips { opacity: 0.6; }
 .pedit-line-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.pedit-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pedit-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.pedit-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; max-width: 100%; }
+.pedit-chips.is-folded { overflow: hidden; }
+.pedit-fold-slot { display: inline-flex; }
+.pedit-fold {
+  padding: 3px 8px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+}
+.pedit-line-weight {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 12px;
+}
+.pedit-line-weight.is-on { border-color: var(--blue); color: var(--blue); }
 .pedit-chip {
   display: inline-flex;
   align-items: center;
@@ -861,6 +881,8 @@ body.mask-editing { overflow: hidden; }
   letter-spacing: -1px;
 }
 .pedit-insert.is-edit { border-color: var(--accent); }
+.pedit-insert.is-weight { border-color: var(--blue); }
+.pedit-insert.is-weight .pedit-small-btn.is-on { border-color: var(--blue); color: var(--blue); }
 .pedit-suggest { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 4px; }
 .pedit-suggest-item { padding: 3px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12px; }
 .pedit-actions {

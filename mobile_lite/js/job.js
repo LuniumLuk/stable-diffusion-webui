@@ -1,8 +1,8 @@
 /* Generation engine: submits jobs, polls progress, drives the job strip. */
 
 import { api_ } from './api.js';
-import { addResult, emit, pushMruKeywords, setParam } from './state.js';
-import { formatElapsed, openViewer, toast } from './ui.js';
+import { addResult, emit, pushMruKeywords, setParam, state } from './state.js';
+import { formatBytes, formatElapsed, openViewer, toast, updateViewer } from './ui.js';
 
 const job = {
   active: false,
@@ -13,6 +13,10 @@ const job = {
   pollBusy: false,
   lastPreviewId: -1,
   label: '',
+  phase: 'idle', // upload | sent | generating - controls what the strip shows
+  upload: { loaded: 0, total: 0 },
+  previewSrc: '', // last live-preview frame - kept between polls so the thumb never blinks
+  percent: 0,
 };
 
 export function isJobActive() {
@@ -34,8 +38,8 @@ export function wireJobStrip() {
   });
 
   document.getElementById('jobPreview').addEventListener('click', () => {
-    const img = document.getElementById('jobPreviewImg');
-    if (img && img.src) openViewer({ src: img.src, title: 'live preview' });
+    if (!job.previewSrc) return;
+    openViewer({ src: job.previewSrc, title: previewTitle(), tag: 'job-preview' });
   });
 }
 
@@ -58,8 +62,48 @@ function setStrip({ label, detail = '', eta = '', percent = 0, preview = null })
 
 function clamp01(value) { return Math.min(1, Math.max(0, Number(value) || 0)); }
 
+/** Title of the live-preview viewer - follows the running job. */
+function previewTitle() {
+  const percent = Math.round(clamp01(job.percent) * 100);
+  return percent > 0 ? `live preview \u00B7 ${percent}%` : 'live preview';
+}
+
+/** "sent, waiting for the worker" message with an elapsed counter (server may still decode / load a model). */
+function sentDetail() {
+  const what = job.kind === 'img2img' ? 'image sent' : 'request sent';
+  const waited = Math.round((Date.now() - job.startedAt) / 1000);
+  return `${what} \u00B7 waiting for the worker\u2026${waited >= 2 ? ` (${waited}s)` : ''}`;
+}
+
+/** The upload phase has no server-side task yet, so it is reported from the XHR itself. */
+function uploadDetail() {
+  const label = job.kind === 'img2img' ? 'uploading image' : 'sending prompt';
+  const { loaded, total } = job.upload;
+  if (!total) return `${label}\u2026`;
+  return `${label} ${formatBytes(loaded)} / ${formatBytes(total)}`;
+}
+
+function handleUploadProgress(event) {
+  if (job.phase !== 'upload' && job.phase !== 'sent') return;
+  if (event.done || (event.total && event.loaded >= event.total)) {
+    // body fully sent - the server still has to decode/prepare before the task appears
+    job.phase = 'sent';
+    setStrip({ label: job.label, detail: sentDetail(), percent: 0 });
+    return;
+  }
+  job.upload = { loaded: event.loaded, total: event.total };
+  setStrip({
+    label: job.label,
+    detail: uploadDetail(),
+    percent: event.total ? event.loaded / event.total : 0,
+  });
+}
+
 async function poll() {
   if (!job.active || job.pollBusy) return;
+  // While the body is still being uploaded the server has no task yet - polling
+  // would only steal bandwidth from the upload; the XHR drives the display.
+  if (job.phase === 'upload') return;
   job.pollBusy = true;
   try {
     const info = await api_.progress({
@@ -67,16 +111,31 @@ async function poll() {
       id_live_preview: job.lastPreviewId,
       live_preview: true,
     });
-    if (info.live_preview) job.lastPreviewId = info.id_live_preview;
+    if (info.live_preview) {
+      // keep the last frame: polls without a new one must not hide the thumbnail
+      job.previewSrc = info.live_preview;
+      job.lastPreviewId = info.id_live_preview;
+    }
+    if (info.active || info.queued) job.phase = 'generating';
+    // keep the "sent" message until the worker actually picks the task up (elapsed keeps it alive)
+    if (job.phase !== 'generating') {
+      if (job.phase === 'sent') setStrip({ label: job.label, detail: sentDetail(), percent: 0 });
+      return;
+    }
+    job.percent = info.progress || 0;
     const detail = info.textinfo || '';
     const eta = info.eta ? `~${formatElapsed(info.eta)} left` : '';
-    const label = info.active ? job.label : (info.queued ? 'queued…' : job.label);
+    const label = info.active ? job.label : (info.queued ? 'queued\u2026' : job.label);
+    updateViewer('job-preview', {
+      src: info.live_preview ? job.previewSrc : null,
+      title: previewTitle(),
+    });
     setStrip({
       label,
       detail,
       eta,
-      percent: info.progress || 0,
-      preview: info.live_preview || null,
+      percent: job.percent,
+      preview: job.previewSrc || null,
     });
   } catch (_error) {
     /* transient network errors while polling are ignored */
@@ -117,7 +176,7 @@ async function recoverResult(taskId) {
   return null;
 }
 
-export function registerResult(result, kind, payload = null) {
+export function registerResult(result, kind, payload = null, store = state.params) {
   const lightPayload = payload ? { ...payload } : null;
   if (lightPayload) {
     delete lightPayload.init_image;
@@ -140,11 +199,11 @@ export function registerResult(result, kind, payload = null) {
   }
   if (lightPayload && lightPayload.prompt) pushMruKeywords(lightPayload.prompt);
   if (result.seeds && result.seeds.length) {
-    setParam('seed', result.seeds[0]);
+    setParam('seed', result.seeds[0], store);
   }
 }
 
-export async function runJob(kind, payload, { label = 'generating' } = {}) {
+export async function runJob(kind, payload, { label = 'generating', store = state.params } = {}) {
   if (job.active) {
     toast('another job is already running', 'warn');
     return null;
@@ -156,23 +215,30 @@ export async function runJob(kind, payload, { label = 'generating' } = {}) {
   job.label = label;
   job.startedAt = Date.now();
   job.lastPreviewId = -1;
+  job.previewSrc = '';
+  job.percent = 0;
+  job.phase = 'upload';
+  job.upload = { loaded: 0, total: 0 };
 
   document.body.classList.add('job-running');
   document.getElementById('jobstrip').hidden = false;
-  setStrip({ label, detail: 'starting…', percent: 0 });
+  setStrip({ label, detail: uploadDetail(), percent: 0 });
 
   startPolling();
   try {
-    const response = kind === 'img2img' ? await api_.img2img(payload) : await api_.txt2img(payload);
-    setStrip({ label: 'saving…', percent: 1 });
-    registerResult(response, kind, payload);
+    const response = await (kind === 'img2img'
+      ? api_.img2img(payload, { onProgress: handleUploadProgress })
+      : api_.txt2img(payload, { onProgress: handleUploadProgress }));
+    setStrip({ label: 'saving…', percent: 1, preview: job.previewSrc || null });
+    registerResult(response, kind, payload, store);
     const count = (response.images || []).length;
     toast(`${count} image${count === 1 ? '' : 's'} · ${formatElapsed(response.elapsed || (Date.now() - job.startedAt) / 1000)}`, 'ok');
     return response;
   } catch (error) {
+    setStrip({ label: job.label, detail: 'connection lost \u00B7 checking for the result\u2026', percent: 1 });
     const recovered = await recoverResult(job.taskId);
     if (recovered) {
-      registerResult(recovered, kind, payload);
+      registerResult(recovered, kind, payload, store);
       toast(`recovered ${(recovered.images || []).length} image(s) after a lost connection`, 'warn', 4200);
       return recovered;
     }
@@ -184,6 +250,8 @@ export async function runJob(kind, payload, { label = 'generating' } = {}) {
     job.active = false;
     job.taskId = null;
     job.kind = null;
+    job.phase = 'idle';
+    updateViewer('job-preview', { title: 'live preview \u00B7 finished' });
     document.body.classList.remove('job-running');
     document.getElementById('jobstrip').hidden = true;
     emit('job-finished');

@@ -105,9 +105,14 @@ async function generate() {
   };
 
   generateButton.disabled = true;
-  await runJob('txt2img', payload, { label: 'txt2img' });
-  generateButton.disabled = false;
-  refreshSummary();
+  try {
+    await runJob('txt2img', payload, { label: 'txt2img' });
+  } catch (error) {
+    toast(`could not start: ${error.message}`, 'err', 5000);
+  } finally {
+    generateButton.disabled = false;
+    refreshSummary();
+  }
 }
 
 export function init(container) {
@@ -131,6 +136,7 @@ export function init(container) {
 export function onShow() {
   renderResults();
   refreshSummary();
+  prompt.relayout();
 }
 
 export function onHide() {
