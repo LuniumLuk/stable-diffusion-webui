@@ -1,6 +1,7 @@
 /* Shared app state + tiny pub/sub bus. */
 
 import { api_ } from './api.js';
+import { resolveInputSize, round8 } from './resize-plan.js';
 
 const LS_KEY = 'mlite.state.v1';
 
@@ -25,6 +26,17 @@ export const state = {
     imageSizeMode: 'auto', // auto = match input image, scale = input x sizeScale, custom = use width/height
     sizeScale: 1, // factor used by imageSizeMode 'scale' (img2img: output = input x factor)
     fitMode: 0, // 0 stretch, 1 crop-and-resize, 2 resize-and-fill
+    inputResize: 'off', // off | scale | custom - pre-resize the init image before img2img/inpaint
+    inputResizeScale: 1, // factor used by inputResize 'scale'
+    inputResizeW: 0, // custom target; 0 = follow the source (seeded when the mode is chosen)
+    inputResizeH: 0,
+    inputResizeFit: 'fill', // fill = cover + center crop, stretch = ignore aspect
+    hrEnabled: false, // txt2img: run the hires. fix second pass
+    hrUpscaler: '', // '', latent mode name or traditional upscaler name
+    hrScale: 2, // hires upscale factor (x base size)
+    hrSteps: 0, // hires steps; 0 = same as the base pass
+    hrDenoise: 0.7, // hires denoising strength
+    hrStageConfig: '', // multi-stage hires text (one 'scale: .., steps: ..' entry per line)
   },
   prompt: {
     text: '',
@@ -114,17 +126,18 @@ export function setParam(name, value) {
 
 /**
  * Resolved img2img output size - the single source of truth for the params sheet preview and the
- * generation payload. 'auto' follows the input image, 'scale' multiplies it by `sizeScale`,
- * 'custom' uses the W/H fields. Dimensions snap to multiples of 8 and stay within 64-2048.
+ * generation payload. It follows the *effective* input (after the optional input pre-resize):
+ * 'auto' matches it, 'scale' multiplies it by `sizeScale`, 'custom' uses the W/H fields.
+ * Dimensions snap to multiples of 8 and stay within 64-2048.
  */
 export function resolveOutputSize(source = state.image.source, params = state.params) {
-  const round8 = (value) => Math.min(2048, Math.max(64, Math.round(value / 8) * 8));
-  if (source && params.imageSizeMode === 'scale') {
+  const input = resolveInputSize(source, params);
+  if (input && params.imageSizeMode === 'scale') {
     const factor = Math.min(4, Math.max(0.1, Number(params.sizeScale) || 1));
-    return { width: round8(source.width * factor), height: round8(source.height * factor) };
+    return { width: round8(input.width * factor), height: round8(input.height * factor) };
   }
-  if (source && params.imageSizeMode === 'auto') {
-    return { width: round8(source.width), height: round8(source.height) };
+  if (input && params.imageSizeMode === 'auto') {
+    return { width: input.width, height: input.height };
   }
   return { width: round8(params.width), height: round8(params.height) };
 }
@@ -174,8 +187,14 @@ export async function bootstrap() {
     state.params.inpaintFullRes = defaults.inpaint_full_res ?? state.params.inpaintFullRes;
     state.params.inpaintPadding = defaults.inpaint_full_res_padding ?? state.params.inpaintPadding;
     state.params.invertMask = defaults.invert_mask ?? state.params.invertMask;
+    state.params.hrEnabled = defaults.hr_enabled ?? state.params.hrEnabled;
+    state.params.hrUpscaler = defaults.hr_upscaler || state.params.hrUpscaler;
+    state.params.hrScale = defaults.hr_scale ?? state.params.hrScale;
+    state.params.hrSteps = defaults.hr_steps ?? state.params.hrSteps;
+    state.params.hrDenoise = defaults.hr_denoise ?? state.params.hrDenoise;
   }
   if (!state.params.sampler) state.params.sampler = defaults.sampler || 'Euler a';
+  if (!state.params.hrUpscaler) state.params.hrUpscaler = defaults.hr_upscaler || 'Latent';
   return boot;
 }
 

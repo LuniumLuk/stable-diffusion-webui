@@ -1,6 +1,7 @@
 /* Text screen (txt2img). */
 
 import { randomTaskId } from './api.js';
+import { hrFinalSize } from './hires.js';
 import { isJobActive, runJob } from './job.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
@@ -16,8 +17,10 @@ let generateButton;
 function refreshSummary() {
   summary.replaceChildren();
   const params = state.params;
+  const hires = params.hrEnabled ? hrFinalSize(params) : null;
   const parts = [
-    `${params.width}×${params.height}`,
+    `${params.width}\u00D7${params.height}`,
+    hires ? `Hires \u00D7${params.hrScale} \u2192 ${hires.width}\u00D7${hires.height}` : '',
     `${params.steps} steps`,
     `CFG ${params.cfg}`,
     params.sampler || '-',
@@ -93,6 +96,12 @@ async function generate() {
     scheduler: params.scheduler,
     seed: params.seedLock ? Number(params.seed) : -1,
     batch: params.batch,
+    enable_hr: Boolean(params.hrEnabled),
+    hr_upscaler: params.hrUpscaler,
+    hr_scale: params.hrScale,
+    hr_steps: params.hrSteps,
+    hr_denoise: params.hrDenoise,
+    hr_stage_config: params.hrStageConfig,
   };
 
   generateButton.disabled = true;

@@ -1,8 +1,10 @@
-/* Shared parameters sheet (sampler/steps/size/seed + img2img extras). */
+/* Shared parameters sheet (sampler/steps/size/seed + hires fix + img2img extras). */
 
 import { api_ } from './api.js';
+import { hrFinalSize, hrStagePlan } from './hires.js';
+import { planInputResize, resolveInputSize, round8 } from './resize-plan.js';
 import { closeSheet, el, openSheet, toast } from './ui.js';
-import { emit, persist, resolveOutputSize, setParam, state } from './state.js';
+import { emit, on, persist, resolveOutputSize, setParam, state } from './state.js';
 
 const SIZE_PRESETS = [
   [512, 512],
@@ -136,12 +138,13 @@ export function openParamsSheet(kind = 'text') {
     if (scaleField) scaleField.classList.toggle('hidden', mode !== 'scale');
     const size = resolveOutputSize();
     sizePreview.textContent = `${size.width}\u00D7${size.height}`;
+    const input = resolveInputSize(source, params);
     if (mode === 'scale') {
-      sizeHint.textContent = source
-        ? `input ${source.width}\u00D7${source.height} \u00D7${scaleValue()}`
+      sizeHint.textContent = input
+        ? `input ${input.width}\u00D7${input.height} \u00D7${scaleValue()}`
         : 'load an image first - the factor applies to its dimensions';
     } else if (mode === 'auto') {
-      sizeHint.textContent = source ? 'matches the input image' : 'load an image first';
+      sizeHint.textContent = input ? 'matches the input image' : 'load an image first';
     } else {
       sizeHint.textContent = 'custom size';
     }
@@ -156,16 +159,17 @@ export function openParamsSheet(kind = 'text') {
   };
 
   const selectSizeMode = (value) => {
-    setParam('imageSizeMode', value);
-    if (sizeMode) sizeMode.set(value);
     if (value === 'custom') {
       // start from what the previous mode resolved to instead of stale custom values
+      // (resolve BEFORE switching the mode, or the fallback W/H wins)
       const size = resolveOutputSize();
       widthInput.value = size.width;
       heightInput.value = size.height;
       setParam('width', size.width);
       setParam('height', size.height);
     }
+    setParam('imageSizeMode', value);
+    if (sizeMode) sizeMode.set(value);
     updateSizeHint();
   };
 
@@ -210,6 +214,129 @@ export function openParamsSheet(kind = 'text') {
   body.append(sizeField);
   updateSizeHint();
 
+  // Input resize (image screens): resize the init image *first*, before any other operation.
+  // The backend applies the exact same plan to the inpaint mask, so they stay aligned.
+  if (kind === 'image') {
+    const inputPreview = el('div', { class: 'size-preview hidden' });
+    const inputNote = el('div', { class: 'small muted hidden' });
+    const currentInputScale = () => Math.min(4, Math.max(0.1, Number(params.inputResizeScale) || 1));
+    const inputScaleInput = el('input', { type: 'number', value: currentInputScale(), min: 0.1, max: 4, step: 0.05, inputmode: 'decimal' });
+
+    const INPUT_SCALE_PRESETS = [0.25, 0.5, 0.75, 1, 1.5, 2];
+    const inputScaleChips = INPUT_SCALE_PRESETS.map((value) => el('button', {
+      class: 'chip',
+      type: 'button',
+      text: `${value}\u00D7`,
+      onClick: () => applyInputScale(value),
+    }));
+    const applyInputScale = (value) => {
+      const numeric = Number(value);
+      const bounded = Math.min(4, Math.max(0.1, Math.round((Number.isNaN(numeric) ? 1 : numeric) * 100) / 100));
+      inputScaleInput.value = bounded;
+      inputScaleChips.forEach((button, index) => button.classList.toggle('on', Math.abs(INPUT_SCALE_PRESETS[index] - bounded) < 1e-9));
+      setParam('inputResizeScale', bounded);
+      syncInputResize();
+    };
+    inputScaleInput.addEventListener('change', () => applyInputScale(inputScaleInput.value));
+    const inputScaleRow = el('div', { class: 'field hidden' }, [
+      el('label', { text: 'Scale (\u00D7 input image)' }),
+      el('div', { class: 'chips' }, inputScaleChips),
+      el('div', { class: 'row tight' }, [inputScaleInput]),
+    ]);
+
+    const inW = el('input', { type: 'number', value: round8(Number(params.inputResizeW) || params.width), min: 64, max: 2048, step: 8, inputmode: 'numeric' });
+    const inH = el('input', { type: 'number', value: round8(Number(params.inputResizeH) || params.height), min: 64, max: 2048, step: 8, inputmode: 'numeric' });
+    const inputSizeRow = el('div', { class: 'field hidden' }, [
+      el('label', { text: 'Custom size' }),
+      el('div', { class: 'row tight' }, [inW, el('span', { text: '\u00D7' }), inH]),
+    ]);
+    const inputPresets = el('div', { class: 'chips hidden' }, SIZE_PRESETS.map(([width, height]) => el('button', {
+      class: 'chip',
+      type: 'button',
+      text: `${width}\u00D7${height}`,
+      onClick: () => { inW.value = width; inH.value = height; syncInputSize(); },
+    })));
+    const inputFit = segmentedControl('', [
+      { value: 'fill', label: 'Aspect fill' },
+      { value: 'stretch', label: 'Stretch (no aspect)' },
+    ], params.inputResizeFit, (value) => { setParam('inputResizeFit', value); syncInputResize(); });
+    const inputFitRow = el('div', { class: 'field hidden' }, [
+      el('label', { text: 'Fit' }),
+      inputFit.node,
+    ]);
+
+    const seedInputSize = () => {
+      if (Number(params.inputResizeW) > 0 && Number(params.inputResizeH) > 0) return;
+      const source = state.image.source;
+      if (!source) return;
+      inW.value = round8(source.width);
+      inH.value = round8(source.height);
+      setParam('inputResizeW', round8(source.width));
+      setParam('inputResizeH', round8(source.height));
+    };
+    const syncInputSize = () => {
+      const source = state.image.source;
+      const width = Math.min(2048, Math.max(64, Math.round((Number(inW.value) || (source ? source.width : 512)) / 8) * 8));
+      const height = Math.min(2048, Math.max(64, Math.round((Number(inH.value) || (source ? source.height : 512)) / 8) * 8));
+      inW.value = width;
+      inH.value = height;
+      setParam('inputResizeW', width);
+      setParam('inputResizeH', height);
+      syncInputResize();
+    };
+    inW.addEventListener('change', syncInputSize);
+    inH.addEventListener('change', syncInputSize);
+
+    const syncInputResize = () => {
+      const mode = params.inputResize === 'scale' || params.inputResize === 'custom' ? params.inputResize : 'off';
+      inputScaleRow.classList.toggle('hidden', mode !== 'scale');
+      inputSizeRow.classList.toggle('hidden', mode !== 'custom');
+      inputPresets.classList.toggle('hidden', mode !== 'custom');
+      inputFitRow.classList.toggle('hidden', mode !== 'custom');
+      inputPreview.classList.toggle('hidden', mode === 'off');
+      inputNote.classList.toggle('hidden', mode === 'off');
+      if (mode === 'off') return;
+
+      const plan = planInputResize(state.image.source, params);
+      if (!plan) {
+        inputPreview.textContent = 'load an image first';
+        inputNote.textContent = 'the resize applies to the loaded image';
+        return;
+      }
+      inputPreview.textContent = `${plan.width}\u00D7${plan.height}`;
+      const bits = [`input ${plan.srcWidth}\u00D7${plan.srcHeight}`];
+      if (plan.same) bits.push('no resize');
+      else bits.push(plan.filter === 'area' ? 'area filter (downscale)' : 'lanczos filter (upscale)');
+      if (mode === 'custom') bits.push(plan.cover ? (plan.cropped ? 'aspect fill - center crop' : 'aspect fill') : 'stretch - ignores aspect');
+      inputNote.textContent = bits.join(' \u00B7 ');
+      updateSizeHint(); // the output size follows the pre-resized input
+    };
+
+    const inputMode = segmentedControl('Input resize', [
+      { value: 'off', label: 'Off' },
+      { value: 'scale', label: 'Scale \u00D7' },
+      { value: 'custom', label: 'Custom' },
+    ], params.inputResize, (value) => {
+      setParam('inputResize', value);
+      if (value === 'custom') seedInputSize();
+      syncInputResize();
+    });
+
+    const inputResizeField = el('div', { class: 'field' }, [
+      inputMode.node,
+      inputPreview,
+      inputNote,
+      inputScaleRow,
+      inputSizeRow,
+      inputPresets,
+      inputFitRow,
+    ]);
+    applyInputScale(currentInputScale());
+    seedInputSize();
+    syncInputResize();
+    body.insertBefore(inputResizeField, sizeField);
+  }
+
   // Seed block -------------------------------------------------------------
   const seedInput = el('input', { type: 'number', value: params.seed, min: -1, max: 2147483647, inputmode: 'numeric' });
   const lockButton = el('button', {
@@ -241,6 +368,63 @@ export function openParamsSheet(kind = 'text') {
       lockButton,
     ]),
   ]));
+
+  // Hires. fix (txt2img only) ----------------------------------------------
+  let hrUnsubscribe = null;
+  if (kind === 'text') {
+    const upscalers = (state.boot && state.boot.upscalers) || ['Latent'];
+    const hrPreview = el('div', { class: 'size-preview' });
+    const hrNote = el('div', { class: 'small muted' });
+    const hrBody = el('div');
+
+    const refreshHires = () => {
+      const enabled = !!params.hrEnabled;
+      hrBody.classList.toggle('hidden', !enabled);
+      if (!enabled) return;
+      const target = hrFinalSize(params);
+      const plan = hrStagePlan(params);
+      hrPreview.textContent = `${target.width}\u00D7${target.height}`;
+      const stages = plan.stages.length
+        ? `${plan.stages.length} hires stage${plan.stages.length > 1 ? 's' : ''}`
+        : 'single hires pass';
+      hrNote.textContent = `${stages} \u2192 ${target.width}\u00D7${target.height}${plan.appended ? ' (+origin pass)' : ''}`;
+    };
+
+    const hrToggle = segmentedControl('Hires fix', [
+      { value: 'off', label: 'Off' },
+      { value: 'on', label: 'On' },
+    ], params.hrEnabled ? 'on' : 'off', (value) => {
+      setParam('hrEnabled', value === 'on');
+      refreshHires();
+    });
+
+    const stageInput = el('textarea', {
+      rows: 3,
+      spellcheck: false,
+      placeholder: 'scale: 1.5, steps: 20\ndenoise: 0.5',
+      value: params.hrStageConfig || '',
+    });
+    stageInput.addEventListener('input', () => {
+      setParam('hrStageConfig', stageInput.value);
+      refreshHires();
+    });
+
+    hrBody.append(
+      selectRow('Upscaler', upscalers, params.hrUpscaler, (value) => setParam('hrUpscaler', value)),
+      sliderRow('Upscale by (\u00D7)', 'hrScale', 1, 4, 0.05, { format: (value) => `${Number(value).toFixed(2)}\u00D7` }),
+      el('div', { class: 'field' }, [el('label', { text: 'Hires target' }), hrPreview, hrNote]),
+      sliderRow('Hires steps (0 = same as base)', 'hrSteps', 0, 150, 1),
+      sliderRow('Hires denoising strength', 'hrDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Stage config (one stage per line)' }),
+        stageInput,
+      ]),
+    );
+    body.append(hrToggle.node, hrBody);
+    // keep the target preview live for slider/size changes made in this sheet
+    hrUnsubscribe = on('params', refreshHires);
+    refreshHires();
+  }
 
   // img2img extras ---------------------------------------------------------
   if (kind === 'image') {
@@ -314,5 +498,6 @@ export function openParamsSheet(kind = 'text') {
     title: kind === 'image' ? 'Image parameters' : 'Text parameters',
     body,
     actions: [{ label: 'Done', primary: true, onClick: () => closeSheet() }],
+    onClose: () => { if (hrUnsubscribe) hrUnsubscribe(); },
   });
 }

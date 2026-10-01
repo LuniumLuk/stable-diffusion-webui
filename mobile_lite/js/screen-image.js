@@ -4,6 +4,7 @@ import { api, randomTaskId, ROOT } from './api.js';
 import { isJobActive, runJob } from './job.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
+import { planInputResize } from './resize-plan.js';
 import { on, persist, resolveOutputSize, setParam, state } from './state.js';
 import { busy, clamp, el, fileToImageSource, pickFile, toast } from './ui.js';
 import { metaFromItem, openResultViewer } from './send.js';
@@ -412,9 +413,11 @@ function updateMaskVisibility() {
 function updateSummary() {
   const params = state.params;
   const size = outputSize();
+  const input = planInputResize(activeSource(), params);
   summary.replaceChildren();
   const parts = [
     `denoise ${Number(params.denoise).toFixed(2)}`,
+    input && input.mode !== 'off' ? `in ${input.width}\u00D7${input.height}` : '',
     `${size.width}×${size.height}`,
     `${params.steps} steps`,
     `CFG ${params.cfg}`,
@@ -758,6 +761,11 @@ async function generate() {
     denoise: params.denoise,
     mask_blur: params.maskBlur,
     resize_mode: Number(params.fitMode) || 0,
+    input_resize: params.inputResize,
+    input_resize_scale: params.inputResizeScale,
+    input_resize_w: params.inputResizeW,
+    input_resize_h: params.inputResizeH,
+    input_resize_fit: params.inputResizeFit,
     width: size.width,
     height: size.height,
   };

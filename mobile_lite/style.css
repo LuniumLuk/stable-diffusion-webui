@@ -172,6 +172,18 @@ textarea, input[type="text"], input[type="number"], input[type="search"], select
 textarea { resize: vertical; min-height: 64px; line-height: 1.5; }
 textarea:focus, input:focus, select:focus { border-color: var(--blue); }
 
+/* WebKit paints <select> with the native (white) popup-button look unless appearance is cleared,
+   which washed out the light text on iOS - draw our own chevron instead. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  color: var(--text);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' fill='none' stroke='%238b98ad' stroke-width='2' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 34px;
+}
+
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .field > label { font-size: 12px; color: var(--muted); }
 .field.disabled { opacity: 0.5; pointer-events: none; }

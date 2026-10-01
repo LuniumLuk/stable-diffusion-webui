@@ -35,6 +35,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -89,6 +90,8 @@ _FALLBACK_DEFAULTS = {
     "txt2img": {
         "steps": 20, "cfg": 7.0, "width": 512, "height": 512,
         "sampler": "Euler a", "scheduler": "Automatic", "batch": 1,
+        "hr_enabled": False, "hr_upscaler": "Latent", "hr_scale": 2.0,
+        "hr_steps": 0, "hr_denoise": 0.7,
     },
     "img2img": {
         "steps": 20, "cfg": 7.0, "width": 512, "height": 512,
@@ -96,6 +99,7 @@ _FALLBACK_DEFAULTS = {
         "denoise": 0.75, "mask_blur": 4,
         "fill": 1, "inpaint_full_res": False, "inpaint_full_res_padding": 32,
         "invert_mask": False,
+        "input_resize": "off", "input_resize_scale": 1.0, "input_resize_fit": "fill",
     },
 }
 
@@ -114,6 +118,15 @@ def _ui_defaults(tab: str) -> dict:
         "denoise": "img2img/Denoising strength/value",
         "mask_blur": "img2img/Mask blur/value",
     }
+    if tab == "txt2img":
+        # Hires. fix controls (txt2img only); missing keys keep the fallbacks above.
+        keys.update({
+            "hr_enabled": "txt2img/Hires. fix/value",
+            "hr_upscaler": "txt2img/Upscaler/value",
+            "hr_scale": "txt2img/Upscale by/value",
+            "hr_steps": "txt2img/Hires steps/value",
+            "hr_denoise": "txt2img/Denoising strength/value",
+        })
     try:
         with open(os.path.join(_WEBUI_ROOT, "ui-config.json"), "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -269,6 +282,76 @@ def _payload_number(payload: dict, key: str, low, high, default, *, cast=int):
     return cast(_clamp_float(payload.get(key, default), low, high, default))
 
 
+_RESAMPLING = getattr(Image, "Resampling", Image)  # Pillow >= 9.1 namespaces the constants
+
+
+def _round_grid(value: float, multiple: int = 8) -> int:
+    # half-up like JS Math.round (Python's round() is half-even) so the front-end hint matches
+    return max(64, min(2048, int(value / multiple + 0.5) * multiple))
+
+
+def _input_resize_plan(payload: dict, defaults: dict, source_w: int, source_h: int):
+    """Target of the optional init-image pre-resize; ``None`` when disabled or a no-op."""
+    mode = str(payload.get("input_resize") or defaults.get("input_resize") or "off").strip().lower()
+    if mode not in ("scale", "custom"):
+        return None
+
+    if mode == "scale":
+        factor = _clamp_float(payload.get("input_resize_scale"), 0.1, 4.0, defaults.get("input_resize_scale", 1.0))
+        width, height = _round_grid(source_w * factor), _round_grid(source_h * factor)
+        fit = "fill"  # the aspect ratio is preserved anyway
+    else:
+        width = _clamp_resolution(payload.get("input_resize_w"), _round_grid(source_w))
+        height = _clamp_resolution(payload.get("input_resize_h"), _round_grid(source_h))
+        fit = str(payload.get("input_resize_fit") or defaults.get("input_resize_fit") or "fill").strip().lower()
+        if fit not in ("fill", "stretch"):
+            fit = "fill"
+
+    if (width, height) == (source_w, source_h):
+        return None
+    return {"mode": mode, "width": width, "height": height, "fit": fit}
+
+
+def _apply_input_resize(image, mask, payload: dict, defaults: dict):
+    """Resize the init image (and the inpaint mask) first, before any other operation.
+
+    The filter is chosen automatically from the actual scale factor: area averaging (BOX) for
+    downscales - with a reducing pass for large factors - and Lanczos for upscales. Custom
+    targets fit by 'fill' (cover the box, center-crop; aspect kept) or 'stretch' (distort to the
+    exact size). The mask gets the identical geometry, so painted regions stay aligned.
+    """
+    plan = _input_resize_plan(payload, defaults, image.width, image.height)
+    if not plan:
+        return image, mask, None
+
+    target = (plan["width"], plan["height"])
+    crop = plan["mode"] == "custom" and plan["fit"] == "fill"
+    if crop:
+        downscale = max(target[0] / image.width, target[1] / image.height) < 1
+    else:
+        downscale = target[0] * target[1] < image.width * image.height
+    resample = _RESAMPLING.BOX if downscale else _RESAMPLING.LANCZOS
+    reducing_gap = 2.0 if downscale else None
+
+    def resize_one(item):
+        if crop:
+            ratio = max(target[0] / item.width, target[1] / item.height)
+            scaled = (max(1, math.ceil(item.width * ratio)), max(1, math.ceil(item.height * ratio)))
+            resized = item.resize(scaled, resample, reducing_gap=reducing_gap)
+            left = (resized.width - target[0]) // 2
+            top = (resized.height - target[1]) // 2
+            return resized.crop((left, top, left + target[0], top + target[1]))
+        return item.resize(target, resample, reducing_gap=reducing_gap)
+
+    detail = f"{image.width}x{image.height} -> {plan['width']}x{plan['height']} ({'area' if downscale else 'lanczos'}"
+    if plan["mode"] == "custom":
+        detail += ", aspect fill" if crop else ", stretch"
+    detail += ")"
+
+    resized_mask = resize_one(mask) if mask is not None else None
+    return resize_one(image), resized_mask, detail
+
+
 # --------------------------------------------------------------------------- script args
 
 
@@ -371,6 +454,27 @@ def _normalize_task_id(raw) -> str:
     return progress.create_task_id("mlite")
 
 
+def _hr_upscaler_choices() -> list:
+    """Upscaler dropdown options, same list the desktop hires. fix row offers."""
+    from modules import shared
+
+    return [*shared.latent_upscale_modes, *[item.name for item in shared.sd_upscalers]]
+
+
+def _resolve_hr_upscaler(raw, defaults: dict) -> str:
+    """Unknown names (stale ui-config, typo) fall back to the desktop default."""
+    from modules import shared
+
+    choices = _hr_upscaler_choices()
+    chosen = str(raw or "").strip()
+    if chosen in choices:
+        return chosen
+    fallback = str(defaults.get("hr_upscaler") or "")
+    if fallback in choices:
+        return fallback
+    return shared.latent_upscale_default_mode
+
+
 def _common_args(payload: dict, tab: str) -> dict:
     from modules import sd_samplers
 
@@ -420,11 +524,21 @@ def _run_job(payload: dict, tab: str) -> dict:
     args = _common_args(payload, tab)
 
     if tab == "txt2img":
+        defaults = _ui_defaults("txt2img")
         p = StableDiffusionProcessingTxt2Img(
             sd_model=shared.sd_model,
             do_not_save_samples=False,
             do_not_save_grid=False,
-            enable_hr=False,
+            enable_hr=bool(payload.get("enable_hr", False)),
+            # denoising_strength doubles as the hires denoise for txt2img (like the desktop UI)
+            denoising_strength=_payload_number(
+                payload, "hr_denoise", 0.0, 1.0, defaults["hr_denoise"], cast=float
+            ),
+            hr_scale=_payload_number(payload, "hr_scale", 1.0, 4.0, defaults["hr_scale"], cast=float),
+            hr_upscaler=_resolve_hr_upscaler(payload.get("hr_upscaler"), defaults),
+            hr_second_pass_steps=_payload_number(payload, "hr_steps", 0, 150, defaults["hr_steps"]),
+            # stage config is newline-oriented; accept semicolon-separated pastes like the desktop
+            hr_stage_config_text=str(payload.get("hr_stage_config") or "").replace(";", "\n").strip()[:4000],
             **args,
         )
         outpath_samples = shared.opts.outdir_txt2img_samples
@@ -435,6 +549,8 @@ def _run_job(payload: dict, tab: str) -> dict:
         mask = None
         if payload.get("mask"):
             mask = _decode_image(payload.get("mask")).convert("L")
+
+        init_image, mask, input_resize_info = _apply_input_resize(init_image, mask, payload, defaults)
 
         p = StableDiffusionProcessingImg2Img(
             sd_model=shared.sd_model,
@@ -455,6 +571,8 @@ def _run_job(payload: dict, tab: str) -> dict:
             inpainting_mask_invert=1 if payload.get("invert_mask") else 0,
             **args,
         )
+        if input_resize_info:
+            p.extra_generation_params["Input resize"] = input_resize_info
         outpath_samples = shared.opts.outdir_img2img_samples
         outpath_grids = shared.opts.outdir_img2img_grids
 
@@ -815,7 +933,6 @@ def register_routes(app):
         schedulers = [scheduler.label for scheduler in sd_schedulers.schedulers]
         text_defaults = _ui_defaults("txt2img")
         image_defaults = _ui_defaults("img2img")
-
         return {
             "version": 1,
             "mode": _mode(),
@@ -824,6 +941,7 @@ def register_routes(app):
             "models": models,
             "samplers": samplers,
             "schedulers": schedulers,
+            "upscalers": _hr_upscaler_choices(),
             "defaults": {
                 "steps": text_defaults["steps"],
                 "cfg": text_defaults["cfg"],
@@ -832,6 +950,11 @@ def register_routes(app):
                 "sampler": text_defaults["sampler"],
                 "scheduler": text_defaults["scheduler"],
                 "batch": text_defaults["batch"],
+                "hr_enabled": bool(text_defaults.get("hr_enabled", False)),
+                "hr_upscaler": text_defaults["hr_upscaler"],
+                "hr_scale": text_defaults["hr_scale"],
+                "hr_steps": text_defaults["hr_steps"],
+                "hr_denoise": text_defaults["hr_denoise"],
                 "denoise": image_defaults["denoise"],
                 "mask_blur": image_defaults["mask_blur"],
                 "fill": image_defaults["fill"],

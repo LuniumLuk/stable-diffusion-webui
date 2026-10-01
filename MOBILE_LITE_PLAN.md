@@ -864,3 +864,98 @@ box up and down constantly. Two changes:
 | 1 | iPhone WebKit probe: text mode is ≥ 35% of the viewport tall, a 40-line prompt grows it past that floor, `⤢` opens an overlay whose area is > 60% of the screen with the page behind locked, the footer counts lines/chars, `Done` closes it and the typed text lands in the prompt + chips view | `node tmp\iosprobe\mlite.js` | ✅ **100/100**, no page errors |
 
 Screenshot: `tmp/iosprobe/mlite-13-fullscreen-text.png`.
+
+
+---
+
+## 23. Round 11: Hires. fix in txt2img (2026-09-30, restart30)
+
+The lite txt2img job used to hard-code `enable_hr=False`, so a phone could not run hires fix at all.
+The Text parameters sheet now carries the full hires block (txt2img only):
+
+```text
+Hires fix            [ Off | On ]
+  Upscaler           Latent / Latent (antialiased) / ... / installed upscalers
+  Upscale by (x)     1.00 - 4.00 (step 0.05)
+  Hires target       1024x1024
+                     2 hires stages -> 1024x1024 (+origin pass)
+  Hires steps        0 = same as the base pass (0-150)
+  Hires denoising    0.00 - 1.00
+  Stage config       one `scale: 1.5, steps: 20` entry per line (`;` accepted)
+```
+
+- **Payload** (`screen-text.js`): `enable_hr`, `hr_upscaler`, `hr_scale`, `hr_steps`, `hr_denoise`,
+  `hr_stage_config`; the summary line gains a `Hires x1.5 -> 768x768` chip.
+- **Backend** (`modules/mobile_lite.py`): the txt2img branch fills the same processing fields the
+  desktop hires row uses (`enable_hr`, `denoising_strength` (hires denoise), `hr_scale`,
+  `hr_upscaler`, `hr_second_pass_steps`, `hr_stage_config_text`). Defaults mirror `ui-config.json`
+  (`txt2img/Hires. fix`, `Upscaler`, `Upscale by`, `Hires steps`, `Denoising strength`); unknown
+  upscaler names (stale config / typos) fall back to the desktop default; the stage config
+  normalises `;` to newlines like `modules/txt2img.py`. Bootstrap now exposes `upscalers` + the
+  hires defaults.
+- **Shared helpers** `mobile_lite/js/hires.js` (pure, DOM-free): `parseHrStageConfig` plus
+  `hrFinalSize` / `hrStagePlan` mirror `parse_hr_stage_config_text` / `build_hr_stage_plan`, so the
+  live "Hires target" hint (`N hires stages -> ... (+origin pass)`) matches what the backend will
+  execute. Unit-tested in `tmp/lite_hires_test.mjs`.
+- **Bug fixed on the way** (latent round-9 issue): `selectSizeMode` resolved "the previous mode's
+  size" *after* setting `imageSizeMode = 'custom'`, so the Custom pre-fill could read the stale W/H -
+  it only ever matched because the probe's old inpaint source was 512 = the default W/H. The
+  round-11 probe picks a 768 hires image as its source and exposed it; the size now resolves before
+  the mode switch.
+- **CSS**: WebKit paints `<select>` with the native white popup-button look unless appearance is
+  cleared (the new Upscaler row was washed out) - `-webkit-appearance: none` + a drawn chevron.
+
+### 23.1 Verification
+
+| # | Test | Command | Result |
+| --- | --- | --- | --- |
+| 1 | Unit: stage parsing (separators, invalid entries, clamps) + final size + plan (cap/origin/non-growing/grid) | `node tmp\lite_hires_test.mjs` | OK 13/13 |
+| 2 | API: bootstrap hires defaults + upscalers; real hires job 256x256 base -> 512x512 file, semicolon stage config normalised, stage count 2, upscaler fallback in the infotext | `.venv\Scripts\python.exe tmp\mlite_api_test.py` | OK **66/66** |
+| 3 | iPhone WebKit probe: hires section offered, hidden while off, reveals on "On", target preview follows the factor (512 x1.5 -> 768x768), stage config shows `2 hires stages ... (+origin pass)`, summary chip, hires Generate -> 768x768 image | `node tmp\iosprobe\mlite.js` | OK **110/110**, no page errors |
+
+Screenshots: `tmp/iosprobe/mlite-03b-hires-params.png`, `tmp/iosprobe/mlite-03c-hires-result.png`
+(viewer metadata: `Hires upscale: 1.5, Hires stage config: "scale: 1.25", Hires stage count: 2,
+Hires stage plan: 1.0->1.25 ...; 1.25->1.5 ...`).
+
+
+---
+
+## 24. Round 12: input pre-resize before img2img/inpaint (2026-10-01, restart31)
+
+The Image screen can now pre-resize the loaded picture *before anything else runs* - a separate
+"Input resize" block sits directly above "Output size" (resize first, then size the output):
+
+```text
+Input resize         [ Off | Scale x | Custom ]
+  512x256                    <- resolved target (live)
+  input 768x768 . area filter (downscale) . aspect fill - center crop
+  Custom size        [ 512 ] x [ 256 ]   + preset chips
+  Fit                [ Aspect fill | Stretch (no aspect) ]
+```
+
+- **Scale x** (0.25-2 chips + numeric, clamp 0.1-4) multiplies the source dimensions; **Custom**
+  takes an explicit WxH that may break the aspect ratio (both snap to the 8 px grid).
+- **Fit** (custom only): `Aspect fill` = cover the box, center-crop (no distortion); `Stretch` =
+  resize to the exact size, ignoring the aspect ratio.
+- **Filter is automatic**: downscales use area averaging (PIL `BOX`, with `reducing_gap` for large
+  factors), upscales use Lanczos - judged by the *actual* scale factor (cover operations included).
+  The inpaint mask is resized with the identical geometry, so painted regions stay aligned.
+- The backend applies it right after decoding (`modules/mobile_lite.py::_apply_input_resize`); the
+  infotext records it (`Input resize: 768x768 -> 512x256 (area, aspect fill)`). The output-size
+  modes follow the *effective* input: `Match input` resolves to the resized size (no hidden second
+  resize), `Scale x` multiplies the resized size, and the sheet note shows the resized dims.
+- Pure mirror for the UI: `mobile_lite/js/resize-plan.js` (`planInputResize` / `resolveInputSize`),
+  unit-tested; `state.js::resolveOutputSize` now goes through it.
+
+### 24.1 Verification
+
+| # | Test | Command | Result |
+| --- | --- | --- | --- |
+| 1 | Unit: grid/factor clamps, off/scale/custom plans, cover vs stretch, cover-factor filter rule, fallbacks | `node tmp\lite_resize_test.mjs` | OK 12/12 |
+| 2 | API: real jobs - scale 0.5 (256x256 out, `(area)`), aspect fill 400x304 (`(area, aspect fill)`), stretch upscale 1024x512 (`(lanczos, stretch)`), inpaint with resized mask | `.venv\Scripts\python.exe tmp\mlite_api_test.py` | OK **72/72** |
+| 3 | iPhone WebKit probe: Input resize field, hidden while off, factor chips, 0.5x preview + note, custom seeding, 512x256 preview + fit notes, output follows the resized input, summary chip, and a real inpaint that comes back 512x256 with the resize in the infotext | `node tmp\iosprobe\mlite.js` | OK **125/125**, no page errors |
+
+Screenshots: `tmp/iosprobe/mlite-14-input-resize.png`, `tmp/iosprobe/mlite-15-input-resize-result.png`.
+Probe gotcha: the Input resize control introduced a second `Custom`/`Scale x` segmented control and
+duplicate factor chips in the sheet - the existing output-size probe checks are now scoped to the
+Output size field (`outputFieldLocator`), otherwise JS clicks silently hit the hidden twin.
