@@ -96,9 +96,22 @@ export const api_ = {
   options: (payload) => api('/mlite/api/options', { method: 'POST', body: payload }),
 };
 
-/** Load an image for editing (inpaint source, composer layer, ...).
- *  Prefers the optimized variant, falls back to the raw file. */
+/**
+ * Load an image for editing (inpaint source, composer layer, ...).
+ * Prefers the optimized variant, falls back to the raw file.
+ *
+ * Re-sending the same picture (e.g. to img2img and then to inpaint) reuses the
+ * already-downloaded image instead of fetching it again - bandwidth saver. The
+ * cache is keyed by path and capped; entries live for the session.
+ */
+const sourceCache = new Map(); // cache key -> { dataUrl, width, height }
+const SOURCE_CACHE_MAX = 8;
+
 export async function fetchImageData({ path, url: directUrl, px = 1536 }) {
+  const key = String(path || directUrl || '').replace(/\\/g, '/');
+  const cached = key ? sourceCache.get(key) : null;
+  if (cached) return cached;
+
   const candidates = [];
   if (path) {
     candidates.push(optimizedUrl(path, px, 88));
@@ -114,7 +127,12 @@ export async function fetchImageData({ path, url: directUrl, px = 1536 }) {
       const blob = await response.blob();
       const dataUrl = await blobToDataUrl(blob);
       const dims = await imageSize(dataUrl);
-      return { dataUrl, width: dims.width, height: dims.height };
+      const entry = { dataUrl, width: dims.width, height: dims.height };
+      if (key) {
+        sourceCache.set(key, entry);
+        while (sourceCache.size > SOURCE_CACHE_MAX) sourceCache.delete(sourceCache.keys().next().value);
+      }
+      return entry;
     } catch (error) {
       lastError = error;
     }

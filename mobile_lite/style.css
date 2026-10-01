@@ -369,6 +369,8 @@ input[type="range"] {
   align-items: center;
   justify-content: center;
   padding: 6px;
+  /* pinch-zoom scales .stage-frame past its box - clip it or it covers the buttons */
+  overflow: hidden;
 }
 .mask-editor-body .stage-frame { pointer-events: auto; }
 .mask-editor-foot {

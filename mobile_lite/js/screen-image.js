@@ -15,6 +15,7 @@ const mask = {
   tool: 'paint', // paint | erase | sam
   drawing: false,
   last: null,
+  currentOp: null, // stroke op being painted (pinch start removes it again)
   ops: [], // {type:'stroke', erase, brush, points:[[x,y]]} | {type:'sam', dataUrl}
   samAvailable: null,
   samBusy: false,
@@ -38,6 +39,7 @@ let imageToolsNode;
 let maskEditor;
 let maskColorsRow;
 let editing = false;
+let maskSized = false; // true once the mask canvas has been sized to a source image
 let stageEmpty;
 let maskCanvas;
 let maskCtx;
@@ -343,10 +345,19 @@ function setSource(source) {
   fitStageFrame();
   stageImg.onload = () => {
     if (maskCanvas) {
-      maskCanvas.width = source.width;
-      maskCanvas.height = source.height;
-      maskCtx = maskCanvas.getContext('2d');
-      clearMaskOps();
+      const sameSize = maskSized && maskCanvas.width === source.width && maskCanvas.height === source.height;
+      if (sameSize) {
+        // same picture dimensions - keep the painted mask (re-sending the same image keeps
+        // the last mask area; a differently-sized picture starts clean)
+        maskCtx = maskCanvas.getContext('2d');
+        updateMaskOutline();
+      } else {
+        maskCanvas.width = source.width;
+        maskCanvas.height = source.height;
+        maskCtx = maskCanvas.getContext('2d');
+        maskSized = true;
+        clearMaskOps();
+      }
       updateMaskVisibility();
       fitStageFrame();
     }
@@ -366,6 +377,7 @@ function fitStageFrame() {
   const scale = Math.min(maxW / source.width, maxH / source.height);
   stageFrame.style.width = `${Math.max(1, Math.round(source.width * scale))}px`;
   stageFrame.style.height = `${Math.max(1, Math.round(source.height * scale))}px`;
+  resetStageView(); // a (re)fit always returns to the un-zoomed view
 }
 
 /* The mask is only editable in the fullscreen editor: on the main screen the image stays a
@@ -503,7 +515,8 @@ function strokeStart(point) {
   mask.last = point;
   // op.points entries are [x, y] arrays (drawStroke reads points[i][0/1])
   pushStroke([[point.x, point.y]], mask.tool === 'erase');
-  drawStroke(mask.ops[mask.ops.length - 1]);
+  mask.currentOp = mask.ops[mask.ops.length - 1];
+  drawStroke(mask.currentOp);
 }
 
 function strokeMove(point) {
@@ -531,6 +544,7 @@ function strokeMove(point) {
 function strokeEnd() {
   mask.drawing = false;
   mask.last = null;
+  mask.currentOp = null;
   updateMaskOutline();
 }
 
@@ -554,35 +568,188 @@ function gestureUp(owner) {
   releaseGesture(owner);
 }
 
+/* ---------------------------------------------------------------- editor zoom
+ *
+ * Two-finger pinch (and wheel) zoom/pan for the fullscreen mask editor. Painting maps
+ * client coords through `getBoundingClientRect()`, which already includes this transform,
+ * so strokes stay aligned at any zoom level. A pinch cancels the stroke the first finger
+ * may have started, and painting is locked until all fingers are lifted again.
+ */
+
+const stageView = { scale: 1, x: 0, y: 0 };
+const canvasPointers = new Map(); // pointerId -> { x, y } (client coords)
+const canvasTouches = new Map(); // touch identifier -> { x, y }
+let pinch = null; // { owner, dist, mid } while two fingers are down
+let pinchLock = false; // ignore painting until every finger of a pinch has lifted
+
+function applyStageView() {
+  if (!stageFrame) return;
+  stageFrame.style.transformOrigin = '0 0';
+  stageFrame.style.transform = `translate(${stageView.x}px, ${stageView.y}px) scale(${stageView.scale})`;
+}
+
+function resetStageView() {
+  stageView.scale = 1;
+  stageView.x = 0;
+  stageView.y = 0;
+  applyStageView();
+}
+
+function pinchPoints(owner) {
+  const map = owner === 'touch' ? canvasTouches : canvasPointers;
+  return Array.from(map.values()).slice(0, 2);
+}
+
+function pinchDist(owner) {
+  const [a, b] = pinchPoints(owner);
+  return Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+}
+
+function pinchMid(owner) {
+  const [a, b] = pinchPoints(owner);
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function pinchBegin(owner) {
+  if (pinch || !editing) return;
+  // the first finger may have started a stroke - drop it so a pinch leaves no stray dot
+  if (mask.drawing && mask.currentOp) {
+    const index = mask.ops.indexOf(mask.currentOp);
+    if (index >= 0) mask.ops.splice(index, 1);
+    replayMask();
+  }
+  mask.drawing = false;
+  mask.last = null;
+  mask.currentOp = null;
+  pinchLock = true;
+  pinch = { owner, dist: 0, mid: { x: 0, y: 0 }, origin: { x: 0, y: 0 } };
+  const points = pinchPoints(owner);
+  if (points.length >= 2 && stageFrame) {
+    pinch.dist = pinchDist(owner);
+    pinch.mid = pinchMid(owner);
+    // the frame's untransformed layout origin (translate/scale happen around it)
+    const rect = stageFrame.getBoundingClientRect();
+    pinch.origin = { x: rect.left - stageView.x, y: rect.top - stageView.y };
+  }
+}
+
+function pinchMove(owner) {
+  if (!pinch || pinch.owner !== owner || !editing) return;
+  const points = pinchPoints(owner);
+  if (points.length < 2) return;
+  const dist = pinchDist(owner);
+  const mid = pinchMid(owner);
+  const factor = pinch.dist > 0 ? dist / pinch.dist : 1;
+  const next = clamp(stageView.scale * factor, 1, 8);
+  const k = next / stageView.scale;
+  // keep the map point that was under the old midpoint under the new one (pan + zoom)
+  const ox = pinch.origin.x;
+  const oy = pinch.origin.y;
+  stageView.x = mid.x - ox - k * (pinch.mid.x - ox - stageView.x);
+  stageView.y = mid.y - oy - k * (pinch.mid.y - oy - stageView.y);
+  stageView.scale = next;
+  applyStageView();
+  pinch.dist = dist;
+  pinch.mid = mid;
+}
+
+function pinchEnd(owner) {
+  if (pinch && pinch.owner === owner && pinchPoints(owner).length < 2) {
+    releaseGesture(owner); // a fresh single-finger gesture may start right away
+    pinch = null;
+  }
+  if (canvasPointers.size === 0 && canvasTouches.size === 0) pinchLock = false;
+}
+
+function wheelZoom(clientX, clientY, deltaY) {
+  if (!editing || !stageFrame) return;
+  const rect = stageFrame.getBoundingClientRect();
+  const layoutLeft = rect.left - stageView.x;
+  const layoutTop = rect.top - stageView.y;
+  const next = clamp(stageView.scale * Math.exp(-deltaY / 420), 1, 8);
+  const k = next / stageView.scale;
+  const ux = clientX - layoutLeft;
+  const uy = clientY - layoutTop;
+  stageView.x = ux - k * (ux - stageView.x);
+  stageView.y = uy - k * (uy - stageView.y);
+  stageView.scale = next;
+  applyStageView();
+}
+
 function wireMaskPointer() {
   maskCanvas.addEventListener('pointerdown', (event) => {
+    canvasPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     try { maskCanvas.setPointerCapture(event.pointerId); } catch (_error) { /* capture is optional */ }
+    if (canvasPointers.size >= 2) {
+      pinchBegin('pointer');
+      return;
+    }
+    if (pinchLock || pinch) return;
     gestureDown('pointer', pointFromClient(event.clientX, event.clientY));
   });
   maskCanvas.addEventListener('pointermove', (event) => {
+    if (canvasPointers.has(event.pointerId)) {
+      canvasPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+    if (pinch && pinch.owner === 'pointer') {
+      pinchMove('pointer');
+      return;
+    }
     gestureMove('pointer', pointFromClient(event.clientX, event.clientY));
   });
-  maskCanvas.addEventListener('pointerup', () => gestureUp('pointer'));
-  maskCanvas.addEventListener('pointercancel', () => gestureUp('pointer'));
+  const pointerEnd = (event) => {
+    canvasPointers.delete(event.pointerId);
+    pinchEnd('pointer');
+    if (!pinch && !pinchLock) gestureUp('pointer');
+  };
+  maskCanvas.addEventListener('pointerup', pointerEnd);
+  maskCanvas.addEventListener('pointercancel', pointerEnd);
 
+  const syncTouches = (touches) => {
+    canvasTouches.clear();
+    for (const touch of touches) canvasTouches.set(touch.identifier, { x: touch.clientX, y: touch.clientY });
+  };
   maskCanvas.addEventListener('touchstart', (event) => {
+    syncTouches(event.touches);
+    if (event.touches.length >= 2) {
+      event.preventDefault();
+      pinchBegin('touch');
+      return;
+    }
+    if (pinchLock || pinch) return;
     if (!event.changedTouches || event.changedTouches.length !== 1) return;
     event.preventDefault();
     const touch = event.changedTouches[0];
     gestureDown('touch', pointFromClient(touch.clientX, touch.clientY));
   }, { passive: false });
   maskCanvas.addEventListener('touchmove', (event) => {
+    syncTouches(event.touches);
+    if (pinch && pinch.owner === 'touch') {
+      event.preventDefault();
+      pinchMove('touch');
+      return;
+    }
     if (!event.changedTouches || event.changedTouches.length !== 1) return;
     event.preventDefault();
     const touch = event.changedTouches[0];
     gestureMove('touch', pointFromClient(touch.clientX, touch.clientY));
   }, { passive: false });
   const touchEnd = (event) => {
+    syncTouches(event.touches);
+    pinchEnd('touch');
+    if (pinch || pinchLock) return;
     if (event.changedTouches && event.changedTouches.length > 1) return;
     gestureUp('touch');
   };
   maskCanvas.addEventListener('touchend', touchEnd);
   maskCanvas.addEventListener('touchcancel', touchEnd);
+
+  // desktop convenience + a deterministic way to exercise the zoom in tests
+  maskCanvas.addEventListener('wheel', (event) => {
+    if (!editing) return;
+    event.preventDefault();
+    wheelZoom(event.clientX, event.clientY, event.deltaY);
+  }, { passive: false });
 }
 
 function snapshotForSam() {

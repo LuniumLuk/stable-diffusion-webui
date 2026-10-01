@@ -1091,3 +1091,36 @@ POST was sent, and the button stayed disabled.
 - **Real-server evidence**: before the fix - ReferenceError, no request, stuck button; after -
   strip → 20% → 60% → 100% → result in ~3 s, no page errors (`real_txt2img.js` timeline).
 - **Verification**: probe **38/38** on WebKit + **38/38** on Edge, no page errors; unit tests pass.
+
+## 28. Round 16: mask retention, two-finger zoom, bandwidth cache (2026-10-01)
+
+Three on-device requests:
+
+- **Mask survives a same-size re-send** - `setSource()` keeps the painted mask when the new source
+  has the SAME pixel dimensions as the previous one (`maskSized && width/height equal` -> repaint
+  the outline, keep all ops); any size change clears the ops and resizes the canvas as before.
+  The rule is dimension equality because ops live in canvas pixel coordinates.
+- **Two-finger pinch zoom in the mask editor** - `stageView { scale, x, y }` applied as
+  `transform: translate(xpx, ypx) scale(s)` with `origin 0 0` on `.stage-frame`. One pointer/touch
+  handler owns painting AND the pinch: the second contact cancels the stroke the first finger
+  started (`mask.currentOp` spliced out + `replayMask()` - no stray dot) and `pinchLock` stays
+  until all pointers lift. Anchor math keeps the map point under the old midpoint under the new
+  midpoint: `x' = M - O - k*(M0 - O - x)` where `O` = the frame's layout origin
+  (`rect.left - x`) - the naive `x' = M - k*(M0 - x)` misses `O*(k-1)` and drifts the anchor.
+  Scale clamps to 1..8; the wheel does the same for desktop; `fitStageFrame()` resets the view.
+  `.mask-editor-body` got `overflow: hidden` so the zoomed frame cannot cover the header - the
+  probe caught the ✓ Done button being un-tappable while zoomed. Painting still maps correctly
+  because the pointer math uses `getBoundingClientRect()` (includes the transform).
+- **Bandwidth cache** - `fetchImageData` keeps the last 8 sources in a module `Map`
+  (`sourceCache`, LRU) keyed by normalized path/URL; re-sending the same picture from the
+  gallery/result/viewer reuses the bytes (`px` is recorded but the cache always wins - bandwidth
+  first). A different picture downloads normally.
+- **Verification**: probe **46/46 WebKit + 46/46 Edge**, no page errors. New checks: download
+  counted once on the first "Use as Image", unchanged after "Use as Inpaint" re-send (no new
+  `/sd_net/image` request); pinch 1 -> 2.25 via synthetic two-finger PointerEvents, ink unchanged
+  (stray stroke cancelled), tap-to-paint centroid still ~center while zoomed; mask ink kept after
+  re-sending the same file, zero ink after a different-size file (`crop-wf3-bar.png`, 1170x665).
+  Mock gained `/sd_net/image` and result images now carry `path: mock/result.png`.
+  Screenshot `tmp/mprobe/fix-09-pinch-zoom.png`.
+- Gotcha: Playwright WebKit now also needs `NO_PROXY=127.0.0.1,localhost` - the machine has a
+  system proxy on and clearing HTTP(S)_PROXY alone is not enough.
