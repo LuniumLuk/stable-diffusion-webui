@@ -167,7 +167,7 @@ async function recoverResult(taskId) {
 
       if (attempt >= 3) {
         const status = await api_.status();
-        if (!status.active && !status.queued_count) return null;
+        if (!status.active && !status.queued_count && !status.qwen_active) return null;
       }
     } catch (_error) {
       /* transient network errors while recovering are ignored */
@@ -226,9 +226,12 @@ export async function runJob(kind, payload, { label = 'generating', store = stat
 
   startPolling();
   try {
+    const progress = { onProgress: handleUploadProgress };
     const response = await (kind === 'img2img'
-      ? api_.img2img(payload, { onProgress: handleUploadProgress })
-      : api_.txt2img(payload, { onProgress: handleUploadProgress }));
+      ? api_.img2img(payload, progress)
+      : kind === 'qwen'
+        ? api_.qwen(payload, progress)
+        : api_.txt2img(payload, progress));
     setStrip({ label: 'saving…', percent: 1, preview: job.previewSrc || null });
     registerResult(response, kind, payload, store);
     const count = (response.images || []).length;

@@ -43,15 +43,21 @@ export const state = {
     textNegative: '',
     image: '',
     imageNegative: '',
+    qwen: '',
+    qwenNegative: '',
   },
   image: {
     source: null, // { dataUrl, width, height, name, meta } - meta carries the prompt/params
     mode: 'img2img', // img2img | inpaint
   },
+  // transient hand-off from the gallery to the Text screen (never persisted)
+  textMeta: null,
   // img2img and inpaint keep their own parameter sets (like the desktop tabs), so
   // values set for one task never leak into the other. Each set is seeded from
   // `params` the first time that mode is used; null until then.
   imageParams: { img2img: null, inpaint: null },
+  // Qwen-Image-2.1 keeps its own set too (it has no sampler / hires and uses 32px sizes)
+  qwenParams: null,
   ui: {
     brush: 28,
     samCandidate: 0,
@@ -79,7 +85,7 @@ export function emit(name, detail = null) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams'];
+const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams'];
 
 export function loadPersisted() {
   try {
@@ -146,6 +152,14 @@ export function imageParams(mode = state.image.mode) {
     }
   }
   return store;
+}
+
+/** Qwen-Image-2.1 parameter set (kept apart from the SDXL stores; no sampler / hires). */
+export function qwenParams() {
+  if (!state.qwenParams) {
+    state.qwenParams = { steps: 20, cfg: 6, width: 1024, height: 1024, batch: 1, seed: -1, seedLock: false };
+  }
+  return state.qwenParams;
 }
 
 /** Apply a seed to the shared set and to every image mode set already in use ("Use seed"). */

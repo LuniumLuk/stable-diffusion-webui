@@ -1124,3 +1124,152 @@ Three on-device requests:
   Screenshot `tmp/mprobe/fix-09-pinch-zoom.png`.
 - Gotcha: Playwright WebKit now also needs `NO_PROXY=127.0.0.1,localhost` - the machine has a
   system proxy on and clearing HTTP(S)_PROXY alone is not enough.
+
+## 29. Round 17: a folded chips line is its own single row (2026-10-01)
+
+On-device report: a folded line could still occupy TWO rows. Cause: the chips box is a flex item
+with a content-sized base - its max-content width (all chips on one line) monopolises the wrapping
+`.pedit-row`, so the `▸N` / `＋` / `⚖` buttons were pushed onto a second flex line. (Round 14 only
+clamped the chips themselves, which is why the badge sat below the row.)
+
+Fix: when folded, the chips become a hard single row AND share their line with the buttons -
+`.pedit-chips.is-folded { flex: 1 1 0; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+scrollbar-width: none }` (`flex-basis: 0` lets the buttons stay on line 1; the extra chips slide
+horizontally, scrollbar hidden). The max-height clamp is gone - with nowrap a second chip row is
+impossible. `applyFolds()` now groups chips into rows by their vertical CENTRES (tolerates mixed
+chip heights) to decide "does this line wrap" and to count the hidden keywords; expanding still
+wraps to multiple rows (the class comes off).
+
+Verified: probe **50/50 WebKit + 50/50 Edge**. New checks: exactly one chip row (centre spread ≤
+2 px, wrap height ≈ chip height, `flex-wrap: nowrap`), chips + fold/add/weight buttons share one
+total row (centre spread ≤ 3 px, row height ≈ chips height), horizontal overflow exists and
+`scrollLeft` can reach the end, expanding wraps into ≥ 2 rows again. Screenshot
+`tmp/mprobe/fix-07-folded-line.png` (single row, slid to the end).
+
+## 30. Round 18: Qwen-Image-2.1 bridge in the lite UI (2026-10-01)
+
+On request: the Qwen-Image-2.1 sidecar (stable-diffusion.cpp) now has its own lite screen -
+prompting, reference images and common parameters - with explicit VRAM hand-over between the
+two engines (16GB cannot hold SDXL and Qwen at once).
+
+- **Backend** (`modules/mobile_lite.py`):
+  - `POST /mlite/api/qwen` runs a job through the native async API
+    (`POST /sdcpp/v1/img_gen` -> poll `GET /sdcpp/v1/jobs/{id}`; data URLs in `ref_images`,
+    max 10). Sizes snap to /32 (64-4096); steps/cfg/seed/batch clamped. Results are decoded to
+    `outputs/qwen/<date>/<time>/<n>.png` + `.txt` sidecar; the embedded webui-compatible PNG
+    `parameters` chunk supplies the real infotext/seed (fallback: our own summary line).
+  - The whole job holds the A1111 `queue_lock` (single GPU = serial engines).
+  - `POST /mlite/api/engine` {"sdxl"|"qwen"}: qwen = unload SDXL + pre-start the sd-server in a
+    background thread (the strip shows "loading the model…"); sdxl = stop the managed server
+    (external servers are left alone).
+  - Every SDXL job stops the qwen server AND restores the checkpoint -
+    `unload_model_weights()` only sends the model to CPU; `send_model_to_device()` (or a reload)
+    is required or generation dies with "index is on cuda:0, … tensors on cpu". The
+    vice-versa rule: qwen job -> unload SDXL; SDXL job -> stop the qwen server.
+  - `/mlite/api/progress` reports qwen phases for its task (preparing/queued/generating/saving +
+    elapsed); `/mlite/api/status` gained `qwen_active` (lost-response recovery must not give up
+    while only a qwen job runs); `/mlite/api/interrupt` cancels a QUEUED qwen job
+    (sd-server: cancel_generating=false, queued cancel yes).
+  - Gotcha that cost a restart: `_qwen_prepare_async` deadlocked on first use - it held the state
+    lock and called a helper taking the same non-reentrant lock. Now `RLock` + the guard is
+    computed before locking.
+- **Frontend**: new "Qwen" tab (`screen-qwen.js`): chips prompt editor (own `prompt.qwen` /
+  `prompt.qwenNegative` state), References card (up to 10, removable thumbnails; big files are
+  downscaled client-side to 1600px JPEG q0.92 - the uplink is the bottleneck; 0 refs = text to
+  image, 1+ = edit), server status chip (ready / starting… / offline), summary line -> Qwen
+  params sheet (steps / CFG / images / qwen size presets / seed in a persisted `qwenParams`
+  store), Generate/Edit button, results strip with an "↩ Use as reference" viewer action
+  (result -> edit loop; the viewer closes on that action). `runJob('qwen', …)` posts through
+  `apiUpload`, so the upload phase has byte progress; afterwards the strip shows the backend
+  qwen phases.
+- **Verified**: mock probe **61/61 WebKit + 61/61 Edge** (11 new checks); real-server E2E
+  `tmp/mlite_qwen_e2e.py` **17/17** (server reachable in 16s, t2i + a reference edit, files on
+  disk, progress phases, engine hand-over both ways, SDXL still working after the churn).
+  `tmp/qwen_api_probe.py` records the sd-server API shapes (job lifecycle, 1 and 2 references).
+- Phones need only a page reload; the webui was restarted (restart34) for the Python routes.
+
+## 31. Round 19: seed hand-off rules, folded gallery prompt, swipeable viewers (2026-10-02)
+
+Three on-device requests:
+
+- **Seed hand-off rules** - the img2img/inpaint hand-off (`screen-image.js::applySourceMeta`)
+  no longer touches the seed at all: a random seed stays random (it used to copy and LOCK the
+  item's seed). The seed is now recovered and locked ONLY when a gallery item is sent to the
+  **Text (txt2img)** screen - the new "Use in Text" action on gallery cards (📝) and in the
+  gallery viewer (`send.js::useMetaInText` -> `screen-text.js::applyMeta`, which also restores
+  prompt / negative / steps / CFG / sampler / size from the item, desktop send-to-txt2img parity).
+- **Folded prompt in the gallery viewer** - the info block under the image is a collapsed
+  `<details>` (`makeMetaNode(text, { folded: true })`, summary "prompt & details"); tap to
+  expand. Result viewers keep the plain info block.
+- **Swipeable viewers** - both the gallery viewer and the generation-result viewers navigate
+  with a horizontal swipe: left = next, right = previous (`openViewer({ onNavigate })`; the
+  gallery passes `feed.items`, the strips pass their shown list + index). Navigation only
+  happens at scale 1 (zoomed images keep panning); a recognized swipe (>= 60 px horizontal,
+  < 60% vertical, < 900 ms) can never pair with the next tap into a double-tap zoom.
+  At the ends the swipe is ignored (no wrap).
+- **Compressed viewer images** - `send.js::viewerSrc(item)` prefers the cached 1024 px webp
+  preview, then `/sd_net/image?px=1024` (on-the-fly variant) and only then the original file;
+  both viewers use it (verified on the real server: `cache/gallery_previews/*.webp`,
+  naturalWidth 1024).
+- **Verified**: mock probe **75/75 WebKit + 75/75 Edge** (11 new checks: result-viewer swipe both
+  ways, gallery swipe across 3 items + end-of-list stop, folded meta + expand, use-in-text seed
+  lock + prompt, seed-untouched comparison before/after an image-screen send); real-server smoke
+  `tmp/mprobe/real_gallery.js` (webp preview 1024, folded meta, swipe works, 0 page errors).
+  JS/CSS only - no webui restart needed (phones: reload the page).
+
+## 32. Round 20: flip-book viewer animation + start/end notice (2026-10-02)
+
+- **Follow-the-finger flip**: at 1x zoom a horizontal swipe drags the image with the finger
+  (damped 0.5x + up to 14 deg of rotateY, `#viewerStage { perspective: 1100px }`); a short
+  drag glides back (`springBackViewer`). Verified by reading the mid-drag transform in the probe.
+- **Flip-book transition**: a recognized swipe plays the outgoing image turning away (150 ms,
+  translate 55% + rotateY, fading), THEN `onNavigate` swaps the image, then the incoming image
+  turns in from the other side (230 ms). `cancelViewerFlip` lets any new touch take over mid
+  animation; `canNavigate` is checked BEFORE the out phase so a boundary never plays a fake flip.
+- **Start/end notice**: when the list has nothing further, the image bounces against that edge
+  (damped oscillation), the edge flashes orange (`viewer-edge` gradient), and a pill shows
+  `start of list` / `end of list` (fades after ~1.1 s). `next` = right edge, `prev` = left edge.
+- Verified: mock probe **78/78 WebKit + 78/78 Edge** (3 new checks: follow-transform mid-drag,
+  start-of-list hint, end-of-list hint) incl. screenshot `tmp/mprobe/fix-10-viewer-end-hint.png`.
+  JS/CSS only - reload the phone page, no restart.
+
+## 33. Round 21: viewer loading placeholder for un-downloaded flips (2026-10-02)
+
+On-device bug: swiping to an image that is still downloading kept displaying the PREVIOUS
+picture (an `<img>` keeps its old bitmap until the new `src` finishes - the flip then swapped
+it too late). Fix in `ui.js`:
+
+- `openViewer` now detects a genuinely new source (normalized URL compare) and shows a centered
+  spinner placeholder (`.viewer-loading`, ~30px spinner) while hiding the stale bitmap
+  (`#viewerImg.is-loading { visibility: hidden }`); a memory-cached source skips the placeholder
+  (sync-ready check) so quick re-opens don't flash.
+- The turn-in flip of the flip-book transition now WAITS for the image to arrive
+  (`beginEntry` via the img load event; token-guarded) - so the sequence is: out-flip, spinner,
+  turn-in with the new picture. Load errors clear the placeholder and reuse the hint pill
+  ("could not load the image").
+- Verified: mock probe **80/80 WebKit + 80/80 Edge** (2 new checks: spinner visible + stale image
+  hidden mid-load; placeholder cleared after arrival; mock serves a deliberately slow
+  `/mock/gallery-*.png`). Screenshot `tmp/mprobe/fix-11-viewer-loading.png`. JS/CSS only.
+
+## 34. Round 22: 480p viewer previews + Qwen gallery filter (2026-10-02)
+
+- **Viewer previews down to 480p**: the lite viewer now uses its own cache variant
+  (`_VIEWER_PX = 480`, key `|<mtime>|viewer480`, webp q85, same `cache/gallery_previews` dir) -
+  the desktop gallery keeps its shared 1024px preview untouched. Item `preview` fields (gallery,
+  job results, qwen results) point at the 480 variant; `viewerSrc` falls back to
+  `/sd_net/image?px=480`. Portrait images measure 320x480 (long side capped), ~3-5x fewer bytes.
+- **Qwen gallery filter**: new `Qwen` chip; `_qwen_items` scans `outputs/qwen/<date>/<time>/<n>.png`
+  (newest first, own search) with unique archive keys `qwen-<date>-<time>-<stem>` (every run
+  writes `000.png`, so plain stems would collide and cross-archive). Items are flagged `qwen: true`.
+- **Image-only actions**: qwen cards/viewers offer ONLY "Use as Image"/"Inpaint" (sent with
+  `meta: null` - no prompt/steps/seed applied) and Archive/Unarchive; no endorse/dislike/text/seed.
+  The backend rejects rating actions for qwen paths/keys with 422 (belt and braces); qwen results
+  in the Qwen screen strip also drop the Endorse button and send image-only.
+- **Bulk archive-unrated cannot touch them**: they never enter `generated_images` (the DB index
+  only scans the A1111 sample dirs) - verified live (0 rows, SQL archives FROM generated_images).
+  Archiving qwen images is manual only; the archived flag shows in the Qwen view.
+- **Verified**: mock probe **85/85 WebKit + 85/85 Edge** (5 new checks: qwen list, 3 actions on
+  cards, archive request with the qwen key, viewer actions, pure-image send); live API
+  `tmp/mlite_qwen_gallery_live.py` **11/11** (real data: reject ratings, archive round trip, DB
+  safety); real gallery smoke (320x480 previews, folded meta, qwen chip/viewer). Webui restarted
+  (restart35) for the Python changes.

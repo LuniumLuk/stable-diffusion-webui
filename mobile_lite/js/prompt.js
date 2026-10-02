@@ -442,7 +442,7 @@ function createChipsField(key, placeholder, title) {
         onClick: () => toggleBlockComment(index),
       }));
     }
-    // only the chips are clamped when the line is folded - the buttons stay reachable
+    // a folded line keeps one chip row that slides horizontally - the buttons stay reachable
     const chips = el('div', { class: 'pedit-chips' });
     segments.forEach((segment, segIndex) => {
       if (!segment.body.trim()) {
@@ -500,7 +500,8 @@ function createChipsField(key, placeholder, title) {
   }
 
   /**
-   * Clamp every line that wraps to more than one row. Measured after each render, so the
+   * Fold every line that wraps to more than one row. Folded = a hard single chip row
+   * (`.is-folded` forces nowrap + horizontal slide). Measured after each render, so the
    * '+N' badge is only offered when something is actually hidden; runs in a microtask (the
    * fresh DOM can be measured then). Screens that are hidden (0 wide) are skipped - their
    * `onShow` calls relayout().
@@ -518,13 +519,13 @@ function createChipsField(key, placeholder, title) {
       if (!wrap || !slot) return;
       const chipNodes = Array.from(wrap.querySelectorAll('.pedit-chip'));
       if (chipNodes.length < 2) return;
-      const firstTop = chipNodes[0].offsetTop;
-      const firstRowBottom = Math.max(...chipNodes
-        .filter((chip) => chip.offsetTop === firstTop)
-        .map((chip) => chip.offsetTop + chip.offsetHeight));
-      const totalBottom = Math.max(...chipNodes.map((chip) => chip.offsetTop + chip.offsetHeight));
-      if (totalBottom <= firstRowBottom + 2) return; // fits on one row - nothing to fold
-      const hiddenCount = chipNodes.filter((chip) => chip.offsetTop > firstTop).length;
+      // group chips by visual row through their vertical centres (works with mixed heights)
+      const centers = chipNodes.map((chip) => {
+        const rect = chip.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      });
+      const hiddenCount = centers.filter((center) => Math.abs(center - centers[0]) > 2).length;
+      if (!hiddenCount) return; // fits on one row - nothing to fold
       const expanded = expandedLines.has(index);
       slot.append(el('button', {
         class: 'pedit-fold',
@@ -533,10 +534,7 @@ function createChipsField(key, placeholder, title) {
         title: expanded ? 'Fold this line back to one row' : `Show ${hiddenCount} more keyword(s)`,
         dataset: { act: 'fold', line: String(index) },
       }));
-      if (!expanded) {
-        wrap.classList.add('is-folded');
-        wrap.style.maxHeight = `${firstRowBottom - firstTop}px`;
-      }
+      if (!expanded) wrap.classList.add('is-folded');
     });
   }
 
@@ -884,7 +882,7 @@ function createSuggestionsFold(field) {
 /* ------------------------------------------------------------------ public API */
 
 export function createPromptEditor(kind) {
-  const positiveKey = kind === 'text' ? 'text' : 'image';
+  const positiveKey = kind === 'text' ? 'text' : kind === 'qwen' ? 'qwen' : 'image';
   const negativeKey = `${positiveKey}Negative`;
 
   const positiveField = createChipsField(positiveKey, 'Prompt', 'Prompt');

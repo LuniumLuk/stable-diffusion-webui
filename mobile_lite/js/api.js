@@ -88,6 +88,9 @@ export const api_ = {
   result: (taskId) => api(`/mlite/api/result?id_task=${encodeURIComponent(taskId)}`),
   txt2img: (payload, options) => apiUpload('/mlite/api/txt2img', payload, options),
   img2img: (payload, options) => apiUpload('/mlite/api/img2img', payload, options),
+  qwen: (payload, options) => apiUpload('/mlite/api/qwen', payload, options),
+  qwenStatus: () => api('/mlite/api/qwen/status'),
+  engine: (payload) => api('/mlite/api/engine', { method: 'POST', body: payload }),
   gallery: ({ view = 'all', q = '', page = 1, size = 48 } = {}) =>
     api(`/mlite/api/gallery?view=${encodeURIComponent(view)}&q=${encodeURIComponent(q)}&page=${page}&size=${size}`),
   galleryAction: (payload) => api('/mlite/api/gallery/action', { method: 'POST', body: payload }),

@@ -118,3 +118,25 @@ directly — the Qwen-Image 2.1 tab shows this preset strip above the embedded U
 - The embedded sd.cpp web UI is served by sd-server itself; `/sdapi/v1/...` mirrors the
   A1111 API on the same port.
 - License: Qwen Research License (research/personal use).
+
+## Mobile Lite bridge (SD Lite "Qwen" tab)
+
+The phone UI at `/mlite/` has a **Qwen** tab (round 18): prompt + up to 10 reference
+images (0 = text to image, 1+ = edit), steps / CFG / images / 32px size presets / seed.
+Results land in `outputs/qwen/<date>/<time>/<n>.png` (+ `.txt`); the seed/infotext come
+from the PNG parameters chunk.
+
+- Opening the tab calls `POST /mlite/api/engine {"engine":"qwen"}`: the SDXL checkpoint is
+  unloaded (16GB cannot hold both) and the sd-server is pre-started in the background -
+  the status chip shows `starting…` / `ready`; the job strip shows "loading the model…"
+  during a first generate.
+- Starting an **SDXL** generation stops the managed sd-server and restores the checkpoint
+  automatically (the reverse VRAM hand-over). Reloading SDXL takes ~15s after that.
+- Qwen jobs run through the native async API (`/sdcpp/v1/img_gen` + job polling); the
+  whole job holds the A1111 queue lock, so the two engines never run at the same time.
+  The interrupt button cancels a **queued** qwen job only (sd-server cannot cancel a
+  running generation).
+- "Use as reference" in a result's viewer feeds a finished image straight back into the
+  reference list - the quick edit loop on a phone.
+- Tests: `tmp/mlite_qwen_e2e.py` (real server, 17 checks) and `tmp/qwen_api_probe.py`
+  (API shapes). The mock UI suite is `tmp/mprobe/probe.js`.

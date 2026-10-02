@@ -40,6 +40,7 @@ import os
 import re
 import threading
 import time
+import urllib.request
 from collections import OrderedDict
 from datetime import datetime
 from urllib.parse import quote
@@ -66,9 +67,11 @@ _MOBILE_UA_RE = re.compile(
 )
 
 # Thumbnails are shared with the Gradio gallery caches (same naming scheme), so
-# both UIs reuse each other's generated files.
+# both UIs reuse each other's generated files. The desktop preview (1024px) stays
+# untouched; the lite viewer uses its own smaller 480px variant (bandwidth).
 _THUMB_PX = 192
 _PREVIEW_PX = 1024
+_VIEWER_PX = 480
 _THUMB_CACHE_DIR = os.path.join(_WEBUI_ROOT, "cache", "gallery_thumbs")
 _PREVIEW_CACHE_DIR = os.path.join(_WEBUI_ROOT, "cache", "gallery_previews")
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
@@ -81,6 +84,23 @@ _db_ready = False
 _db_lock = threading.Lock()
 
 _script_args_cache: dict = {}
+
+# ---- Qwen-Image-2.1 sidecar state -----------------------------------------
+# The GPU is 16GB; SDXL (~7GB) and the Qwen server (~10GB) cannot coexist, so the
+# bridge unloads one before using the other (see _qwen_prepare_async / _run_job).
+_QWEN_JOB_TIMEOUT = 1800.0  # 2K resolutions take minutes; slow prompts get room
+_QWEN_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+_qwen_lock = threading.Lock()  # serialises sd-server starts (prepare thread vs job thread)
+_qwen_state_lock = threading.RLock()  # guards _qwen_starting / _qwen_job (re-entrant: helpers lock it too)
+_qwen_starting = False  # an engine-switch prepare is loading the server in the background
+_qwen_job = {
+    "task_id": None,
+    "phase": None,  # preparing | queued | generating | saving | done | failed
+    "started": 0.0,
+    "server_job": None,
+    "error": None,
+}
 
 # Fallbacks for when ui-config.json is missing; the desktop UI keeps its live
 # defaults there, so the lite UI opens with the same values the Gradio UI has.
@@ -584,6 +604,10 @@ def _run_job(payload: dict, tab: str) -> dict:
 
     progress_module.add_task_to_queue(task_id)
     with queue_lock:
+        # single GPU: the Qwen sidecar (~10GB) must release the VRAM before A1111 runs
+        _qwen_stop_server()
+        # ... and a preceding qwen job left the checkpoint on the CPU
+        _ensure_sdxl_ready()
         progress_module.start_task(task_id)
         # Start time is stamped after the queue lock is held: a previous job may still have
         # been writing its own files while this request was waiting, and those must not be
@@ -611,7 +635,7 @@ def _run_job(payload: dict, tab: str) -> dict:
             "path": path,
             "url": _file_url(path),
             "thumb": _cached_image_url(path, mtime, "thumb"),
-            "preview": _cached_image_url(path, mtime, "preview"),
+            "preview": _cached_image_url(path, mtime, "viewer"),
         }
         if index < len(seeds):
             entry["seed"] = seeds[index]
@@ -632,6 +656,356 @@ def _run_job(payload: dict, tab: str) -> dict:
         while len(_results) > _RESULTS_KEEP:
             _results.popitem(last=False)
 
+    return result
+
+
+# --------------------------------------------------------------------------- qwen bridge
+
+
+def _qwen_manager():
+    from modules import qwen_image_manager
+
+    return qwen_image_manager
+
+
+def _qwen_status_payload() -> dict:
+    """Small status block for the UI (engine chip + availability)."""
+    try:
+        status = _qwen_manager().get_status()
+    except Exception as error:  # pragma: no cover - defensive (import/OS errors)
+        return {"available": False, "reachable": False, "managed": False, "mode": "error", "error": str(error)}
+    with _qwen_state_lock:
+        starting = _qwen_starting
+    missing = [os.path.relpath(path, _WEBUI_ROOT) for path in status.get("missing_files") or []]
+    return {
+        "available": not missing,
+        "missing_files": missing,
+        "url": status.get("url"),
+        "reachable": bool(status.get("reachable")),
+        "managed": bool(status.get("managed")),
+        "mode": status.get("mode") or "stopped",
+        "starting": bool(starting and not status.get("reachable")),
+    }
+
+
+def _qwen_set_job(**fields) -> None:
+    with _qwen_state_lock:
+        _qwen_job.update(fields)
+
+
+def _qwen_job_snapshot() -> dict:
+    with _qwen_state_lock:
+        return dict(_qwen_job)
+
+
+def _qwen_job_active() -> bool:
+    return _qwen_job_snapshot().get("phase") in ("preparing", "queued", "generating", "saving")
+
+
+def _qwen_http(method: str, path: str, body=None, timeout: float = 30.0):
+    """JSON call against the sd-server; localhost must bypass the (dead) system proxy."""
+    url = _qwen_manager().get_server_url().rstrip("/") + path
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with _QWEN_OPENER.open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _qwen_unload_sdxl_locked() -> bool:
+    """Free the A1111 checkpoint. Must run while holding the queue lock."""
+    import modules.shared as shared
+    from modules import sd_models
+
+    if shared.sd_model is None:
+        return False
+    sd_models.unload_model_weights()
+    return True
+
+
+def _ensure_sdxl_ready() -> None:
+    """The qwen bridge unloads SDXL to CPU; move it back (or load it) before A1111 runs."""
+    import modules.shared as shared
+    from modules import devices, sd_models
+
+    model = shared.sd_model
+    if model is None:
+        sd_models.reload_model_weights()
+        return
+    try:
+        parameter = next(model.parameters())
+    except (StopIteration, AttributeError):
+        return
+    if parameter.device.type == "cpu" and devices.device.type != "cpu":
+        sd_models.send_model_to_device(model)
+
+
+def _qwen_start_server() -> tuple:
+    """Start the sd-server if it is not up yet; (ok, message)."""
+    manager = _qwen_manager()
+    if manager.get_status().get("reachable"):
+        return True, "already running"
+    result = manager.start_server()
+    return bool(result.get("reachable")), str(result.get("message") or "")
+
+
+def _qwen_stop_server() -> None:
+    """Stop the managed sd-server (frees ~10GB VRAM). External servers are left alone."""
+    try:
+        manager = _qwen_manager()
+        if manager.get_status().get("managed"):
+            manager.stop_server()
+    except Exception:
+        pass
+
+
+def _qwen_prepare_async() -> None:
+    """Engine switch -> Qwen: free the SDXL model, then load sd-server in the background."""
+    global _qwen_starting
+    # check job activity BEFORE taking the state lock - the helper locks it itself
+    if _qwen_job_active():
+        return
+    with _qwen_state_lock:
+        if _qwen_starting:
+            return
+        _qwen_starting = True
+
+    def work():
+        global _qwen_starting
+        try:
+            from modules.call_queue import queue_lock
+
+            with _qwen_lock:
+                if _qwen_manager().get_status().get("reachable"):
+                    return
+                with queue_lock:  # wait out a running A1111 job, then free its VRAM
+                    _qwen_unload_sdxl_locked()
+                _qwen_start_server()
+        except Exception:
+            pass
+        finally:
+            with _qwen_state_lock:
+                _qwen_starting = False
+
+    threading.Thread(target=work, name="mlite-qwen-prepare", daemon=True).start()
+
+
+def _clamp_qwen_size(value, default: int) -> int:
+    """Qwen sizes must be divisible by 32 (sd.cpp flow schedule)."""
+    number = _clamp_int(value, 64, 4096, default)
+    return max(64, int((number + 16) // 32) * 32)
+
+
+def _qwen_infotext(prompt: str, negative: str, steps: int, cfg: float, seed, width: int, height: int, ref_count: int) -> str:
+    body = (
+        f"Steps: {steps}, CFG scale: {cfg}, Seed: {seed}, Size: {width}x{height}, "
+        f"Model: qwen-image-2.1-Q4_K_M, Sampler: euler"
+        + (f", References: {ref_count}" if ref_count else "")
+    )
+    parts = [prompt, f"Negative prompt: {negative}" if negative else None, body]
+    return "\n".join(part for part in parts if part)
+
+
+def _store_qwen_images(
+    status: dict, prompt: str, negative: str, steps: int, cfg: float, seed, width: int, height: int, ref_count: int
+) -> list:
+    """Decode the base64 results into outputs/qwen/<date>/<time>/<n>.png (+ .txt sidecar)."""
+    entries = ((status.get("result") or {}).get("images")) or []
+    if not entries:
+        raise ValueError("the server returned no images")
+
+    stamp = datetime.now()
+    outdir = os.path.join(_WEBUI_ROOT, "outputs", "qwen", stamp.strftime("%Y-%m-%d"), stamp.strftime("%H-%M-%S"))
+    os.makedirs(outdir, exist_ok=True)
+
+    images = []
+    for index, entry in enumerate(entries):
+        raw = base64.b64decode(entry.get("b64_json") or "")
+        if not raw:
+            continue
+        # sd.cpp embeds webui-compatible parameters in the PNG - prefer them (real seed!)
+        infotext = ""
+        try:
+            with Image.open(io.BytesIO(raw)) as parsed:
+                infotext = str((parsed.info or {}).get("parameters") or "")
+        except Exception:
+            infotext = ""
+        image_seed = seed
+        match = re.search(r"Seed:\s*(-?\d+)", infotext)
+        if match:
+            image_seed = int(match.group(1))
+        if not infotext:
+            infotext = _qwen_infotext(prompt, negative, steps, cfg, image_seed, width, height, ref_count)
+
+        path = os.path.join(outdir, f"{index:03d}.png")
+        with open(path, "wb") as handle:
+            handle.write(raw)
+        with open(os.path.splitext(path)[0] + ".txt", "w", encoding="utf-8") as handle:
+            handle.write(infotext)
+
+        mtime = os.path.getmtime(path)
+        images.append({
+            "path": path,
+            "url": _file_url(path),
+            "thumb": _cached_image_url(path, mtime, "thumb"),
+            "preview": _cached_image_url(path, mtime, "viewer"),
+            "seed": image_seed,
+            "infotext": infotext,
+        })
+    return images
+
+
+def _qwen_progress(task_id: str):
+    """Progress payload for the active qwen job (None = not ours, use normal progress)."""
+    job = _qwen_job_snapshot()
+    if not job.get("task_id") or job["task_id"] != task_id:
+        return None
+    phase = job.get("phase")
+    if phase in (None, "done", "failed"):
+        return None
+    elapsed = max(0.0, time.time() - (job.get("started") or time.time()))
+    texts = {
+        "preparing": f"qwen-2.1 \u00B7 loading the model\u2026 ({elapsed:.0f}s)",
+        "queued": f"qwen-2.1 \u00B7 queued ({elapsed:.0f}s)",
+        "generating": f"qwen-2.1 \u00B7 generating ({elapsed:.0f}s)",
+        "saving": "qwen-2.1 \u00B7 saving\u2026",
+    }
+    return {
+        "active": phase in ("generating", "saving"),
+        "queued": phase in ("preparing", "queued"),
+        "completed": False,
+        "progress": 0.0,
+        "eta": None,
+        "live_preview": None,
+        "id_live_preview": -1,
+        "textinfo": texts.get(phase, "qwen-2.1"),
+        "state": {"job": "mlite_qwen", "job_count": 1, "job_no": 0, "sampling_step": 0, "sampling_steps": 0, "skipped": False, "interrupted": False},
+        "current_image": None,
+        "job_count": 1,
+        "job_no": 0,
+    }
+
+
+def _run_qwen_job(payload: dict) -> dict:
+    """Run one Qwen-Image-2.1 generation through the sd-server sidecar.
+
+    Uses the native async API (submit -> poll) because the compat layer has no job
+    status; the whole job holds the A1111 queue lock so the single GPU stays serial.
+    """
+    from fastapi import HTTPException
+    from modules.call_queue import queue_lock
+
+    if _qwen_job_active():
+        raise HTTPException(status_code=409, detail="a qwen job is already running")
+
+    task_id = _normalize_task_id(payload.get("task_id"))
+    prompt = str(payload.get("prompt") or "").strip()
+    negative = str(payload.get("negative_prompt") or "")
+    refs = [
+        str(item)
+        for item in (payload.get("refs") or [])
+        if isinstance(item, str) and item.startswith("data:")
+    ][:10]
+    steps = _payload_number(payload, "steps", 1, 100, 20)
+    cfg = _payload_number(payload, "cfg", 0.0, 30.0, 6.0, cast=float)
+    width = _clamp_qwen_size(payload.get("width"), 1024)
+    height = _clamp_qwen_size(payload.get("height"), 1024)
+    batch = _payload_number(payload, "batch", 1, 4, 1)
+    seed = _clamp_int(payload.get("seed"), -1, 2 ** 31 - 1, -1)
+
+    body = {
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "width": width,
+        "height": height,
+        "batch_count": batch,
+        "seed": seed,
+        "output_format": "png",
+        "auto_resize_ref_image": True,
+        "vae_tiling_params": {"enabled": True},
+        "sample_params": {
+            "scheduler": "default",
+            "sample_method": "euler",
+            "sample_steps": steps,
+            "guidance": {"txt_cfg": cfg, "distilled_guidance": 3.5},
+        },
+    }
+    if refs:
+        body["ref_images"] = refs
+
+    started = time.time()
+    _qwen_set_job(task_id=task_id, phase="preparing", started=started, server_job=None, error=None)
+
+    server_job = None
+    status = None
+    failure = ""
+    try:
+        with queue_lock:
+            _qwen_unload_sdxl_locked()
+            with _qwen_lock:
+                ok, message = _qwen_start_server()
+            if not ok:
+                failure = message or "the Qwen-Image 2.1 server could not be started"
+            else:
+                try:
+                    submitted = _qwen_http("POST", "/sdcpp/v1/img_gen", body)
+                    server_job = submitted.get("id") or submitted.get("job_id")
+                except Exception as error:
+                    failure = f"could not submit the job: {error}"
+                _qwen_set_job(phase="queued", server_job=server_job)
+
+                deadline = time.time() + _QWEN_JOB_TIMEOUT
+                while server_job and time.time() < deadline:
+                    time.sleep(1.0)
+                    try:
+                        status = _qwen_http("GET", f"/sdcpp/v1/jobs/{server_job}", timeout=10.0)
+                    except Exception:
+                        # the sd-server briefly stops answering while it encodes heavy
+                        # inputs; keep polling instead of failing the job on one hiccup
+                        continue
+                    state_name = str(status.get("status") or "")
+                    if state_name in ("completed", "failed", "cancelled"):
+                        break
+                    _qwen_set_job(phase="queued" if state_name in ("queued", "pending") else "generating")
+                else:
+                    if server_job and not failure:
+                        failure = "the qwen job timed out"
+
+            if not failure and status is not None:
+                state_name = str(status.get("status") or "")
+                if state_name == "cancelled":
+                    failure = "cancelled"
+                elif state_name == "failed":
+                    failure = str(status.get("error") or "qwen generation failed")
+            if failure:
+                _qwen_set_job(phase="failed", error=failure)
+                raise HTTPException(status_code=503, detail=failure)
+
+            _qwen_set_job(phase="saving")
+            try:
+                images = _store_qwen_images(status or {}, prompt, negative, steps, cfg, seed, width, height, len(refs))
+            except Exception as error:
+                _qwen_set_job(phase="failed", error=str(error))
+                raise HTTPException(status_code=500, detail=f"could not save the result: {error}")
+    except HTTPException:
+        raise
+    except Exception as error:
+        _qwen_set_job(phase="failed", error=str(error))
+        raise HTTPException(status_code=500, detail=str(error))
+
+    result = {
+        "task_id": task_id,
+        "engine": "qwen",
+        "images": images,
+        "seeds": [entry.get("seed") for entry in images if entry.get("seed") is not None],
+        "infotexts": [entry.get("infotext") or "" for entry in images],
+        "elapsed": round(time.time() - started, 2),
+    }
+    with _results_lock:
+        _results[task_id] = result
+        while len(_results) > _RESULTS_KEEP:
+            _results.popitem(last=False)
+    _qwen_set_job(phase="done")
     return result
 
 
@@ -661,8 +1035,17 @@ def _preview_file(path: str, mtime: float) -> str:
     return os.path.join(_PREVIEW_CACHE_DIR, f"{key}.webp")
 
 
+def _viewer_file(path: str, mtime: float) -> str:
+    """Lite viewer variant: 480px webp (own cache key - the desktop keeps the 1024px one)."""
+    key = hashlib.sha1(f"{path}|{mtime:.6f}|viewer480".encode("utf-8", errors="ignore")).hexdigest()
+    return os.path.join(_PREVIEW_CACHE_DIR, f"{key}.webp")
+
+
 def _cached_image_url(path: str, mtime: float, kind: str) -> str:
-    """Serve (and lazily build) the shared gallery thumbnail/preview caches."""
+    """Serve (and lazily build) the shared gallery thumbnail/preview caches.
+
+    kind: 'thumb' (192px) | 'preview' (1024px, desktop-shared) | 'viewer' (480px, lite).
+    """
     from modules import endorsement_db
 
     try:
@@ -673,20 +1056,18 @@ def _cached_image_url(path: str, mtime: float, kind: str) -> str:
     if mtime is None:
         return ""
 
-    cache_file = _thumb_file(path, mtime) if kind == "thumb" else _preview_file(path, mtime)
+    if kind == "thumb":
+        cache_file, size, quality, method = _thumb_file(path, mtime), _THUMB_PX, 72, 5
+    elif kind == "viewer":
+        cache_file, size, quality, method = _viewer_file(path, mtime), _VIEWER_PX, 85, 4
+    else:
+        cache_file, size, quality, method = _preview_file(path, mtime), _PREVIEW_PX, 88, 4
     if not os.path.exists(cache_file):
         try:
             os.makedirs(os.path.dirname(cache_file), exist_ok=True)
             img = Image.open(path)
-            img.thumbnail(
-                (_THUMB_PX, _THUMB_PX) if kind == "thumb" else (_PREVIEW_PX, _PREVIEW_PX)
-            )
-            img.save(
-                cache_file,
-                format="WEBP",
-                quality=72 if kind == "thumb" else 88,
-                method=5 if kind == "thumb" else 4,
-            )
+            img.thumbnail((size, size))
+            img.save(cache_file, format="WEBP", quality=quality, method=method)
         except Exception:
             return ""
     return _file_url(cache_file)
@@ -721,10 +1102,11 @@ def _normalize_item(row: dict, view: str) -> dict:
         "model": row.get("model_name") or "",
         "mtime": float(mtime or 0),
         "view": view,
+        "qwen": bool(row.get("qwen")),
     }
     if path and os.path.exists(path):
         item["thumb"] = _cached_image_url(path, mtime, "thumb")
-        item["preview"] = _cached_image_url(path, mtime, "preview")
+        item["preview"] = _cached_image_url(path, mtime, "viewer")
     return item
 
 
@@ -773,7 +1155,53 @@ _GALLERY_VIEWS = [
     ("archived", "Archived"),
     ("staged", "Staged"),
     ("composed", "Composed"),
+    ("qwen", "Qwen"),
 ]
+
+
+def _qwen_item_key(path: str) -> str:
+    """Unique archive key for a qwen output - every run uses the same 000.png file name."""
+    rel = os.path.relpath(path, _WEBUI_ROOT).replace("\\", "/")
+    parts = [part for part in rel.split("/") if part]
+    parts[-1] = os.path.splitext(parts[-1])[0]
+    return "qwen-" + "-".join(part.lower() for part in parts)
+
+
+def _qwen_items(query: str, limit: int, offset: int):
+    """Items for the Qwen view: a plain scan of outputs/qwen/<date>/<time>/<n>.png."""
+    qwen_dir = os.path.join(_WEBUI_ROOT, "outputs", "qwen")
+    if not os.path.isdir(qwen_dir):
+        return [], 0
+
+    files = []
+    for dirpath, dirnames, filenames in os.walk(qwen_dir):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        for name in filenames:
+            if name.lower().endswith(_IMAGE_EXTS) and not name.startswith("."):
+                files.append(os.path.join(dirpath, name))
+
+    q = (query or "").strip().lower()
+    if q:
+        files = [path for path in files if q in path.lower()]
+
+    def _mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    files.sort(key=_mtime, reverse=True)
+    rows = []
+    for path in files[offset: offset + limit]:
+        rows.append({
+            "item_key": _qwen_item_key(path),
+            "path": path,
+            "file_mtime": _mtime(path),
+            "prompt": "",
+            "model_name": "qwen-image-2.1",
+            "qwen": True,
+        })
+    return rows, len(files)
 
 
 def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
@@ -787,6 +1215,8 @@ def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
 
     if view == "composed":
         rows, total = _composed_items(query, page_size, offset)
+    elif view == "qwen":
+        rows, total = _qwen_items(query, page_size, offset)
     elif view == "endorsed":
         total = endorsement_db.count_endorsements(query)
         rows = endorsement_db.search_endorsements(query, limit=page_size, offset=offset)
@@ -848,6 +1278,13 @@ def _gallery_action(payload: dict) -> dict:
             item_key = endorsement_db._item_key_from_path(path)
         except Exception:
             item_key = ""
+
+    # Qwen outputs live outside the rated database: they can only be archived by hand
+    # (and the bulk "archive unrated" can never reach them - they are not generated_images rows)
+    normalized_path = f"/{path.replace(chr(92), '/').lower().strip('/')}/"
+    if item_key.startswith("qwen-") or "/outputs/qwen/" in normalized_path:
+        if action not in ("archive", "unarchive"):
+            return {"ok": False, "error": "qwen images cannot be rated - archive or unarchive only"}
 
     def _meta_args():
         return (
@@ -967,13 +1404,19 @@ def register_routes(app):
             },
             "live_preview": bool(shared.opts.live_previews_enable),
             "page_size": 48,
+            "qwen": _qwen_status_payload(),
         }
 
     @app.get("/mlite/api/status")
     def mlite_status():
         from modules import progress
 
-        return progress.global_status_api()
+        payload = progress.global_status_api()
+        job = _qwen_job_snapshot()
+        payload["qwen_active"] = _qwen_job_active()
+        if payload["qwen_active"]:
+            payload["qwen_task_id"] = job.get("task_id")
+        return payload
 
     @app.post("/mlite/api/progress")
     def mlite_progress(payload: dict = Body(default={})):
@@ -984,6 +1427,9 @@ def register_routes(app):
             id_live_preview=_clamp_int(payload.get("id_live_preview", -1), -1, 2 ** 31 - 1, -1),
             live_preview=bool(payload.get("live_preview", True)),
         )
+        qwen = _qwen_progress(request.id_task)
+        if qwen is not None:
+            return qwen
         return progress.progressapi(request)
 
     @app.post("/mlite/api/interrupt")
@@ -992,8 +1438,18 @@ def register_routes(app):
 
         if str(payload.get("action") or "") == "skip":
             shared.state.skip()
-        else:
-            shared.state.interrupt()
+            return {"ok": True}
+
+        # the sd-server can cancel queued jobs only (cancel_generating = false)
+        job = _qwen_job_snapshot()
+        if job.get("phase") in ("preparing", "queued", "generating") and job.get("server_job"):
+            try:
+                _qwen_http("POST", f"/sdcpp/v1/jobs/{job['server_job']}/cancel", timeout=10.0)
+            except Exception:
+                pass
+            return {"ok": True, "engine": "qwen"}
+
+        shared.state.interrupt()
         return {"ok": True}
 
     @app.get("/mlite/api/result")
@@ -1013,6 +1469,30 @@ def register_routes(app):
         if not payload.get("init_image"):
             raise HTTPException(status_code=422, detail="init_image is required")
         return _run_job(payload, "img2img")
+
+    @app.get("/mlite/api/qwen/status")
+    def mlite_qwen_status():
+        return _qwen_status_payload()
+
+    @app.post("/mlite/api/engine")
+    def mlite_engine(payload: dict = Body(default={})):
+        engine = str(payload.get("engine") or "").strip().lower()
+        if engine == "qwen":
+            # free the SDXL model now, load the sd-server in the background
+            _qwen_prepare_async()
+            return {"ok": True, "engine": "qwen", "qwen": _qwen_status_payload()}
+        if engine == "sdxl":
+            # give the ~10GB back unless a qwen job is using the server right now
+            if not _qwen_job_active():
+                _qwen_stop_server()
+            return {"ok": True, "engine": "sdxl", "qwen": _qwen_status_payload()}
+        raise HTTPException(status_code=422, detail="engine must be 'sdxl' or 'qwen'")
+
+    @app.post("/mlite/api/qwen")
+    def mlite_qwen(payload: dict = Body(default={})):
+        if not str(payload.get("prompt") or "").strip():
+            raise HTTPException(status_code=422, detail="prompt is required")
+        return _run_qwen_job(payload)
 
     @app.get("/mlite/api/gallery")
     def mlite_gallery(

@@ -114,6 +114,7 @@ button { touch-action: manipulation; }
 
 body[data-tab="text"] #screen-text,
 body[data-tab="image"] #screen-image,
+body[data-tab="qwen"] #screen-qwen,
 body[data-tab="gallery"] #screen-gallery,
 body[data-tab="compose"] #screen-compose { display: flex; }
 
@@ -712,6 +713,11 @@ body.mask-editing { overflow: hidden; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* gallery viewer: the prompt block starts folded (tap the summary to expand) */
+.viewer-meta-fold { padding: 6px 10px; }
+.viewer-meta-fold summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.viewer-meta-fold[open] summary { color: var(--text); margin-bottom: 4px; }
+.viewer-meta-fold .viewer-meta-text { white-space: pre-wrap; word-break: break-word; }
 
 /* ---------------------------------------------------------------- toasts */
 
@@ -817,7 +823,19 @@ body.mask-editing { overflow: hidden; }
 .pedit-line-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .pedit-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .pedit-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; max-width: 100%; }
-.pedit-chips.is-folded { overflow: hidden; }
+/* folded: a hard single row - extra chips slide horizontally instead of wrapping.
+   `flex: 1 1 0` keeps the chips on THEIR line together with the fold/add/weight buttons
+   (a content-sized basis would push the buttons onto a second row). */
+.pedit-chips.is-folded {
+  flex: 1 1 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.pedit-chips.is-folded::-webkit-scrollbar { display: none; }
 .pedit-fold-slot { display: inline-flex; }
 .pedit-fold {
   padding: 3px 8px;
@@ -1017,7 +1035,7 @@ body.text-editing { overflow: hidden; }
   font-size: 11px;
 }
 .btn.armed { border-color: var(--warn); color: var(--warn); }
-.card-actions { position: absolute; left: 2px; right: 2px; bottom: 2px; display: flex; gap: 2px; justify-content: center; }
+.card-actions { position: absolute; left: 2px; right: 2px; bottom: 2px; display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
 .card-actions .qa {
   width: 22px;
   height: 22px;
@@ -1032,3 +1050,103 @@ body.text-editing { overflow: hidden; }
   font-size: 11px;
 }
 .card-actions .qa.on { border-color: var(--accent); color: #ffd9b8; background: rgba(249, 115, 22, 0.25); }
+
+/* Qwen-Image-2.1 screen: reference thumbnails + server status chip */
+.qwen-refs { display: flex; flex-wrap: wrap; gap: 6px; }
+.qwen-ref {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+}
+.qwen-ref img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.qwen-ref-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(13, 17, 25, 0.85);
+  color: #f87171;
+  font-size: 12px;
+  line-height: 1;
+}
+.qwen-status {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46vw;
+}
+.qwen-status.ok { color: var(--accent); border-color: var(--accent); }
+.qwen-status.warn { color: var(--warn); border-color: var(--warn); }
+.qwen-status.err { color: #f87171; border-color: #f87171; }
+
+/* Viewer flip-book: 3D depth, start/end hint pill + edge flash */
+#viewerStage { perspective: 1100px; }
+
+.viewer-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 7px 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(13, 17, 25, 0.88);
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 4;
+}
+.viewer-hint.show { animation: viewer-hint-pop 1.15s ease-out; }
+@keyframes viewer-hint-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.82); }
+  12% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  72% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+}
+
+.viewer-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 3;
+}
+.viewer-edge.left { left: 0; background: linear-gradient(to right, rgba(249, 115, 22, 0.45), transparent); }
+.viewer-edge.right { right: 0; background: linear-gradient(to left, rgba(249, 115, 22, 0.45), transparent); }
+.viewer-edge.show { animation: viewer-edge-flash 0.55s ease-out; }
+@keyframes viewer-edge-flash {
+  0% { opacity: 0; }
+  25% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Viewer loading placeholder: the stale bitmap is hidden until the new image arrives */
+#viewerImg.is-loading { visibility: hidden; }
+.viewer-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+}
+.viewer-loading .spinner { width: 30px; height: 30px; border-width: 3px; }

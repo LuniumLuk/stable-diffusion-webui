@@ -143,27 +143,197 @@ export function confirmSheet({ title = 'Are you sure?', message = '', confirmLab
 
 /* ------------------------------------------------------------------ viewer */
 
-const VIEWER = { scale: 1, x: 0, y: 0, pointers: new Map(), lastTap: 0, tag: '' };
+const VIEWER = {
+  scale: 1, x: 0, y: 0, rotY: 0, pointers: new Map(), lastTap: 0, tag: '',
+  onNavigate: null, canNavigate: null, swipe: null, flipToken: 0, flipAnim: null,
+};
 
 export function closeViewer() {
   document.getElementById('viewer').hidden = true;
   const img = document.getElementById('viewerImg');
   img.src = '';
-  VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0;
+  VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0; VIEWER.rotY = 0;
   VIEWER.pointers.clear();
   VIEWER.tag = '';
+  VIEWER.onNavigate = null;
+  VIEWER.canNavigate = null;
+  VIEWER.swipe = null;
+  cancelViewerFlip();
+  setViewerLoading(false);
   applyViewerTransform();
 }
 
 function applyViewerTransform() {
+  const rotate = VIEWER.rotY ? ` rotateY(${VIEWER.rotY.toFixed(2)}deg)` : '';
   document.getElementById('viewerImg').style.transform =
-    `translate(${VIEWER.x}px, ${VIEWER.y}px) scale(${VIEWER.scale})`;
+    `translate(${VIEWER.x}px, ${VIEWER.y}px) scale(${VIEWER.scale})${rotate}`;
 }
 
-export function openViewer({ src, title = '', meta = null, actions = [], tag = '' }) {
+/**
+ * Loading placeholder: while a (new) viewer image downloads, the element would keep showing
+ * the previous bitmap - hide it and show a spinner instead until the new image arrives.
+ */
+let viewerLoadingNode = null;
+
+function setViewerLoading(active) {
+  if (!viewerLoadingNode) {
+    viewerLoadingNode = el('div', { class: 'viewer-loading', hidden: true }, [el('span', { class: 'spinner' })]);
+    document.getElementById('viewer').append(viewerLoadingNode);
+  }
+  viewerLoadingNode.hidden = !active;
+  document.getElementById('viewerImg').classList.toggle('is-loading', active);
+}
+
+/** Stop a running flip animation (a new gesture always wins). */
+function cancelViewerFlip() {
+  VIEWER.flipToken += 1;
+  if (VIEWER.flipAnim) {
+    try { VIEWER.flipAnim.cancel(); } catch (_error) { /* already gone */ }
+    VIEWER.flipAnim = null;
+  }
+}
+
+/** Glide the dragged image back to its resting place (swipe too short / not a flip). */
+function springBackViewer() {
+  const img = document.getElementById('viewerImg');
+  const from = getComputedStyle(img).transform;
+  VIEWER.x = 0; VIEWER.rotY = 0;
+  applyViewerTransform();
+  try {
+    img.animate([{ transform: from }, { transform: getComputedStyle(img).transform }], {
+      duration: 180,
+      easing: 'ease-out',
+    });
+  } catch (_error) { /* no Web Animations: snap back */ }
+}
+
+/**
+ * Flip-book transition: the current image turns away, the next one turns in from the other
+ * side. `onNavigate` is only called once the outgoing image has left the screen.
+ */
+function startViewerFlip(direction) {
+  const img = document.getElementById('viewerImg');
+  const stage = document.getElementById('viewerStage');
+  const width = (stage && stage.clientWidth) || 360;
+  const sign = direction === 'next' ? -1 : 1;
+
+  if (VIEWER.canNavigate && !VIEWER.canNavigate(direction)) {
+    playViewerBoundary(direction);
+    return;
+  }
+
+  const token = ++VIEWER.flipToken;
+  const startX = VIEWER.x;
+  const startRot = VIEWER.rotY;
+  VIEWER.x = 0; VIEWER.rotY = 0;
+  applyViewerTransform(); // base style for the incoming image
+
+  let out = null;
+  try {
+    out = img.animate([
+      { transform: `translateX(${startX}px) rotateY(${startRot}deg)`, opacity: 1 },
+      { transform: `translateX(${sign * width * 0.55}px) rotateY(${sign * 20}deg)`, opacity: 0.1 },
+    ], { duration: 150, easing: 'ease-in', fill: 'forwards' });
+  } catch (_error) { out = null; }
+  VIEWER.flipAnim = out;
+
+  const proceed = () => {
+    if (token !== VIEWER.flipToken) return;
+    if (out) out.cancel();
+    VIEWER.flipAnim = null;
+    const navigated = VIEWER.onNavigate ? VIEWER.onNavigate(direction) : false;
+    if (navigated !== true) {
+      if (!out) playViewerBoundary(direction);
+      return;
+    }
+    // the incoming image may still be downloading: the placeholder covers that, and the
+    // turn-in flip only starts once it has actually arrived
+    const beginEntry = () => {
+      if (token !== VIEWER.flipToken) return;
+      let incoming = null;
+      try {
+        incoming = img.animate([
+          { transform: `translateX(${-sign * width * 0.45}px) rotateY(${-sign * 16}deg) scale(0.985)`, opacity: 0.15 },
+          { transform: 'none', opacity: 1 },
+        ], { duration: 230, easing: 'cubic-bezier(.2,.7,.3,1)' });
+      } catch (_error) { return; }
+      VIEWER.flipAnim = incoming;
+      incoming.finished.then(() => {
+        if (VIEWER.flipAnim === incoming) {
+          incoming.cancel();
+          VIEWER.flipAnim = null;
+        }
+      }).catch(() => { /* canceled by a new gesture */ });
+    };
+    if (img.complete && img.naturalWidth > 0) beginEntry();
+    else img.addEventListener('load', beginEntry, { once: true });
+  };
+
+  if (out) out.finished.then(proceed).catch(() => { /* canceled by a new gesture */ });
+  else proceed();
+}
+
+/** Start/end of the list: bounce against the edge, flash it and show a short hint. */
+function playViewerBoundary(direction) {
+  const img = document.getElementById('viewerImg');
+  const sign = direction === 'next' ? -1 : 1;
+  VIEWER.x = 0; VIEWER.rotY = 0;
+  applyViewerTransform();
+  try {
+    img.animate([
+      { transform: 'translateX(0px)' },
+      { transform: `translateX(${sign * 20}px)` },
+      { transform: `translateX(${sign * -9}px)` },
+      { transform: 'translateX(0px)' },
+    ], { duration: 340, easing: 'ease-out' });
+  } catch (_error) { /* no Web Animations */ }
+  flashViewerEdge(direction);
+  showViewerHint(direction === 'next' ? 'end of list' : 'start of list');
+}
+
+let viewerEdgeNode = null;
+
+function flashViewerEdge(direction) {
+  if (!viewerEdgeNode) {
+    viewerEdgeNode = el('div', { class: 'viewer-edge' });
+    document.getElementById('viewer').append(viewerEdgeNode);
+  }
+  viewerEdgeNode.classList.remove('left', 'right', 'show');
+  viewerEdgeNode.classList.add(direction === 'next' ? 'right' : 'left');
+  void viewerEdgeNode.offsetWidth; // restart the CSS animation
+  viewerEdgeNode.classList.add('show');
+}
+
+let viewerHintNode = null;
+
+function showViewerHint(text) {
+  if (!viewerHintNode) {
+    viewerHintNode = el('div', { class: 'viewer-hint' });
+    document.getElementById('viewer').append(viewerHintNode);
+  }
+  viewerHintNode.textContent = text;
+  viewerHintNode.classList.remove('show');
+  void viewerHintNode.offsetWidth; // restart the CSS animation
+  viewerHintNode.classList.add('show');
+}
+
+export function openViewer({ src, title = '', meta = null, actions = [], tag = '', onNavigate = null, canNavigate = null }) {
   document.getElementById('viewerTitle').textContent = title;
   const img = document.getElementById('viewerImg');
-  img.src = src;
+  let sameSrc = false;
+  try {
+    sameSrc = !!src && img.src === new URL(src, location.href).href;
+  } catch (_error) {
+    sameSrc = false;
+  }
+  if (sameSrc && img.complete && img.naturalWidth > 0) {
+    setViewerLoading(false);
+  } else {
+    setViewerLoading(true);
+    img.src = src;
+    // a cached image can be ready synchronously - no placeholder flash for those
+    if (img.complete && img.naturalWidth > 0) setViewerLoading(false);
+  }
 
   const stage = document.getElementById('viewerStage');
   const oldMeta = stage.parentElement.querySelector('.viewer-meta');
@@ -180,8 +350,11 @@ export function openViewer({ src, title = '', meta = null, actions = [], tag = '
     }));
   }
 
-  VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0; VIEWER.pointers.clear();
+  VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0; VIEWER.rotY = 0; VIEWER.pointers.clear();
   VIEWER.tag = tag;
+  VIEWER.onNavigate = onNavigate;
+  VIEWER.canNavigate = canNavigate;
+  VIEWER.swipe = null;
   applyViewerTransform();
   document.getElementById('viewer').hidden = false;
 }
@@ -201,16 +374,27 @@ function viewerGestureInit() {
   const stage = document.getElementById('viewerStage');
 
   stage.addEventListener('pointerdown', (event) => {
-    stage.setPointerCapture(event.pointerId);
+    // a new touch always wins over a running flip animation
+    cancelViewerFlip();
+    // synthetic pointer events (tests) have no active pointer to capture - never throw
+    try { stage.setPointerCapture(event.pointerId); } catch (_error) { /* not capturable */ }
     VIEWER.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (VIEWER.pointers.size === 1) {
+      VIEWER.swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, at: Date.now() };
       const now = Date.now();
       if (now - VIEWER.lastTap < 280) {
         VIEWER.scale = VIEWER.scale > 1.05 ? 1 : 2.4;
-        VIEWER.x = 0; VIEWER.y = 0;
+        VIEWER.x = 0; VIEWER.y = 0; VIEWER.rotY = 0;
         applyViewerTransform();
       }
       VIEWER.lastTap = now;
+    } else {
+      // a second finger means pinch-zoom - not a swipe
+      VIEWER.swipe = null;
+      if (VIEWER.rotY) {
+        VIEWER.rotY = 0;
+        applyViewerTransform();
+      }
     }
   });
 
@@ -224,6 +408,16 @@ function viewerGestureInit() {
         VIEWER.x += current.x - previous.x;
         VIEWER.y += current.y - previous.y;
         applyViewerTransform();
+      } else if (VIEWER.swipe && VIEWER.onNavigate) {
+        // follow the finger: the image tracks the drag (slightly damped, with a page turn)
+        const dx = current.x - VIEWER.swipe.x;
+        const dy = current.y - VIEWER.swipe.y;
+        if (Math.abs(dx) >= 6 && Math.abs(dx) > Math.abs(dy) * 0.5) {
+          const width = stage.clientWidth || 360;
+          VIEWER.x = dx * 0.5;
+          VIEWER.rotY = clamp((dx / width) * -14, -14, 14);
+          applyViewerTransform();
+        }
       }
     } else if (VIEWER.pointers.size === 2) {
       const other = [...VIEWER.pointers.entries()].find(([id]) => id !== event.pointerId);
@@ -239,9 +433,31 @@ function viewerGestureInit() {
     VIEWER.pointers.set(event.pointerId, current);
   });
 
-  const release = (event) => VIEWER.pointers.delete(event.pointerId);
+  const release = (event) => {
+    const tracked = VIEWER.swipe;
+    VIEWER.pointers.delete(event.pointerId);
+    if (!tracked || tracked.id !== event.pointerId) return;
+    VIEWER.swipe = null;
+    const dx = event.clientX - tracked.x;
+    const dy = event.clientY - tracked.y;
+    const quick = Date.now() - tracked.at < 900;
+    const flick = VIEWER.scale <= 1.01 && quick
+      && Math.abs(dx) >= 60 && Math.abs(dy) <= Math.abs(dx) * 0.6;
+    if (flick && VIEWER.onNavigate) {
+      // a swipe must never pair with the next tap into a double-tap zoom
+      VIEWER.lastTap = 0;
+      startViewerFlip(dx < 0 ? 'next' : 'prev');
+      return;
+    }
+    if (VIEWER.scale <= 1.01 && (Math.abs(VIEWER.x) > 0.5 || Math.abs(VIEWER.rotY) > 0.2)) {
+      springBackViewer();
+    }
+  };
   stage.addEventListener('pointerup', release);
-  stage.addEventListener('pointercancel', release);
+  stage.addEventListener('pointercancel', (event) => {
+    VIEWER.swipe = null;
+    VIEWER.pointers.delete(event.pointerId);
+  });
   stage.addEventListener('wheel', (event) => {
     event.preventDefault();
     VIEWER.scale = clamp(VIEWER.scale * (event.deltaY < 0 ? 1.1 : 0.9), 1, 8);
@@ -300,6 +516,13 @@ export function fileToImageSource(file, { maxSide = 2048, quality = 0.9 } = {}) 
 export function initViewer() {
   viewerGestureInit();
   document.getElementById('viewerClose').addEventListener('click', closeViewer);
+  const img = document.getElementById('viewerImg');
+  img.addEventListener('load', () => setViewerLoading(false));
+  img.addEventListener('error', () => {
+    const wasLoading = !!(viewerLoadingNode && !viewerLoadingNode.hidden);
+    setViewerLoading(false);
+    if (wasLoading) showViewerHint('could not load the image');
+  });
 }
 
 /* Sheet chrome (✕ button + backdrop) and viewer chrome are static markup, wired once. */

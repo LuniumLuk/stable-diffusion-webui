@@ -3,7 +3,7 @@
 import { api_ } from './api.js';
 import { emit, on, persist, state } from './state.js';
 import { clear, closeSheet, closeViewer, debounce, el, openSheet, openViewer, toast } from './ui.js';
-import { galleryAction, makeMetaNode, useAsImage } from './send.js';
+import { galleryAction, makeMetaNode, useAsImage, useMetaInText, viewerSrc } from './send.js';
 
 const VIEWS = [
   { id: 'all', label: 'All' },
@@ -13,6 +13,7 @@ const VIEWS = [
   { id: 'archived', label: 'Archived' },
   { id: 'staged', label: '\u{1F4CC} Staged' },
   { id: 'composed', label: '\u{1F3A8} Composed' },
+  { id: 'qwen', label: '\u{1F916} Qwen' },
 ];
 
 const PAGE_SIZE = 48;
@@ -54,6 +55,9 @@ export function metaFromItem(item) {
 }
 
 function itemMetaText(item) {
+  if (item.qwen) {
+    return ['Qwen-Image 2.1', item.path || ''].filter(Boolean).join('\n');
+  }
   return [
     item.prompt || '(no prompt)',
     item.negative_prompt ? `negative: ${item.negative_prompt}` : '',
@@ -109,9 +113,16 @@ function cardNode(item, onTap, withActions) {
 
   if (!withActions) return el('div', { class: 'thumb-wrap' }, [thumb]);
 
-  const actions = el('div', { class: 'card-actions' }, [
+  // Qwen outputs are image-only: send them to img2img/inpaint with NO parameters at all,
+  // and they can only be archived (never rated)
+  const actions = el('div', { class: 'card-actions' }, item.qwen ? [
+    quickButton('\u{1F5BC}', 'Use as image (image only)', () => useAsImage(item, { mode: 'img2img', meta: null })),
+    quickButton('\u{1F3A8}', 'Use in inpaint (image only)', () => useAsImage(item, { mode: 'inpaint', meta: null })),
+    quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
+  ] : [
     quickButton('\u{1F5BC}', 'Use as image', () => useAsImage(item, { mode: 'img2img' })),
     quickButton('\u{1F3A8}', 'Use in inpaint', () => useAsImage(item, { mode: 'inpaint' })),
+    quickButton('\u{1F4DD}', 'Use in text (txt2img) - recovers the seed', () => useMetaInText(metaFromItem(item))),
     quickButton('\u2B50', item.endorsed ? 'Remove endorsement' : 'Endorse', () => quickAction(item, item.endorsed ? 'unendorse' : 'endorse'), item.endorsed),
     quickButton('\u{1F44E}', item.disliked ? 'Remove dislike' : 'Dislike', () => quickAction(item, item.disliked ? 'undislike' : 'dislike'), item.disliked),
     quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
@@ -125,24 +136,54 @@ function appendItems(container, items, onTap, withActions = true) {
 }
 
 function openItemViewer(item) {
-  openViewer({
-    src: item.preview || item.url,
-    title: item.seed !== undefined && item.seed !== null ? `seed ${item.seed}` : '',
-    meta: makeMetaNode(itemMetaText(item)),
-    actions: [
-      { label: 'Use as Image', accent: true, onClick: () => useAsImage(item, { mode: 'img2img' }) },
-      { label: 'Inpaint', onClick: () => useAsImage(item, { mode: 'inpaint' }) },
-      item.endorsed
-        ? { label: '\u2B50 Un-endorse', onClick: () => act('unendorse', item) }
-        : { label: '\u2B50 Endorse', onClick: () => act('endorse', item) },
-      item.disliked
-        ? { label: 'Undislike', onClick: () => act('undislike', item) }
-        : { label: '\u{1F44E}', onClick: () => act('dislike', item) },
-      item.archived
-        ? { label: 'Unarchive', onClick: () => act('unarchive', item) }
-        : { label: '\u{1F4E6}', onClick: () => act('archive', item) },
-    ],
-  });
+  const items = feed.items.length ? feed.items : [item];
+  let position = items.indexOf(item);
+  if (position < 0) position = 0;
+
+  const show = () => {
+    const current = items[position];
+    openViewer({
+      src: viewerSrc(current),
+      title: current.seed !== undefined && current.seed !== null ? `seed ${current.seed}` : '',
+      meta: makeMetaNode(itemMetaText(current), { folded: true }),
+      actions: current.qwen ? [
+        { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img', meta: null }) },
+        { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
+        current.archived
+          ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
+          : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
+      ] : [
+        { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
+        { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
+        { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
+        current.endorsed
+          ? { label: '\u2B50 Un-endorse', onClick: () => act('unendorse', current) }
+          : { label: '\u2B50 Endorse', onClick: () => act('endorse', current) },
+        current.disliked
+          ? { label: 'Undislike', onClick: () => act('undislike', current) }
+          : { label: '\u{1F44E}', onClick: () => act('dislike', current) },
+        current.archived
+          ? { label: 'Unarchive', onClick: () => act('unarchive', current) }
+          : { label: '\u{1F4E6}', onClick: () => act('archive', current) },
+      ],
+      onNavigate: move,
+      canNavigate: canMove,
+    });
+  };
+
+  const canMove = (direction) => {
+    const next = position + (direction === 'next' ? 1 : -1);
+    return next >= 0 && next < items.length;
+  };
+
+  const move = (direction) => {
+    if (!canMove(direction)) return false;
+    position += direction === 'next' ? 1 : -1;
+    show();
+    return true;
+  };
+
+  show();
 }
 
 async function loadPage({ reset = false } = {}) {

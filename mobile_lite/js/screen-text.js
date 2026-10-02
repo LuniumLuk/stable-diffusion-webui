@@ -5,7 +5,7 @@ import { hrFinalSize } from './hires.js';
 import { isJobActive, runJob } from './job.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
-import { on, state } from './state.js';
+import { on, setParam, state } from './state.js';
 import { el, toast } from './ui.js';
 import { openResultViewer } from './send.js';
 
@@ -60,17 +60,65 @@ function renderResults() {
   }
 
   const grid = el('div', { class: 'results-strip' });
-  for (const result of results.slice(0, 12)) {
+  const shown = results.slice(0, 12);
+  shown.forEach((result, index) => {
     grid.append(el('button', {
       class: 'result',
       type: 'button',
-      onClick: () => openResultViewer(result),
+      onClick: () => openResultViewer(result, { list: shown, index }),
     }, [
       el('img', { src: result.thumb || result.url, alt: '', loading: 'lazy' }),
       result.seed !== undefined && result.seed !== null ? el('span', { class: 'seed-tag', text: `#${result.seed}` }) : null,
     ]));
-  }
+  });
   strip.append(grid);
+}
+
+/**
+ * Adopt a gallery item's prompt and parameters (desktop "send to txt2img" parity).
+ * The seed is recovered AND locked so the exact picture can be re-run; the other
+ * screens keep their own seed (a random seed stays random there).
+ */
+function applyMeta(meta) {
+  if (!meta) return;
+  const store = state.params;
+  const applied = [];
+  if (meta.prompt) {
+    prompt.positive = String(meta.prompt);
+    applied.push('prompt');
+  }
+  if (meta.negative_prompt) {
+    prompt.negative = String(meta.negative_prompt);
+    applied.push('negative');
+  }
+  if (meta.steps) {
+    const steps = Math.max(1, Math.round(Number(meta.steps)));
+    setParam('steps', steps, store);
+    applied.push(`${steps} steps`);
+  }
+  if (meta.cfg) {
+    setParam('cfg', Number(meta.cfg), store);
+    applied.push(`CFG ${Number(meta.cfg)}`);
+  }
+  if (meta.sampler) {
+    setParam('sampler', String(meta.sampler), store);
+    applied.push(String(meta.sampler));
+  }
+  const width = Math.round(Number(meta.width));
+  const height = Math.round(Number(meta.height));
+  if (Number.isFinite(width) && Number.isFinite(height) && width >= 64 && height >= 64) {
+    setParam('width', width, store);
+    setParam('height', height, store);
+    applied.push(`${width}\u00D7${height}`);
+  }
+  const seed = Number(meta.seed);
+  if (Number.isFinite(seed) && seed >= 0) {
+    setParam('seed', seed, store);
+    setParam('seedLock', true, store);
+    applied.push(`seed ${seed} (locked)`);
+  }
+  if (applied.length) toast(`text params: ${applied.join(', ')}`, 'ok', 3000);
+  refreshSummary();
 }
 
 async function generate() {
@@ -129,6 +177,15 @@ export function init(container) {
   on('params', refreshSummary);
   on('results', renderResults);
   on('job-finished', refreshSummary);
+  on('text-meta', (event) => {
+    applyMeta(event.detail);
+    state.textMeta = null;
+  });
+  // a hand-off that arrived before this screen was first opened
+  if (state.textMeta) {
+    applyMeta(state.textMeta);
+    state.textMeta = null;
+  }
   renderResults();
   refreshSummary();
 }

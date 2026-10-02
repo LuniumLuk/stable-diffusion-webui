@@ -4,7 +4,7 @@ import { api_ } from './api.js';
 import { hrFinalSize, hrStagePlan } from './hires.js';
 import { planInputResize, resolveInputSize, round8 } from './resize-plan.js';
 import { closeSheet, el, openSheet, toast } from './ui.js';
-import { emit, imageParams, on, resolveOutputSize, setParam, state } from './state.js';
+import { emit, imageParams, on, qwenParams, resolveOutputSize, setParam, state } from './state.js';
 
 const SIZE_PRESETS = [
   [512, 512],
@@ -86,7 +86,112 @@ export async function applyModel(title) {
   }
 }
 
+const QWEN_SIZES = [
+  [1024, 1024],
+  [1024, 1536],
+  [1536, 1024],
+  [2048, 2048],
+  [1696, 2528],
+  [2528, 1696],
+];
+
+/** Seed input + dice + lock, shared by the SDXL sheet and the Qwen sheet. */
+function seedField(store) {
+  const seedInput = el('input', { type: 'number', value: store.seed, min: -1, max: 2147483647, inputmode: 'numeric' });
+  const lockButton = el('button', {
+    class: `btn tiny ${store.seedLock ? 'on' : ''}`,
+    type: 'button',
+    text: store.seedLock ? '\u{1F512} locked' : '\u{1F513} auto',
+    title: 'Keep this seed for every run',
+  });
+  lockButton.addEventListener('click', () => {
+    const locked = !store.seedLock;
+    lockButton.textContent = locked ? '\u{1F512} locked' : '\u{1F513} auto';
+    lockButton.classList.toggle('on', locked);
+    setParam('seedLock', locked, store);
+  });
+  seedInput.addEventListener('change', () => {
+    const value = Number(seedInput.value);
+    setParam('seed', Number.isNaN(value) ? -1 : value, store);
+  });
+
+  return el('div', { class: 'field' }, [
+    el('label', { text: 'Seed (-1 = random)' }),
+    el('div', { class: 'seed-row' }, [
+      seedInput,
+      el('button', {
+        class: 'btn tiny dice', type: 'button', text: '\u{1F3B2}', title: 'Random seed',
+        onClick: () => { seedInput.value = -1; setParam('seed', -1, store); },
+      }),
+      lockButton,
+    ]),
+  ]);
+}
+
+/** Qwen-Image-2.1 params: steps / CFG / images / 32px sizes / seed (no sampler or hires). */
+function openQwenParamsSheet() {
+  const params = qwenParams();
+  const body = el('div');
+
+  body.append(sliderRow(params, 'Sampling steps', 'steps', 1, 80, 1));
+  body.append(sliderRow(params, 'CFG scale', 'cfg', 1, 20, 0.5, { format: (value) => Number(value).toFixed(1) }));
+  body.append(sliderRow(params, 'Images', 'batch', 1, 4, 1));
+
+  const clampSize = (value, fallback) => {
+    const number = Math.round(Number(value) / 32) * 32;
+    return Math.min(4096, Math.max(64, Number.isFinite(number) && number > 0 ? number : fallback));
+  };
+  const widthInput = el('input', { type: 'number', value: params.width, min: 64, max: 4096, step: 32, inputmode: 'numeric' });
+  const heightInput = el('input', { type: 'number', value: params.height, min: 64, max: 4096, step: 32, inputmode: 'numeric' });
+  const sizePreview = el('div', { class: 'size-preview' });
+  const sizeChips = QWEN_SIZES.map(([width, height]) => el('button', {
+    class: 'chip',
+    type: 'button',
+    text: `${width}\u00D7${height}`,
+    onClick: () => { widthInput.value = width; heightInput.value = height; syncSize(); },
+  }));
+  const refreshSize = () => {
+    sizePreview.textContent = `${params.width}\u00D7${params.height}`;
+    sizeChips.forEach((chip, index) => {
+      chip.classList.toggle('on', QWEN_SIZES[index][0] === params.width && QWEN_SIZES[index][1] === params.height);
+    });
+  };
+  const syncSize = () => {
+    const width = clampSize(widthInput.value, params.width || 1024);
+    const height = clampSize(heightInput.value, params.height || 1024);
+    widthInput.value = width;
+    heightInput.value = height;
+    setParam('width', width, params);
+    setParam('height', height, params);
+    refreshSize();
+  };
+  widthInput.addEventListener('change', syncSize);
+  heightInput.addEventListener('change', syncSize);
+  refreshSize();
+
+  const sizeField = el('div', { class: 'field' }, [
+    el('label', { text: 'Size' }),
+    sizePreview,
+    el('div', { class: 'chips' }, sizeChips),
+    el('div', { class: 'row tight' }, [widthInput, el('span', { text: '\u00D7' }), heightInput]),
+    el('div', { class: 'small muted', text: 'Qwen sizes round to multiples of 32. 1024 is quick; the 2K sizes take minutes.' }),
+  ]);
+  body.append(sizeField);
+
+  body.append(seedField(params));
+  body.append(el('div', {
+    class: 'small muted',
+    text: 'Runs on the Qwen-Image 2.1 server (euler sampler). Generating here unloads the SDXL checkpoint first.',
+  }));
+
+  openSheet({ title: 'Qwen params', body });
+}
+
 export function openParamsSheet(kind = 'text') {
+  if (kind === 'qwen') {
+    openQwenParamsSheet();
+    return;
+  }
   const body = el('div');
   // image modes keep their own sets - everything in this sheet edits the store of the
   // task being configured (img2img / inpaint / text)
@@ -341,35 +446,7 @@ export function openParamsSheet(kind = 'text') {
   }
 
   // Seed block -------------------------------------------------------------
-  const seedInput = el('input', { type: 'number', value: params.seed, min: -1, max: 2147483647, inputmode: 'numeric' });
-  const lockButton = el('button', {
-    class: `btn tiny ${params.seedLock ? 'on' : ''}`,
-    type: 'button',
-    text: params.seedLock ? '\u{1F512} locked' : '\u{1F513} auto',
-    title: 'Keep this seed for every run',
-  });
-  lockButton.addEventListener('click', () => {
-    const locked = !params.seedLock;
-    lockButton.textContent = locked ? '\u{1F512} locked' : '\u{1F513} auto';
-    lockButton.classList.toggle('on', locked);
-    setParam('seedLock', locked, params);
-  });
-  seedInput.addEventListener('change', () => {
-    const value = Number(seedInput.value);
-    setParam('seed', Number.isNaN(value) ? -1 : value, params);
-  });
-
-  body.append(el('div', { class: 'field' }, [
-    el('label', { text: 'Seed (-1 = random)' }),
-    el('div', { class: 'seed-row' }, [
-      seedInput,
-      el('button', {
-        class: 'btn tiny dice', type: 'button', text: '\u{1F3B2}', title: 'Random seed',
-        onClick: () => { seedInput.value = -1; setParam('seed', -1, params); },
-      }),
-      lockButton,
-    ]),
-  ]));
+  body.append(seedField(params));
 
   // Hires. fix (txt2img only) ----------------------------------------------
   let hrUnsubscribe = null;

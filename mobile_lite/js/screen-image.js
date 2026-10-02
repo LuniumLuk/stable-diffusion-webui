@@ -318,13 +318,9 @@ function applySourceMeta(meta) {
     setParam('sampler', String(meta.sampler), store);
     applied.push(String(meta.sampler));
   }
-  const seed = Number(meta.seed);
-  if (Number.isFinite(seed) && seed >= 0) {
-    // lock it so re-running the inpaint keeps the same noise (unlock in the params sheet)
-    setParam('seed', seed, store);
-    setParam('seedLock', true, store);
-    applied.push(`seed ${seed} (locked)`);
-  }
+  // NOTE: the seed is deliberately NOT touched here - a hand-off to img2img/inpaint must
+  // keep the current seed state (random stays random). Only gallery -> Text (txt2img)
+  // recovers and locks the seed (screen-text.js::applyMeta).
   if (applied.length) toast(`loaded ${applied.join(', ')}`, 'ok', 2800);
   updateSummary();
 }
@@ -466,14 +462,15 @@ function renderResults() {
   }
 
   const grid = el('div', { class: 'results-strip' });
-  for (const result of results.slice(0, 12)) {
+  const shown = results.slice(0, 12);
+  shown.forEach((result, index) => {
     grid.append(el('button', {
-      class: 'result', type: 'button', onClick: () => openResultViewer(result),
+      class: 'result', type: 'button', onClick: () => openResultViewer(result, { list: shown, index }),
     }, [
       el('img', { src: result.thumb || result.url, alt: '', loading: 'lazy' }),
       result.seed !== undefined && result.seed !== null ? el('span', { class: 'seed-tag', text: `#${result.seed}` }) : null,
     ]));
-  }
+  });
   strip.append(grid);
 }
 
