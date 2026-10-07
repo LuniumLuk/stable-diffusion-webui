@@ -1103,6 +1103,7 @@ def _normalize_item(row: dict, view: str) -> dict:
         "mtime": float(mtime or 0),
         "view": view,
         "qwen": bool(row.get("qwen")),
+        "imagemaker": bool(row.get("imagemaker")),
     }
     if path and os.path.exists(path):
         item["thumb"] = _cached_image_url(path, mtime, "thumb")
@@ -1155,6 +1156,7 @@ _GALLERY_VIEWS = [
     ("archived", "Archived"),
     ("staged", "Staged"),
     ("composed", "Composed"),
+    ("imagemaker", "Image Maker"),
     ("qwen", "Qwen"),
 ]
 
@@ -1204,6 +1206,57 @@ def _qwen_items(query: str, limit: int, offset: int):
     return rows, len(files)
 
 
+def _image_maker_item_key(path: str) -> str:
+    """Unique archive key for an image_maker output - image_vNN.png names repeat across runs."""
+    base = os.path.join(_WEBUI_ROOT, "outputs", "image_maker")
+    try:
+        rel = os.path.relpath(path, base)
+    except ValueError:
+        rel = path
+    parts = [part for part in rel.replace("\\", "/").split("/") if part]
+    if not parts:
+        parts = [os.path.basename(path)]
+    parts[-1] = os.path.splitext(parts[-1])[0]
+    return "imagemaker-" + "-".join(part.lower() for part in parts)
+
+
+def _image_maker_items(query: str, limit: int, offset: int):
+    """Items for the Image Maker view: a plain scan of outputs/image_maker/<date>/<time>/."""
+    base_dir = os.path.join(_WEBUI_ROOT, "outputs", "image_maker")
+    if not os.path.isdir(base_dir):
+        return [], 0
+
+    files = []
+    for dirpath, dirnames, filenames in os.walk(base_dir):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        for name in filenames:
+            if name.lower().endswith(_IMAGE_EXTS) and not name.startswith("."):
+                files.append(os.path.join(dirpath, name))
+
+    q = (query or "").strip().lower()
+    if q:
+        files = [path for path in files if q in path.replace("\\", "/").lower()]
+
+    def _mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    files.sort(key=_mtime, reverse=True)
+    rows = []
+    for path in files[offset: offset + limit]:
+        rows.append({
+            "item_key": _image_maker_item_key(path),
+            "path": path,
+            "file_mtime": _mtime(path),
+            "prompt": "",
+            "model_name": "",
+            "imagemaker": True,
+        })
+    return rows, len(files)
+
+
 def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
     _ensure_db()
     from modules import endorsement_db
@@ -1215,6 +1268,8 @@ def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
 
     if view == "composed":
         rows, total = _composed_items(query, page_size, offset)
+    elif view == "imagemaker":
+        rows, total = _image_maker_items(query, page_size, offset)
     elif view == "qwen":
         rows, total = _qwen_items(query, page_size, offset)
     elif view == "endorsed":
@@ -1285,6 +1340,11 @@ def _gallery_action(payload: dict) -> dict:
     if item_key.startswith("qwen-") or "/outputs/qwen/" in normalized_path:
         if action not in ("archive", "unarchive"):
             return {"ok": False, "error": "qwen images cannot be rated - archive or unarchive only"}
+
+    # Image Maker outputs (outputs/image_maker) are scan-only too - same archive-only rule.
+    if item_key.startswith("imagemaker-") or "/outputs/image_maker/" in normalized_path:
+        if action not in ("archive", "unarchive"):
+            return {"ok": False, "error": "image maker images cannot be rated - archive or unarchive only"}
 
     def _meta_args():
         return (

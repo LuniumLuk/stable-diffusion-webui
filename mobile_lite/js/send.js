@@ -108,6 +108,13 @@ export function isQwenItem(item) {
   return /(^|[\\/])outputs[\\/]qwen([\\/]|$)/i.test(String(item.path || ''));
 }
 
+/** Image Maker outputs are image-only too: sent without any parameters and never rated. */
+export function isImageMakerItem(item) {
+  if (!item) return false;
+  if (item.imagemaker) return true;
+  return /(^|[\\/])outputs[\\/]image_maker([\\/]|$)/i.test(String(item.path || ''));
+}
+
 /**
  * Fullscreen viewer for a finished result with the usual follow-up actions.
  * `list` + `index` make the viewer swipeable through the strip (left = next, right = prev);
@@ -120,15 +127,15 @@ export function openResultViewer(result, { list = null, index = -1, extraActions
 
   const show = () => {
     const item = items[position];
-    const qwen = isQwenItem(item);
+    const imageOnly = isQwenItem(item) || isImageMakerItem(item);
     const extras = typeof extraActions === 'function' ? extraActions(item) : extraActions;
     const actions = [
       ...extras,
-      { label: 'Use as Image', accent: true, onClick: () => { openViewerImage(item, 'img2img', qwen ? null : undefined); } },
-      { label: 'Use as Inpaint', onClick: () => { openViewerImage(item, 'inpaint', qwen ? null : undefined); } },
+      { label: 'Use as Image', accent: true, onClick: () => { openViewerImage(item, 'img2img', imageOnly ? null : undefined); } },
+      { label: 'Use as Inpaint', onClick: () => { openViewerImage(item, 'inpaint', imageOnly ? null : undefined); } },
     ];
 
-    if (item.path && !qwen) {
+    if (item.path && !imageOnly) {
       const meta = metaFromResult(item);
       actions.push({
         label: '\u2B50 Endorse',

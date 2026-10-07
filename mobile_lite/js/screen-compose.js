@@ -2,7 +2,7 @@
 
 import { api_, fetchImageData } from './api.js';
 import {
-  busy, clamp, el, fileToImageSource, openSheet, closeSheet, pickFile, toast,
+  busy, clamp, el, fileToImageSource, openSheet, closeSheet, pickFile, switchTab, toast,
 } from './ui.js';
 import { useSourceAsImage } from './send.js';
 import { persist, state } from './state.js';
@@ -355,6 +355,26 @@ async function addFromGallery() {
     const img = await loadImageElement(loaded.dataUrl);
     addLayerFromImage(img, picked.path ? picked.path.split(/[\\/]/).pop() : 'gallery', loaded.dataUrl);
     maybeAutoSize();
+  } catch (error) {
+    toast(`could not load: ${error.message}`, 'err');
+  } finally {
+    overlay.close();
+  }
+}
+
+/**
+ * External entry point (gallery quick action): load an image onto the Compose canvas as a
+ * new layer and switch to the screen. Mirrors addFromGallery without the picker sheet.
+ */
+export async function addImageToCompose({ path, url, name } = {}) {
+  switchTab('compose'); // lazily initializes the screen so the canvas exists
+  const overlay = busy('loading into compose...');
+  try {
+    const loaded = await fetchImageData({ path, url, px: 1600 });
+    const img = await loadImageElement(loaded.dataUrl);
+    addLayerFromImage(img, name || (path ? path.split(/[\\/]/).pop() : 'gallery'), loaded.dataUrl);
+    maybeAutoSize();
+    toast('added to compose', 'ok', 1600);
   } catch (error) {
     toast(`could not load: ${error.message}`, 'err');
   } finally {

@@ -3457,6 +3457,15 @@ body.resizing .resize-handle {
     border-color: #a78bfa;
     box-shadow: 0 0 0 2px #a78bfa22;
 }
+
+/* ---- Image Maker gallery cards ---- */
+.endgal-imagemaker-card {
+    border-color: #334155;
+}
+.endgal-imagemaker-card:hover {
+    border-color: #fbbf24;
+    box-shadow: 0 0 0 2px #fbbf2422;
+}
 .endgal-btn-composer {
     background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
     border-color: #818cf8;

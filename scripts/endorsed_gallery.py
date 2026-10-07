@@ -384,6 +384,64 @@ def _fetch_composed_records(query: str, page: int, page_size: int):
     return rows, total
 
 
+def _get_image_maker_dir() -> str:
+    return os.path.join(_ROOT_DIR, "outputs", "image_maker")
+
+
+_IMAGE_MAKER_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+def _image_maker_rel_path(path: str) -> str:
+    """Return the image_maker-relative path (posix separators) for display/search."""
+    try:
+        rel = os.path.relpath(path, _get_image_maker_dir())
+    except Exception:
+        rel = path
+    return str(rel).replace(chr(92), "/")
+
+
+def _fetch_image_maker_records(query: str, page: int, page_size: int):
+    """Return (rows, total) for the Image Maker mode by scanning outputs/image_maker recursively."""
+    base_dir = _get_image_maker_dir()
+    if not os.path.isdir(base_dir):
+        return [], 0
+
+    files = []
+    for root, _dirs, fnames in os.walk(base_dir):
+        for fname in fnames:
+            if not fname.lower().endswith(_IMAGE_MAKER_EXTS):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                mtime = os.path.getmtime(fpath)
+            except OSError:
+                mtime = 0.0
+            files.append((fpath, mtime))
+
+    files.sort(key=lambda item: item[1], reverse=True)
+
+    q = (query or "").strip().lower()
+    if q:
+        files = [item for item in files if q in _image_maker_rel_path(item[0]).lower()]
+
+    total = len(files)
+    offset = (page - 1) * page_size
+    page_files = files[offset: offset + page_size]
+
+    rows = []
+    for fpath, mtime in page_files:
+        rows.append({
+            "path": fpath,
+            "file_mtime": mtime,
+            "prompt": "",
+            "seed": "",
+            "sampler": "",
+            "model_name": "",
+        })
+
+    return rows, total
+
+
 def _extras_details_open_attr(card_extras_mode: str) -> str:
     mode = (card_extras_mode or "Expanded").strip().lower()
     return "" if mode.startswith("f") else " open"
@@ -447,6 +505,58 @@ def _composed_card_html(record: dict, card_extras_mode: str = "Expanded") -> str
                 <summary class="endgal-card-extra-summary">Details</summary>
         <div class="endgal-body">
             <div class="endgal-prompt">{_html.escape(fname)}{config_badge}</div>
+            <div class="endgal-date">{_html.escape(date)}</div>
+        </div>
+    </details>
+</div>
+"""
+
+
+def _image_maker_card_html(record: dict, card_extras_mode: str = "Expanded") -> str:
+    import datetime as _dt
+    path = record.get("path", "")
+    mtime = record.get("file_mtime")
+    date = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else ""
+    thumb = _get_thumb(path) if path else ""
+    preview_url = _get_preview_thumb(path) if path else ""
+    orig_url = _file_url(path)
+    path_b64 = _b64(path)
+    rel_path = _image_maker_rel_path(path)
+
+    thumb_html = (
+        f'<img src="{thumb}" alt="image maker image" loading="lazy" '
+        f'data-orig="{orig_url}" '
+        f'data-preview="{preview_url}" '
+        f'onclick="endorsedGallery.previewImage(this.dataset.preview || this.dataset.orig || this.src)" />'
+    ) if thumb else '<div class="endgal-nothumb">No preview</div>'
+
+    date_overlay = f'<div class="endgal-date endgal-date-overlay">{_html.escape(date)}</div>' if date else ""
+
+    # Image-only quick actions (no infotext / no generation params): Composer, img2img, Inpaint.
+    thumb_action_stack = (
+        '<div class="endgal-thumb-actions">'
+        '<button class="endgal-btn-send2img endgal-btn-composer endgal-act-compose" '
+        'data-icon="🧩" data-hint="Composer" '
+        'title="Send to Composer as background (image only)" '
+        f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'\')">🧩</button>'
+        '<button class="endgal-btn-send2img endgal-act-i2i" data-icon="🖼" data-hint="Send to img2img" '
+        'title="send to img2img" '
+        f'onclick="endorsedGallery.sendTo(\'\', \'img2img\', \'{path_b64}\')">🖼</button>'
+        '<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="🎨" data-hint="Send to Inpaint" '
+        'title="send to inpaint" '
+        f'onclick="endorsedGallery.sendToInpaint(\'\', \'{path_b64}\')">🎨</button>'
+        '</div>'
+    )
+
+    details_open = _extras_details_open_attr(card_extras_mode)
+
+    return f"""
+<div class="endgal-card endgal-imagemaker-card">
+  <div class="endgal-thumb">{thumb_html}{date_overlay}{thumb_action_stack}</div>
+    <details class="endgal-card-extra"{details_open}>
+                <summary class="endgal-card-extra-summary">Details</summary>
+        <div class="endgal-body">
+            <div class="endgal-prompt">{_html.escape(rel_path)}</div>
             <div class="endgal-date">{_html.escape(date)}</div>
         </div>
     </details>
@@ -1090,6 +1200,8 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
             rows = filtered[offset: offset + page_size]
     elif mode == "🎨 Composed":
         rows, total = _fetch_composed_records(query, page, page_size)
+    elif mode == "📷 Image Maker":
+        rows, total = _fetch_image_maker_records(query, page, page_size)
     elif mode == "⬜ Unrated":
         if hasattr(endorsement_db, "count_unrated") and hasattr(endorsement_db, "search_unrated"):
             total = _call_db("count_unrated", query, since_ts=since_ts)
@@ -1196,11 +1308,19 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     if not rows:
         return '<div class="endgal-empty">No images found for this filter.</div>', f"0 items · page 1/1", 1, is_last_page
 
-    # Composed mode: use a simplified card that skips DB lookups and shows a "→ Composer" button.
+    # Scan-based modes (Composed / Image Maker): simplified cards that skip DB lookups
+    # and expose image-only quick actions (Composer / img2img / Inpaint).
     if mode == "🎨 Composed":
         cards = [_composed_card_html(rec, card_extras_mode=card_extras_mode) for rec in rows]
         header = f'<div class="endgal-count">{total} composed image(s)</div>'
         grid = f'<div class="endgal-grid endgal-composed-grid {size_class}" style="--endgal-card-min:{card_min}px">' + "".join(cards) + "</div>"
+        page_info = f"{total} items · page {page}/{pages}"
+        return header + grid, page_info, page, is_last_page
+
+    if mode == "📷 Image Maker":
+        cards = [_image_maker_card_html(rec, card_extras_mode=card_extras_mode) for rec in rows]
+        header = f'<div class="endgal-count">{total} image maker image(s)</div>'
+        grid = f'<div class="endgal-grid endgal-imagemaker-grid {size_class}" style="--endgal-card-min:{card_min}px">' + "".join(cards) + "</div>"
         page_info = f"{total} items · page {page}/{pages}"
         return header + grid, page_info, page, is_last_page
 
@@ -1608,7 +1728,7 @@ def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_mode_row"):
             mode_radio = gr.Radio(
-                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📦 Archived", "👎 Disliked", "🗑 Trash"],
+                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📷 Image Maker", "📦 Archived", "👎 Disliked", "🗑 Trash"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",
