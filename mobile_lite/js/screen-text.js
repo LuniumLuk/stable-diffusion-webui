@@ -2,6 +2,7 @@
 
 import { randomTaskId } from './api.js';
 import { hrFinalSize } from './hires.js';
+import { historyControls } from './history.js';
 import { isJobActive, runJob } from './job.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
@@ -11,11 +12,12 @@ import { openResultViewer } from './send.js';
 
 let prompt;
 let summary;
+let summaryMain;
 let strip;
 let generateButton;
 
 function refreshSummary() {
-  summary.replaceChildren();
+  summaryMain.replaceChildren();
   const params = state.params;
   const hires = params.hrEnabled ? hrFinalSize(params) : null;
   const parts = [
@@ -27,8 +29,8 @@ function refreshSummary() {
     params.batch > 1 ? `×${params.batch}` : '',
     params.seedLock ? `\u{1F512} ${params.seed}` : '\u{1F3B2} random',
   ].filter(Boolean);
-  for (const part of parts) summary.append(el('span', { text: part }));
-  summary.append(el('span', { class: 'muted', text: '\u2699' }));
+  for (const part of parts) summaryMain.append(el('span', { text: part }));
+  summaryMain.append(el('span', { class: 'muted', text: '\u2699' }));
 
   generateButton.disabled = isJobActive();
   generateButton.textContent = params.batch > 1 ? `Generate · ${params.batch}` : 'Generate';
@@ -154,7 +156,7 @@ async function generate() {
 
   generateButton.disabled = true;
   try {
-    await runJob('txt2img', payload, { label: 'txt2img' });
+    await runJob('txt2img', payload, { label: 'txt2img', history: 'text' });
   } catch (error) {
     toast(`could not start: ${error.message}`, 'err', 5000);
   } finally {
@@ -165,7 +167,10 @@ async function generate() {
 
 export function init(container) {
   prompt = createPromptEditor('text');
-  summary = el('button', { class: 'card summary-line', type: 'button', onClick: () => openParamsSheet('text') });
+  summaryMain = el('button', {
+    class: 'summary-main', type: 'button', onClick: () => openParamsSheet('text'),
+  });
+  summary = el('div', { class: 'card summary-line' }, [summaryMain, historyControls('text', () => state.params)]);
   strip = el('div', { class: 'card' });
   generateButton = el('button', { class: 'btn primary wide', type: 'button', text: 'Generate', onClick: generate });
 

@@ -1,7 +1,7 @@
 /* Generation engine: submits jobs, polls progress, drives the job strip. */
 
 import { api_ } from './api.js';
-import { addResult, emit, pushMruKeywords, setParam, state } from './state.js';
+import { addResult, emit, pushMruKeywords, pushParamHistory, setParam, state } from './state.js';
 import { formatBytes, formatElapsed, openViewer, toast, updateViewer } from './ui.js';
 
 const job = {
@@ -203,12 +203,13 @@ export function registerResult(result, kind, payload = null, store = state.param
   }
 }
 
-export async function runJob(kind, payload, { label = 'generating', store = state.params } = {}) {
+export async function runJob(kind, payload, { label = 'generating', store = state.params, history = null } = {}) {
   if (job.active) {
     toast('another job is already running', 'warn');
     return null;
   }
 
+  if (history) pushParamHistory(history, store); // remember the settings this run uses
   job.active = true;
   job.taskId = payload.task_id;
   job.kind = kind;

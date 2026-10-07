@@ -58,6 +58,9 @@ export const state = {
   imageParams: { img2img: null, inpaint: null },
   // Qwen-Image-2.1 keeps its own set too (it has no sampler / hires and uses 32px sizes)
   qwenParams: null,
+  // recent parameter sets per scope (newest first, max 10) - browsed with the ▲/▼ buttons
+  // on the folded summary line; keyed like the stores: text / img2img / inpaint / qwen
+  paramHistory: { text: [], img2img: [], inpaint: [], qwen: [] },
   ui: {
     brush: 28,
     samCandidate: 0,
@@ -69,6 +72,9 @@ export const state = {
     maskColor: '#00e0ff', // display colour of the painted / SAM mask
     maskOutlineColor: '#ffffff', // blinking border drawn around the mask
     maskBlink: true,
+    composeTool: 'move', // active Compose tool: move / brush / eraser
+    composePaintColor: '#ff3366', // brush colour (desktop Composer default)
+    composePaintSize: 40, // brush / eraser size in CSS px under the finger
   },
   results: [], // { url, thumb, seed, screen, width, height, infotext }
   mruKeywords: [],
@@ -85,7 +91,7 @@ export function emit(name, detail = null) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams'];
+const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams', 'paramHistory'];
 
 export function loadPersisted() {
   try {
@@ -130,6 +136,8 @@ window.addEventListener('visibilitychange', () => {
 
 export function setParam(name, value, store = state.params) {
   store[name] = value;
+  const scope = storeKey(store);
+  if (scope) historyCursors.delete(scope); // editing a value ends any history browsing
   persist();
   emit('params', store);
 }
@@ -262,4 +270,67 @@ export function summarizeParams(kind = 'text') {
     ['sampler', p.sampler],
     ['batch', p.batch],
   ];
+}
+
+/* ---------------------------------------------------------------- parameter history */
+
+const HISTORY_LIMIT = 10;
+const historyCursors = new Map(); // scope -> { index, draft }: transient browsing position
+
+/** History scope of a parameter set (used by the ▲/▼ controls on the summary line). */
+export function storeKey(store) {
+  if (store === state.params) return 'text';
+  if (store === state.qwenParams) return 'qwen';
+  if (store === state.imageParams.img2img) return 'img2img';
+  if (store === state.imageParams.inpaint) return 'inpaint';
+  return null;
+}
+
+/** Remember a parameter set when a generation starts (newest first, deduped, max 10). */
+export function pushParamHistory(key, store) {
+  if (!key || !store) return;
+  const snapshot = JSON.parse(JSON.stringify(store));
+  const list = state.paramHistory[key] || (state.paramHistory[key] = []);
+  if (list.length && JSON.stringify(list[0]) === JSON.stringify(snapshot)) return;
+  list.unshift(snapshot);
+  if (list.length > HISTORY_LIMIT) list.length = HISTORY_LIMIT;
+  historyCursors.delete(key);
+  persist();
+}
+
+/**
+ * Browse the stored parameter sets. `direction` -1 = older (▲), 1 = newer (▼).
+ * The first ▲ stashes the live set as a draft so ▼ can always return to it.
+ * Returns null when there is nothing to step through, else { applied, position, total }.
+ */
+export function stepParamHistory(key, store, direction) {
+  const list = state.paramHistory[key] || [];
+  const cursor = historyCursors.get(key);
+  if (direction < 0) {
+    if (!list.length) return null;
+    if (cursor && cursor.index >= list.length - 1) {
+      return { applied: false, position: list.length, total: list.length };
+    }
+    const draft = cursor ? cursor.draft : JSON.parse(JSON.stringify(store));
+    const index = cursor ? cursor.index + 1 : 0;
+    historyCursors.set(key, { index, draft });
+    applyHistorySnapshot(store, list[index]);
+    return { applied: true, position: index + 1, total: list.length };
+  }
+  if (!cursor) return null;
+  if (cursor.index <= 0) {
+    historyCursors.delete(key);
+    applyHistorySnapshot(store, cursor.draft);
+    return { applied: true, position: 0, total: list.length };
+  }
+  const index = cursor.index - 1;
+  historyCursors.set(key, { index, draft: cursor.draft });
+  applyHistorySnapshot(store, list[index]);
+  return { applied: true, position: index + 1, total: list.length };
+}
+
+function applyHistorySnapshot(store, snapshot) {
+  for (const name of Object.keys(snapshot)) store[name] = snapshot[name];
+  persist();
+  emit('params', store);
 }

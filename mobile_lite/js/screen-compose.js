@@ -5,6 +5,7 @@ import {
   busy, clamp, el, fileToImageSource, openSheet, closeSheet, pickFile, toast,
 } from './ui.js';
 import { useSourceAsImage } from './send.js';
+import { persist, state } from './state.js';
 
 const CANVAS_PRESETS = [
   [512, 512],
@@ -18,9 +19,10 @@ const compose = {
   width: 1024,
   height: 1024,
   autoSized: true,
-  layers: [], // top-first; each: {id, img, name, x, y, scale, rot, flip, opacity}
+  layers: [], // top-first; each: {id, img, name, x, y, scale, rot, flip, opacity, paint?}
   active: null,
   gesture: null,
+  paintLayer: null, // full-canvas brush/eraser overlay, kept on top and skipped by move hit-tests
 };
 
 let canvas;
@@ -49,7 +51,8 @@ function render() {
     drawLayer(ctx, compose.layers[index]);
   }
 
-  if (compose.active) {
+  // the selection box would sit on the whole canvas while painting - only show it in move mode
+  if (compose.active && paintTool() === 'move') {
     drawSelection(ctx, compose.active);
   }
 }
@@ -79,20 +82,83 @@ function drawSelection(target, layer) {
   target.restore();
 }
 
+/** Point in a layer's local image space (un-translate / un-rotate / un-scale). */
+function layerLocalPoint(layer, point) {
+  const dx = point.x - layer.x;
+  const dy = point.y - layer.y;
+  const cos = Math.cos((-layer.rot * Math.PI) / 180);
+  const sin = Math.sin((-layer.rot * Math.PI) / 180);
+  const rx = dx * cos - dy * sin;
+  const ry = dx * sin + dy * cos;
+  const scaleX = layer.scale * (layer.flip ? -1 : 1);
+  return { x: rx / scaleX, y: ry / layer.scale };
+}
+
 function layerAt(point) {
   for (const layer of compose.layers) {
-    const dx = point.x - layer.x;
-    const dy = point.y - layer.y;
-    const cos = Math.cos((-layer.rot * Math.PI) / 180);
-    const sin = Math.sin((-layer.rot * Math.PI) / 180);
-    const rx = dx * cos - dy * sin;
-    const ry = dx * sin + dy * cos;
-    const scaleX = layer.scale * (layer.flip ? -1 : 1);
-    const lx = rx / scaleX;
-    const ly = ry / layer.scale;
-    if (Math.abs(lx) <= layer.img.width / 2 && Math.abs(ly) <= layer.img.height / 2) return layer;
+    if (layer.paint) continue; // the paint overlay is edited with the brush/eraser only
+    const local = layerLocalPoint(layer, point);
+    if (Math.abs(local.x) <= layer.img.width / 2 && Math.abs(local.y) <= layer.img.height / 2) return layer;
   }
   return null;
+}
+
+/* ------------------------------------------------------------------ brush + eraser */
+
+function paintTool() {
+  const tool = state.ui.composeTool;
+  return tool === 'brush' || tool === 'eraser' ? tool : 'move';
+}
+
+/** Create the paint overlay on first stroke: a full-canvas layer pinned on top. */
+function ensurePaintLayer() {
+  if (compose.paintLayer && compose.layers.includes(compose.paintLayer)) return compose.paintLayer;
+  const surface = document.createElement('canvas');
+  surface.width = compose.width;
+  surface.height = compose.height;
+  compose.paintLayer = {
+    id: (layerId += 1),
+    img: surface,
+    name: '\u270F\uFE0F Paint',
+    srcDataUrl: null,
+    paint: true,
+    x: compose.width / 2,
+    y: compose.height / 2,
+    scale: 1,
+    rot: 0,
+    flip: false,
+    opacity: 1,
+  };
+  compose.layers.unshift(compose.paintLayer);
+  return compose.paintLayer;
+}
+
+/** Stage point -> paint overlay pixel. */
+function toLayerPoint(layer, point) {
+  const local = layerLocalPoint(layer, point);
+  return { x: local.x + layer.img.width / 2, y: local.y + layer.img.height / 2 };
+}
+
+/** Draw one stroke segment (or a dot for a tap) on the paint overlay; eraser cuts back out. */
+function paintStroke(from, to, erase) {
+  const layer = compose.paintLayer;
+  if (!layer) return;
+  const surface = layer.img.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const ratio = compose.width / Math.max(1, rect.width);
+  const a = toLayerPoint(layer, from);
+  const b = toLayerPoint(layer, to);
+  surface.save();
+  surface.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+  surface.strokeStyle = state.ui.composePaintColor;
+  surface.lineWidth = Math.max(1, (state.ui.composePaintSize * ratio) / Math.max(0.01, layer.scale));
+  surface.lineCap = 'round';
+  surface.lineJoin = 'round';
+  surface.beginPath();
+  surface.moveTo(a.x, a.y);
+  surface.lineTo(b.x, b.y);
+  surface.stroke();
+  surface.restore();
 }
 
 /* ------------------------------------------------------------------ gestures */
@@ -109,11 +175,33 @@ function wireGestures() {
   const pointers = new Map();
 
   canvas.addEventListener('pointerdown', (event) => {
-    canvas.setPointerCapture(event.pointerId);
+    try { canvas.setPointerCapture(event.pointerId); } catch (_error) { /* synthetic events have no active pointer */ }
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (pointers.size === 1) {
       const point = stagePoint(event);
+      const tool = paintTool();
+      if (tool !== 'move') {
+        // brush creates the overlay, eraser only edits an existing one
+        const layer = tool === 'brush' ? ensurePaintLayer() : compose.paintLayer;
+        if (!layer) {
+          toast('nothing painted yet - paint something with the brush first', 'warn', 1800);
+          compose.gesture = null;
+        } else {
+          compose.active = layer;
+          updateActiveLabel();
+          compose.gesture = {
+            kind: 'paint',
+            pointerId: event.pointerId,
+            erase: tool === 'eraser',
+            lastX: point.x,
+            lastY: point.y,
+          };
+          paintStroke(point, { x: point.x + 0.01, y: point.y }, tool === 'eraser'); // a tap leaves a dot
+          requestRender();
+        }
+        return;
+      }
       const hit = layerAt(point);
       compose.active = hit || compose.active;
       updateActiveLabel();
@@ -127,7 +215,7 @@ function wireGestures() {
         moved: false,
       };
       requestRender();
-    } else if (pointers.size === 2 && compose.active) {
+    } else if (pointers.size === 2 && compose.active && (!compose.gesture || compose.gesture.kind !== 'paint')) {
       const [a, b] = [...pointers.values()];
       compose.gesture = {
         kind: 'pinch',
@@ -150,7 +238,13 @@ function wireGestures() {
     if (!gesture) return;
 
     const point = stagePoint(event);
-    if (gesture.kind === 'move' && gesture.layer) {
+    if (gesture.kind === 'paint') {
+      if (event.pointerId !== gesture.pointerId) return; // ignore extra fingers during a stroke
+      paintStroke({ x: gesture.lastX, y: gesture.lastY }, point, gesture.erase);
+      gesture.lastX = point.x;
+      gesture.lastY = point.y;
+      requestRender();
+    } else if (gesture.kind === 'move' && gesture.layer) {
       gesture.layer.x = gesture.layerX + (point.x - gesture.startX);
       gesture.layer.y = gesture.layerY + (point.y - gesture.startY);
       gesture.moved = true;
@@ -233,6 +327,17 @@ function applyCanvasSize() {
   canvas.width = compose.width;
   canvas.height = compose.height;
   canvas.style.aspectRatio = `${compose.width} / ${compose.height}`;
+  const paint = compose.paintLayer;
+  if (paint && compose.layers.includes(paint)) {
+    // keep the painted pixels, re-anchor the overlay to the new canvas
+    const surface = document.createElement('canvas');
+    surface.width = compose.width;
+    surface.height = compose.height;
+    surface.getContext('2d').drawImage(paint.img, 0, 0);
+    paint.img = surface;
+    paint.x = compose.width / 2;
+    paint.y = compose.height / 2;
+  }
   for (const layer of compose.layers) {
     layer.x = clamp(layer.x, 0, compose.width);
     layer.y = clamp(layer.y, 0, compose.height);
@@ -449,6 +554,10 @@ function openLayerSheet() {
         class: 'btn tiny', type: 'button', text: '\u29C9 Duplicate',
         onClick: () => {
           if (!compose.active) return;
+          if (compose.active.paint) {
+            toast('the paint layer cannot be duplicated', 'warn', 1600);
+            return;
+          }
           const source = compose.active;
           const copy = { ...source, id: (layerId += 1), x: source.x + 24, y: source.y + 24 };
           compose.layers.splice(compose.layers.indexOf(source), 0, copy);
@@ -564,6 +673,49 @@ export function init(container) {
     onClick: () => { deleteActive(); updateActiveLabel(); },
   });
 
+  // brush / eraser tools - they paint on a full-canvas overlay pinned above the layers
+  const sizePreview = el('span', { class: 'small muted', text: `${state.ui.composePaintSize}px`, style: { flex: '0 0 auto' } });
+  const sizeInput = el('input', {
+    type: 'range', min: 6, max: 120, step: 2, value: state.ui.composePaintSize,
+    style: { flex: '1 1 auto', minWidth: '0' },
+  });
+  sizeInput.addEventListener('input', () => {
+    state.ui.composePaintSize = Number(sizeInput.value);
+    sizePreview.textContent = `${state.ui.composePaintSize}px`;
+    persist();
+  });
+  const colorInput = el('input', {
+    type: 'color', value: state.ui.composePaintColor,
+    style: { width: '46px', minHeight: '30px', padding: '0', flex: '0 0 auto' },
+  });
+  colorInput.addEventListener('input', () => {
+    state.ui.composePaintColor = colorInput.value;
+    persist();
+  });
+  const paintSettings = el('div', {
+    class: 'row tight', style: { marginTop: '6px' }, hidden: true,
+  }, [
+    el('span', { class: 'small muted', text: 'Size', style: { flex: '0 0 auto' } }),
+    sizeInput,
+    sizePreview,
+    colorInput,
+  ]);
+
+  const toolButtons = new Map();
+  const toolRow = el('div', { class: 'chips' });
+  const setTool = (tool) => {
+    state.ui.composeTool = tool;
+    persist();
+    toolButtons.forEach((button, key) => button.classList.toggle('on', key === tool));
+    paintSettings.hidden = tool === 'move';
+    requestRender();
+  };
+  for (const [tool, label] of [['move', '\u2725 Move'], ['brush', '\u270F\uFE0F Brush'], ['eraser', '\u{1F9FD} Erase']]) {
+    const button = el('button', { class: 'chip', type: 'button', text: label, onClick: () => setTool(tool) });
+    toolButtons.set(tool, button);
+    toolRow.append(button);
+  }
+
   const saveButton = el('button', { class: 'btn tiny', type: 'button', text: '\u{1F4BE} Save', onClick: saveComposite });
   const toImageButton = el('button', { class: 'btn tiny', type: 'button', text: '\u2192 Image', onClick: () => sendComposite('img2img') });
   const toInpaintButton = el('button', { class: 'btn tiny', type: 'button', text: '\u2192 Inpaint', onClick: () => sendComposite('inpaint') });
@@ -573,18 +725,21 @@ export function init(container) {
       el('div', { class: 'card' }, [
         el('div', { class: 'card-head' }, [el('span', { text: 'Canvas' }), el('span', { class: 'row tight', style: { flex: '0 0 auto', gap: '6px' } }, [layerCountLabel, activeNameLabel])]),
         stage,
+        toolRow,
+        paintSettings,
         el('div', { class: 'image-tools' }, [addButton, layersButton, canvasButton, flipButton, deleteButton]),
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'card-head' }, [el('span', { text: 'Output' })]),
         el('div', { class: 'image-tools' }, [saveButton, toImageButton, toInpaintButton]),
-        el('div', { class: 'small muted', style: { marginTop: '6px' }, text: 'Drag to move, pinch to scale/rotate. Save writes into outputs/composition.' }),
+        el('div', { class: 'small muted', style: { marginTop: '6px' }, text: 'Move: drag a layer, pinch to scale/rotate. Brush/eraser draw on the top Paint layer. Save writes into outputs/composition.' }),
       ]),
     ]),
   );
 
   applyCanvasSize();
   updateActiveLabel();
+  setTool(paintTool());
 }
 
 export function onShow() {

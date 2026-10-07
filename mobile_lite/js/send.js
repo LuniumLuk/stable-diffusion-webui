@@ -147,10 +147,10 @@ export function openResultViewer(result, { list = null, index = -1, extraActions
       });
     }
 
+    // results viewers are deliberately image + quick actions only (no prompt block)
     openViewer({
       src: viewerSrc(item),
       title: item.seed !== undefined && item.seed !== null ? `seed ${item.seed}` : '',
-      meta: item.infotext ? makeMetaNode(item.infotext) : null,
       actions,
       onNavigate: move,
       canNavigate: canMove,

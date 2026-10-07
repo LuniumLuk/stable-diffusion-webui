@@ -20,6 +20,7 @@ const PAGE_SIZE = 48;
 
 const feed = {
   view: 'all', query: '', page: 1, total: 0, items: [], loading: false, done: false,
+  token: 0, // increments per request; stale responses are dropped (quick view switches)
 };
 
 let gridInner;
@@ -187,8 +188,11 @@ function openItemViewer(item) {
 }
 
 async function loadPage({ reset = false } = {}) {
-  if (feed.loading) return;
+  // A view switch may supersede an in-flight load (quick chip taps); the token makes the
+  // stale response harmless instead of leaving the previous view's grid on screen.
+  if (feed.loading && !reset) return;
   if (!reset && feed.done) return;
+  const token = (feed.token += 1);
   feed.loading = true;
 
   if (reset) {
@@ -201,6 +205,7 @@ async function loadPage({ reset = false } = {}) {
 
   try {
     const data = await api_.gallery({ view: feed.view, q: feed.query, page: feed.page, size: PAGE_SIZE });
+    if (token !== feed.token) return; // superseded by a newer request
     const start = reset ? 0 : feed.items.length;
     feed.items = feed.items.concat(data.items);
     feed.total = data.total;
@@ -219,11 +224,12 @@ async function loadPage({ reset = false } = {}) {
       gridInner.append(el('div', { class: 'gallery-more', text: feed.query ? 'no matches' : 'nothing here yet' }));
     }
   } catch (error) {
+    if (token !== feed.token) return;
     clear(gridInner);
     gridInner.append(el('div', { class: 'gallery-more', text: `load failed: ${error.message}` }));
     feed.done = true;
   } finally {
-    feed.loading = false;
+    if (token === feed.token) feed.loading = false;
   }
 }
 

@@ -2,6 +2,7 @@
 
 import { api_, blobToDataUrl, fetchImageData, imageSize, randomTaskId } from './api.js';
 import { isJobActive, runJob } from './job.js';
+import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
 import { on, qwenParams, state } from './state.js';
@@ -13,6 +14,7 @@ const REF_MAX_SIDE = 1600; // client-side downscale: mobile uplink is the bottle
 
 let prompt;
 let summary;
+let summaryMain;
 let strip;
 let generateButton;
 let refsGrid;
@@ -160,7 +162,7 @@ function stopStatusTimer() {
 /* ---------------------------------------------------------------- summary + results */
 
 function refreshSummary() {
-  summary.replaceChildren();
+  summaryMain.replaceChildren();
   const params = qwenParams();
   const parts = [
     `${params.width}\u00D7${params.height}`,
@@ -169,8 +171,8 @@ function refreshSummary() {
     refs.length ? `${refs.length} ref${refs.length > 1 ? 's' : ''}` : 'text\u2192image',
     params.seedLock ? `\u{1F512} ${params.seed}` : '\u{1F3B2} random',
   ];
-  for (const part of parts) summary.append(el('span', { text: part }));
-  summary.append(el('span', { class: 'muted', text: '\u2699' }));
+  for (const part of parts) summaryMain.append(el('span', { text: part }));
+  summaryMain.append(el('span', { class: 'muted', text: '\u2699' }));
 
   generateButton.disabled = isJobActive();
   generateButton.textContent = refs.length ? 'Edit' : 'Generate';
@@ -251,7 +253,7 @@ async function generate() {
 
   generateButton.disabled = true;
   try {
-    await runJob('qwen', payload, { label: refs.length ? 'qwen edit' : 'qwen-2.1', store: params });
+    await runJob('qwen', payload, { label: refs.length ? 'qwen edit' : 'qwen-2.1', store: params, history: 'qwen' });
   } catch (error) {
     toast(`could not start: ${error.message}`, 'err', 5000);
   } finally {
@@ -265,7 +267,10 @@ async function generate() {
 
 export function init(container) {
   prompt = createPromptEditor('qwen');
-  summary = el('button', { class: 'card summary-line', type: 'button', onClick: () => openParamsSheet('qwen') });
+  summaryMain = el('button', {
+    class: 'summary-main', type: 'button', onClick: () => openParamsSheet('qwen'),
+  });
+  summary = el('div', { class: 'card summary-line' }, [summaryMain, historyControls('qwen', () => qwenParams())]);
   strip = el('div', { class: 'card' });
 
   statusChip = el('span', { class: 'qwen-status', text: 'server: checking\u2026' });

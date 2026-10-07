@@ -101,6 +101,9 @@ function createChipsField(key, placeholder, title) {
   const selection = { line: null, seg: null, adding: null, editing: null, lineWeight: null };
   // lines the user unfolded again (folded is the default; index-based, transient state)
   const expandedLines = new Set();
+  // last chip tap - a second tap on the same chip within the window toggles disabled
+  const chipTap = { line: null, seg: null, at: 0 };
+  const DOUBLE_TAP_MS = 350;
   const LINE_WEIGHT_MAX = 10;
   const mode = () => (state.ui.peditMode === 'text' ? 'text' : 'chips');
   const value = () => textarea.value;
@@ -500,6 +503,43 @@ function createChipsField(key, placeholder, title) {
   }
 
   /**
+   * `body.replaceChildren` briefly empties the scroll container, which resets `.pedit-body`
+   * scrollTop to 0 on WebKit/Blink - the editor would jump to the top on every render
+   * (chip tap, fold, weight change). Remember the first visible line and put it back after
+   * the re-render + fold pass (same frame, before paint).
+   */
+  function captureScrollAnchor() {
+    if (mode() !== 'chips' || !body.clientHeight) return null;
+    const viewTop = body.getBoundingClientRect().top;
+    const nodes = body.querySelectorAll('.pedit-line');
+    for (let index = 0; index < nodes.length; index += 1) {
+      const rect = nodes[index].getBoundingClientRect();
+      if (rect.bottom > viewTop + 1) return { index, top: rect.top };
+    }
+    return null;
+  }
+
+  function restoreScrollAnchor(anchor) {
+    if (!anchor || mode() !== 'chips') return;
+    const node = body.querySelectorAll('.pedit-line')[anchor.index];
+    if (!node) return;
+    let delta = node.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) < 1) return;
+    // let every scrollable ancestor absorb the delta (editor body, then the page body)
+    let scrollable = node.parentElement;
+    while (scrollable && Math.abs(delta) >= 1) {
+      const style = getComputedStyle(scrollable);
+      if (/(auto|scroll)/.test(style.overflowY) && scrollable.scrollHeight > scrollable.clientHeight + 1) {
+        const before = scrollable.scrollTop;
+        scrollable.scrollTop = before + delta;
+        delta -= scrollable.scrollTop - before;
+      }
+      scrollable = scrollable.parentElement;
+    }
+    if (Math.abs(delta) >= 1) window.scrollBy(0, delta);
+  }
+
+  /**
    * Fold every line that wraps to more than one row. Folded = a hard single chip row
    * (`.is-folded` forces nowrap + horizontal slide). Measured after each render, so the
    * '+N' badge is only offered when something is actually hidden; runs in a microtask (the
@@ -641,8 +681,9 @@ function createChipsField(key, placeholder, title) {
     }
 
     const lines = value().split('\n');
+    const anchor = captureScrollAnchor();
     body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines)));
-    queueMicrotask(applyFolds);
+    queueMicrotask(() => { applyFolds(); restoreScrollAnchor(anchor); });
     if (!value().trim()) {
       body.append(el('div', {
         class: 'pedit-empty small muted',
@@ -765,13 +806,36 @@ function createChipsField(key, placeholder, title) {
     const action = target.dataset.act;
     const line = target.dataset.line === undefined ? null : Number(target.dataset.line);
     const seg = target.dataset.seg === undefined ? null : Number(target.dataset.seg);
+    if (action !== 'chip') {
+      // any other action breaks a pending double-tap sequence
+      chipTap.line = null;
+      chipTap.seg = null;
+    }
 
     if (action === 'chip') {
+      // a second tap on the same chip within the window toggles disabled (#(...) form)
+      const now = Date.now();
+      const isDouble = chipTap.line === line && chipTap.seg === seg && now - chipTap.at < DOUBLE_TAP_MS;
+      chipTap.line = line;
+      chipTap.seg = seg;
+      chipTap.at = now;
       selection.adding = null;
       selection.editing = null;
       selection.lineWeight = null;
       selection.line = line;
       selection.seg = seg;
+      if (isDouble) {
+        const token = tokenAt(line, seg);
+        if (token) {
+          applyChipAction('toggle-off');
+          toast(token.disabled ? `enabled ${token.text}` : `disabled ${token.text}`, 'ok', 1400);
+          // start a fresh sequence - the next tap must not pair with the toggle
+          chipTap.line = null;
+          chipTap.seg = null;
+          chipTap.at = 0;
+          return;
+        }
+      }
       render();
       return;
     }

@@ -2,6 +2,7 @@
 
 import { api, randomTaskId, ROOT } from './api.js';
 import { isJobActive, runJob } from './job.js';
+import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
 import { planInputResize } from './resize-plan.js';
@@ -46,6 +47,7 @@ let maskCtx;
 let maskTools;
 let toolButtons = {};
 let summary;
+let summaryMain;
 let strip;
 let generateButton;
 let modeButtons = {};
@@ -423,7 +425,7 @@ function updateSummary() {
   const params = imageParams();
   const size = outputSize();
   const input = planInputResize(activeSource(), params);
-  summary.replaceChildren();
+  summaryMain.replaceChildren();
   const parts = [
     `denoise ${Number(params.denoise).toFixed(2)}`,
     input && input.mode !== 'off' ? `in ${input.width}\u00D7${input.height}` : '',
@@ -434,8 +436,8 @@ function updateSummary() {
     params.batch > 1 ? `×${params.batch}` : '',
   ].filter(Boolean);
   if (isInpaint()) parts.splice(1, 0, params.inpaintFullRes ? 'only masked' : 'whole picture');
-  for (const part of parts) summary.append(el('span', { text: part }));
-  summary.append(el('span', { class: 'muted', text: '\u2699' }));
+  for (const part of parts) summaryMain.append(el('span', { text: part }));
+  summaryMain.append(el('span', { class: 'muted', text: '\u2699' }));
 
   generateButton.disabled = isJobActive() || !activeSource();
   generateButton.textContent = isInpaint() ? 'Generate inpaint' : 'Generate';
@@ -944,7 +946,7 @@ async function generate() {
 
   generateButton.disabled = true;
   try {
-    await runJob('img2img', payload, { label: isInpaint() ? 'inpaint' : 'img2img', store: params });
+    await runJob('img2img', payload, { label: isInpaint() ? 'inpaint' : 'img2img', store: params, history: isInpaint() ? 'inpaint' : 'img2img' });
   } catch (error) {
     toast(`could not start: ${error.message}`, 'err', 5000);
   } finally {
@@ -1089,7 +1091,13 @@ export function init(container) {
   };
   const modeRow = el('div', { class: 'segmented' }, [makeMode('img2img', 'Image'), makeMode('inpaint', 'Inpaint')]);
 
-  summary = el('button', { class: 'card summary-line', type: 'button', onClick: () => openParamsSheet('image') });
+  summaryMain = el('button', {
+    class: 'summary-main', type: 'button', onClick: () => openParamsSheet('image'),
+  });
+  summary = el('div', { class: 'card summary-line' }, [
+    summaryMain,
+    historyControls(() => state.image.mode, () => imageParams()),
+  ]);
   strip = el('div', { class: 'card' });
 
   generateButton = el('button', { class: 'btn primary wide', type: 'button', text: 'Generate', onClick: generate });

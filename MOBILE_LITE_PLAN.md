@@ -1273,3 +1273,77 @@ it too late). Fix in `ui.js`:
   `tmp/mlite_qwen_gallery_live.py` **11/11** (real data: reject ratings, archive round trip, DB
   safety); real gallery smoke (320x480 previews, folded meta, qwen chip/viewer). Webui restarted
   (restart35) for the Python changes.
+
+## 35. Round 23: results viewer declutter, race-proof view switching, parameter history (2026-10-02)
+
+- **Results viewer shows image + quick actions only**: `send.js::openResultViewer` no longer passes
+  the infotext block to `openViewer` (the gallery viewer keeps its folded "prompt & details").
+- **Qwen images can no longer linger under Unrated**: switching gallery views while a load was in
+  flight DROPPED the new request (`if (feed.loading) return`) and left the previous view's grid on
+  screen - playing with the Qwen chip and then tapping Unrated showed qwen cards under the Unrated
+  chip. `loadPage` now carries a request token: a `reset` load supersedes an in-flight one and
+  stale responses (success OR error) are discarded; `feed.loading` is only cleared by the newest
+  request. (Qwen files are structurally absent from `generated_images` - 0 rows re-verified live.)
+- **Parameter history on the folded summary lines**: every generation stores its parameter set
+  (newest first, deduped, max 10 per scope: text / img2img / inpaint / qwen; persisted as
+  `state.paramHistory`). The folded summary of all three generation screens is now
+  `div.card > [button.summary-main | ▲/▼ stepper]` (nested buttons are invalid HTML); ▲ walks to
+  older settings, ▼ back to newer ones, and one more ▼ returns to the live draft saved when
+  browsing started. Editing any value (setParam) or starting a generation resets the browse
+  cursor; a toast shows `history N/M`.
+- Verified: mock probe **94/94 WebKit + 94/94 Edge** (new checks: no `.viewer-meta` in the result
+  viewer, ▲ restores the last generation's steps, ▼ returns to the draft, history persisted, hist
+  buttons on all three screens, qwen-grid race with a 600ms mock delay on `view=qwen`); live:
+  Unrated feed 0 qwen items, `history.js` served; real gallery smoke green. Frontend-only; webui
+  restarted as `restart36` (the server had been down).
+
+## 36. Round 24: chips editor - fold/unfold scroll anchoring + double-tap keyword disable (2026-10-03)
+
+- **Fold/unfold scroll drift, root cause found and fixed**: `body.replaceChildren(...)` briefly
+  empties the scroll container, so WebKit/Blink reset `.pedit-body` scrollTop to 0 on every chips
+  re-render - measured drift: 60px (expand), 90px / 31px (fold) in `tmp/mprobe/drift_probe.js`.
+  `render()` now captures the first visible line (`captureScrollAnchor`) before replacing the
+  children and puts it back in the same microtask as `applyFolds` (`restoreScrollAnchor`):
+  the delta is absorbed by every scrollable ancestor (editor body -> screen body -> window), so
+  the tapped line stays under the finger. This also removes the "jump to top" on plain chip taps,
+  weight changes and keyword adds (all render paths). Pure browser scroll clamp (editor at its max
+  scroll with no slack anywhere above) still moves content - physics, not fixable in JS.
+- **Double-tap a keyword toggles disabled**: a second tap on the same chip within 350ms performs
+  the same write as the action-bar button (`rebuild(token, weight, !disabled)` -> `#(keyword)`),
+  with an `ok` toast (`disabled <text>` / `enabled <text>`); single tap keeps selecting.
+  Any other action (fold, weight, comment...) resets the tap tracker so cross-taps never chain.
+- Verified: mock probe **98/98 WebKit + 98/98 Edge** (new checks: chips start enabled,
+  double-tap disables (`#(alpha)` in the textarea + `is-disabled` chip), double-tap again
+  re-enables, fold keeps the toggled line anchored within 3px at mid-scroll); isolated drift
+  reproduction on both engines; real server serves the new module (no restart - frontend only).
+
+## 37. Round 25: brush + eraser in the lite Compose screen (2026-10-03)
+
+- **Tool row on the compose canvas**: `[✥ Move | ✏️ Brush | 🧽 Erase]` chips (persisted
+  `ui.composeTool`; like the desktop Composer, painting lands on a dedicated top layer, so the
+  eraser only removes your own strokes - never character/background pixels).
+  A Size slider (6-120 css px under the finger, persisted
+  `ui.composePaintSize`, default 40) and a colour swatch (persisted `ui.composePaintColor`,
+  default `#ff3366` = desktop Composer default) sit under the chips and only show for
+  brush/eraser.
+- **Paint model**: first brush stroke lazily creates a full-canvas "✏️ Paint" layer
+  (`compose.paintLayer`, `paint: true`) kept at the TOP of the stack. Strokes are drawn on that
+  layer's own canvas; eraser uses `destination-out` on the same layer (desktop parity). All
+  existing flows (render, flatten, save, send-to-image/inpaint, layer sheet opacity/delete) work
+  unchanged because it is a regular layer.
+- **Hit-testing**: `layerAt()` skips paint layers, so in Move mode a tap never grabs the overlay
+  (otherwise the full-canvas layer would swallow every drag). The selection box is hidden while a
+  paint tool is active. Duplicate is blocked for the paint layer (it would share one canvas).
+- **Coordinates**: strokes map stage px -> layer space through the layer's transform
+  (`layerLocalPoint` = inverse of `drawLayer`), so painting stays correct if the overlay is later
+  moved/scaled/rotated; line width = `size * (compose.width / cssWidth) / scale` (a finger-sized
+  stroke at any canvas resolution). Canvas resize re-anchors the overlay and copies the pixels.
+- **Multi-touch**: a second finger during a stroke is ignored (extra pointer events do not paint);
+  pinch stays for Move mode. `setPointerCapture` got the same try/catch guard as the viewer.
+- Bonus hardening: the double-tap chip toggle (round 24) now resets its tap tracker after a
+  toggle, so two quick double-tap sequences can never chain into a double toggle.
+- Verified: mock probe **107/107 WebKit + 107/107 Edge** (9 new checks: tools present, move
+  default, brush ink colour/alpha at the stroke centre, Paint layer appears, eraser clears the
+  centre, Move mode adds no ink, stroke width scales with the slider, colour applies, tool/size/
+  colour persist in localStorage). Screenshot `tmp/mprobe/fix-12-compose-brush.png`. Frontend-only
+  (screen-compose.js + state.js + prompt.js) - no webui restart; phones only need a page reload.
