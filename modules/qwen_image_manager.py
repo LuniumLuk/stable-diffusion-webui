@@ -226,7 +226,7 @@ def start_server() -> dict:
 
 
 def stop_server() -> dict:
-    global _process
+    global _process, _receiver_process
 
     with _lock:
         proc = _process
