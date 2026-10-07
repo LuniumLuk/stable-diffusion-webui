@@ -6,9 +6,6 @@
  *
  *   - text is parsed into keyword chips (top-level commas separate them);
  *   - tap a chip          -> selects it and opens the action bar
- *   - double-click a chip -> toggles the keyword on/off
- *   - right-click a chip  -> quick-action popup near the keyword (toggle,
- *                            adjust weight, rename, duplicate, delete)
  *   - action bar          -> weight -/+ (and quick values), disable, duplicate,
  *                            delete  (no keyboard needed)
  *   - gutter button (💬)  -> comment / uncomment the whole line (the Python
@@ -252,9 +249,7 @@
         const state = {
             text: textarea.value || '',
             selected: null,       // { line, seg }
-            input: null,          // { line, value, replaceSeg? } while the inline input is open
-            popup: null,          // { line, seg, x, y } right-click quick actions
-            lastChipDown: null,   // { line, seg, t } for double-click detection
+            input: null,          // { line, value } while the inline add-input is open
             suggestIdx: 0,
             suggestions: [],
             pool: null,
@@ -315,7 +310,7 @@
             const showWeight = Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9;
             const weightBadge = showWeight ? `<span class="pedit-chip-w" title="weight">×${escapeHtml(formatWeight(token.weight))}</span>` : '';
             const kindBadge = token.kind === 'angle' ? '<span class="pedit-chip-kind" title="extra network tag">◈</span>' : '';
-            return `<span class="${cls.join(' ')}" data-line="${line}" data-seg="${seg}" title="${escapeHtml(token.text)} · double-click: toggle · right-click: quick actions">`
+            return `<span class="${cls.join(' ')}" data-line="${line}" data-seg="${seg}" title="${escapeHtml(token.text)}">`
                 + kindBadge
                 + `<span class="pedit-chip-text">${escapeHtml(label)}</span>`
                 + weightBadge
@@ -381,49 +376,7 @@
                 + `<button type="button" class="pedit-act pedit-act-close" data-act="close" title="Close">✕</button>`
                 + '</div>';
         }
-        function popupHtml() {
-            const p = state.popup;
-            if (!p) return '';
-            const token = tokenAt(p.line, p.seg);
-            if (!token || !token.text) return '';
-            const w = token.weight || DEFAULT_WEIGHT;
-            return `<div class="pedit-popup" style="left:${Math.round(p.x)}px;top:${Math.round(p.y)}px">`
-                + `<div class="pedit-popup-title"><span class="pedit-popup-name">${escapeHtml(token.text)}</span>`
-                + `<button type="button" class="pedit-act pedit-act-close" data-act="close" title="Close">✕</button></div>`
-                + `<div class="pedit-popup-row">`
-                + `<button type="button" class="pedit-act" data-act="w-minus" title="Lower weight">−</button>`
-                + `<span class="pedit-weight" title="weight">${escapeHtml(formatWeight(w))}</span>`
-                + `<button type="button" class="pedit-act" data-act="w-plus" title="Raise weight">＋</button>`
-                + `<button type="button" class="pedit-act pedit-quick" data-act="w-0.8">0.8</button>`
-                + `<button type="button" class="pedit-act pedit-quick" data-act="w-1.1">1.1</button>`
-                + `<button type="button" class="pedit-act pedit-quick" data-act="w-1.2">1.2</button>`
-                + `<button type="button" class="pedit-act" data-act="reset" title="Back to weight 1 (no brackets)">⟲1.0</button>`
-                + '</div>'
-                + `<div class="pedit-popup-row">`
-                + `<button type="button" class="pedit-act ${token.disabled ? 'is-on' : ''}" data-act="toggle-off" title="${token.disabled ? 'Enable this keyword' : 'Disable this keyword (stripped when generating)'}">${token.disabled ? '✅ On' : '⛔ Off'}</button>`
-                + `<button type="button" class="pedit-act" data-act="rename" title="Edit this keyword">✏ Modify</button>`
-                + `<button type="button" class="pedit-act" data-act="duplicate" title="Duplicate">⎘</button>`
-                + `<button type="button" class="pedit-act" data-act="delete" title="Delete">🗑</button>`
-                + '</div>'
-                + '</div>';
-        }
 
-        function clampPopup() {
-            const el = root.querySelector('.pedit-popup');
-            if (!el) return;
-            const pad = 8;
-            const r = el.getBoundingClientRect();
-            let x = parseFloat(el.style.left) || 0;
-            let y = parseFloat(el.style.top) || 0;
-            const maxX = Math.max(pad, window.innerWidth - r.width - pad);
-            const maxY = Math.max(pad, window.innerHeight - r.height - pad);
-            // keep it around the chip: flip above when it would run off the bottom
-            if (y + r.height > window.innerHeight - pad) {
-                y = Math.max(pad, y - r.height - 28);
-            }
-            el.style.left = clamp(x, pad, maxX) + 'px';
-            el.style.top = clamp(y, pad, maxY) + 'px';
-        }
         function inputHtml(line) {
             if (!state.input || state.input.line !== line) return '';
             const items = state.suggestions;
@@ -452,14 +405,12 @@
                 + (disabledCount ? `<span class="pedit-badge" title="keywords disabled with #( ) are stripped when generating">${disabledCount} off</span>` : '')
                 + '</div>'
                 + `<div class="pedit-body">${body}</div>`
-                + actionBarHtml()
-                + popupHtml();
+                + actionBarHtml();
             const scroller = root.querySelector('.pedit-body');
             if (scroller) {
                 scroller.scrollTop = scrollTop;
                 state.scroll = scroller.scrollTop;
             }
-            clampPopup();
         }
 
         function countDisabled() {
@@ -538,7 +489,6 @@
                     segs.splice(sel.seg + 1, 0, { lead: '', body: seg.body, tail: '' });
                     lines[sel.line] = joinSegments(segs);
                     state.selected = { line: sel.line, seg: sel.seg + 1 };
-                    state.popup = null;
                     commit(lines.join('\n'));
                     break;
                 }
@@ -549,19 +499,13 @@
                     if (!segs.length) segs.push({ lead: '', body: '', tail: '' });
                     lines[sel.line] = joinSegments(segs);
                     state.selected = null;
-                    state.popup = null;
                     // drop the line entirely when it ended up empty as the last line
                     if (sel.line === lines.length - 1 && !lines[sel.line].trim() && lines.length > 1) lines.pop();
                     commit(lines.join('\n'));
                     break;
                 }
-                case 'rename':
-                    state.popup = null;
-                    openRename(sel.line, sel.seg);
-                    break;
                 case 'close':
                     state.selected = null;
-                    state.popup = null;
                     render();
                     break;
                 default:
@@ -672,20 +616,6 @@
             if (scroller) scroller.scrollTop = scroller.scrollHeight;
         }
 
-        function openRename(lineIndex, segIndex) {
-            const token = tokenAt(lineIndex, segIndex);
-            if (!token || !token.text) return;
-            state.selected = null;
-            state.input = { line: lineIndex, value: token.text, replaceSeg: segIndex };
-            refreshSuggestions(token.text);
-            render();
-            const el = root.querySelector('.pedit-input');
-            if (el) {
-                el.focus();
-                el.select();
-            }
-        }
-
         function closeInput() {
             state.input = null;
             state.suggestions = [];
@@ -699,30 +629,10 @@
                 closeInput();
                 return;
             }
-            const inp = state.input;
-            if (!inp) return;
-            const lineIndex = inp.line;
+            const lineIndex = state.input ? state.input.line : 0;
             const lines = state.text.split('\n');
             const segs = splitSegments(lines[lineIndex] || '');
             const body = text;
-
-            // rename mode: replace the keyword text, keeping its weight / disabled state
-            if (inp.replaceSeg !== undefined) {
-                if (inp.replaceSeg >= segs.length) {
-                    closeInput();
-                    return;
-                }
-                const old = classify(segs[inp.replaceSeg].body);
-                segs[inp.replaceSeg].body = rebuild({ kind: old.kind, text: text }, old.weight || DEFAULT_WEIGHT, old.disabled);
-                lines[lineIndex] = joinSegments(segs);
-                pushRecent(text);
-                state.input = null;
-                state.suggestions = [];
-                state.selected = { line: lineIndex, seg: inp.replaceSeg };
-                commit(lines.join('\n'));
-                return;
-            }
-
             const emptyOnly = segs.length === 1 && !segs[0].body.trim();
             if (emptyOnly) {
                 segs[0] = { lead: '', body: body, tail: '' };
@@ -816,28 +726,10 @@
         root.addEventListener('pointerdown', (e) => {
             const target = e.target;
             if (!target || !target.closest) return;
-            const hadPopup = !!state.popup;
-            // clicking anywhere outside the quick-action popup closes it
-            if (hadPopup && !target.closest('.pedit-popup')) state.popup = null;
             const chip = target.closest('.pedit-chip');
             if (chip && chip.dataset.seg !== undefined) {
-                // right click is handled by the contextmenu listener (quick actions)
-                if (e.button === 2) {
-                    e.preventDefault();
-                    return;
-                }
                 const line = parseInt(chip.dataset.line, 10);
                 const seg = parseInt(chip.dataset.seg, 10);
-                // double click toggles the keyword on/off
-                const now = performance.now();
-                const last = state.lastChipDown;
-                state.lastChipDown = { line: line, seg: seg, t: now };
-                if (e.button === 0 && last && last.line === line && last.seg === seg && now - last.t < 400) {
-                    state.selected = { line: line, seg: seg };
-                    applyChipAction('toggle-off');
-                    e.preventDefault();
-                    return;
-                }
                 const same = state.selected && state.selected.line === line && state.selected.seg === seg;
                 state.selected = same ? null : { line: line, seg: seg };
                 render();
@@ -895,42 +787,6 @@
                 e.preventDefault();
                 return;
             }
-            // a click on empty space closed the popup without re-rendering
-            if (hadPopup && !state.popup) render();
-        });
-
-        // right-click a chip -> quick-action popup floating around the keyword
-        root.addEventListener('contextmenu', (e) => {
-            const chip = e.target && e.target.closest ? e.target.closest('.pedit-chip') : null;
-            if (!chip || chip.dataset.seg === undefined) return;
-            e.preventDefault();
-            const line = parseInt(chip.dataset.line, 10);
-            const seg = parseInt(chip.dataset.seg, 10);
-            state.selected = { line: line, seg: seg };
-            const rect = chip.getBoundingClientRect();
-            state.popup = { line: line, seg: seg, x: rect.left, y: rect.bottom + 6 };
-            render();
-        });
-
-        // the popup is fixed: close it when the content scrolls away, Esc is pressed
-        // or the user clicks outside this editor
-        root.addEventListener('scroll', () => {
-            if (!state.popup) return;
-            state.popup = null;
-            render();
-        }, true);
-
-        document.addEventListener('pointerdown', (e) => {
-            if (!state.popup) return;
-            if (root.contains(e.target)) return;
-            state.popup = null;
-            render();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape' || !state.popup) return;
-            state.popup = null;
-            render();
         });
 
         root.addEventListener('input', (e) => {
@@ -986,16 +842,12 @@
                 set: function (v) {
                     desc.set.call(this, v);
                     if (mode() === 'chips') syncFromTextarea(true);
-                    else autoSizeTextarea();
                 },
                 configurable: true,
             });
         })(textarea);
 
-        textarea.addEventListener('input', () => {
-            if (mode() === 'text') { autoSizeTextarea(); return; }
-            syncFromTextarea(false);
-        });
+        textarea.addEventListener('input', () => { if (mode() === 'text') return; syncFromTextarea(false); });
 
         setInterval(() => {
             if (mode() !== 'chips') return;
@@ -1011,15 +863,12 @@
 
         function applyMode() {
             const chips = mode() === 'chips';
-            state.popup = null;
             host.classList.toggle('pedit-chips-mode', chips);
             root.style.display = chips ? '' : 'none';
             if (chips) {
                 state.text = textarea.value || '';
                 state.lastCommitted = state.text;
                 render();
-            } else {
-                autoSizeTextarea();
             }
         }
 
@@ -1030,25 +879,6 @@
             const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
             return coarse ? 'chips' : 'text';
         }
-
-        // In text mode the gradio textarea keeps its fixed row count, which wastes
-        // space (or clips long prompts). Grow/shrink it to fit the content.
-        function autoSizeTextarea() {
-            const cs = window.getComputedStyle(textarea);
-            const lineHeight = parseFloat(cs.lineHeight);
-            const padTop = parseFloat(cs.paddingTop) || 0;
-            const padBottom = parseFloat(cs.paddingBottom) || 0;
-            const rows = Math.max(3, (textarea.value || '').split('\n').length);
-            const minH = rows * (isNaN(lineHeight) ? 18 : lineHeight) + padTop + padBottom + 4;
-            textarea.style.height = 'auto';
-            const natural = textarea.scrollHeight + 2;
-            const maxH = Math.round(window.innerHeight * 0.46);
-            textarea.style.height = Math.min(Math.max(natural, minH), maxH) + 'px';
-        }
-
-        window.addEventListener('resize', () => {
-            if (mode() === 'text') autoSizeTextarea();
-        });
 
         // floating toggle, visible in text mode (chips mode has its own header)
         const fab = document.createElement('button');

@@ -4553,54 +4553,6 @@ body.resizing .resize-handle {
     margin-left: auto;
 }
 
-/* right-click quick-action popup floating around the chip */
-.pedit-popup {
-    position: fixed;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    min-width: 230px;
-    max-width: min(330px, calc(100vw - 20px));
-    padding: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.28);
-    border-radius: 12px;
-    background: rgba(24, 24, 30, 0.98);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-    font-size: 12px;
-}
-
-.pedit-popup-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-weight: 600;
-}
-
-.pedit-popup-name {
-    flex: 1 1 auto;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    opacity: 0.85;
-}
-
-.pedit-popup-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
-}
-
-.pedit-popup-row .pedit-weight {
-    min-width: 46px;
-}
-
-.pedit-popup .pedit-act {
-    min-width: 30px;
-    min-height: 26px;
-}
-
 .pedit-insert {
     position: relative;
     display: flex;
