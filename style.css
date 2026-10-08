@@ -4698,3 +4698,19 @@ body.resizing .resize-handle {
     margin: 0 !important;
 }
 
+/* ==== Qwen-Image 2.1 desktop tab (scripts/qwen_image_tab.py) ==== */
+
+#qwen_task_status .qwen-task-line {
+    font-size: 12.5px;
+    padding: 2px 0 4px;
+    opacity: 0.92;
+}
+
+#qwen_task_status .qwen-task-line.err {
+    color: #f87171;
+}
+
+#qwen_task_status .qwen-task-line .muted {
+    opacity: 0.65;
+}
+

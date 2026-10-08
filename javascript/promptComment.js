@@ -20,6 +20,8 @@
         'txt2img_neg_prompt',
         'img2img_prompt',
         'img2img_neg_prompt',
+        'qwen_prompt',
+        'qwen_neg_prompt',
     ];
 
     // ── helpers ──────────────────────────────────────────────────────────────

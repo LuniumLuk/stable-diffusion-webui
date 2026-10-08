@@ -1,5 +1,5 @@
 /**
- * Native prompt editor for txt2img / img2img (prompt + negative prompt).
+ * Native prompt editor for txt2img / img2img (and the Qwen-Image 2.1 tab).
  *
  * Replaces the pile of textarea overlays (highlight backdrop, keyboard-only
  * weight editing, suggestion dropdown) with a chip editor built for touch:
@@ -25,7 +25,7 @@
 (function () {
     'use strict';
 
-    const HOST_IDS = ['txt2img_prompt', 'txt2img_neg_prompt', 'img2img_prompt', 'img2img_neg_prompt'];
+    const HOST_IDS = ['txt2img_prompt', 'txt2img_neg_prompt', 'img2img_prompt', 'img2img_neg_prompt', 'qwen_prompt', 'qwen_neg_prompt'];
     const LS_MODE = 'pedit.mode';           // 'chips' | 'text'
     const LS_STEP = 'pedit.step';           // weight step, default '0.05'
     const LS_RECENT = 'pedit.recent';       // MRU keyword list (JSON array)

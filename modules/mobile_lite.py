@@ -89,6 +89,9 @@ _script_args_cache: dict = {}
 # The GPU is 16GB; SDXL (~7GB) and the Qwen server (~10GB) cannot coexist, so the
 # bridge unloads one before using the other (see _qwen_prepare_async / _run_job).
 _QWEN_JOB_TIMEOUT = 1800.0  # 2K resolutions take minutes; slow prompts get room
+_QWEN_JOB_RETRIES = 2  # extra attempts after a transient ref-encode / no-results failure
+_QWEN_RETRY_DELAY = 3.0  # seconds between attempts (lets the sd-server model manager settle)
+_QWEN_RETRY_TILE_SIZE = 16  # retries run the VAE in smaller tiles (asks for less device memory)
 _QWEN_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 _qwen_lock = threading.Lock()  # serialises sd-server starts (prepare thread vs job thread)
@@ -99,6 +102,7 @@ _qwen_job = {
     "phase": None,  # preparing | queued | generating | saving | done | failed
     "started": 0.0,
     "server_job": None,
+    "attempt": 1,  # >1 while a failed attempt is being retried
     "error": None,
 }
 
@@ -702,6 +706,72 @@ def _qwen_job_active() -> bool:
     return _qwen_job_snapshot().get("phase") in ("preparing", "queued", "generating", "saving")
 
 
+def _qwen_error_message(error) -> str:
+    """Readable message from the sd-server error field (string or {code, message})."""
+    if isinstance(error, dict):
+        message = str(error.get("message") or "").strip()
+        code = str(error.get("code") or "").strip()
+        if message:
+            return f"{message} ({code})" if code else message
+        return json.dumps(error, ensure_ascii=False)
+    text = str(error or "").strip()
+    return text or "the qwen job failed"
+
+
+def _qwen_retryable(failure: str) -> bool:
+    """Transient sd-server failures worth another attempt (VRAM / encode flakes)."""
+    text = (failure or "").lower()
+    return (
+        "generation_failed" in text
+        or "returned no results" in text
+        or "failed to encode reference image" in text
+    )
+
+
+def _qwen_escalate_tiles(body: dict) -> None:
+    """Retry attempts run the VAE in smaller tiles to reduce the device memory ask."""
+    tiling = dict(body.get("vae_tiling_params") or {})
+    tiling["enabled"] = True
+    tiling["tile_size_x"] = _QWEN_RETRY_TILE_SIZE
+    tiling["tile_size_y"] = _QWEN_RETRY_TILE_SIZE
+    body["vae_tiling_params"] = tiling
+
+
+def _qwen_run_server_job(body: dict, attempt: int) -> tuple:
+    """Submit one job to the sd-server and poll it to completion; (status, failure)."""
+    submitted = _qwen_http("POST", "/sdcpp/v1/img_gen", body)
+    server_job = submitted.get("id") or submitted.get("job_id")
+    if not server_job:
+        return None, "the sd-server did not return a job id"
+    _qwen_set_job(phase="queued", server_job=server_job, attempt=attempt)
+
+    deadline = time.time() + _QWEN_JOB_TIMEOUT
+    status = None
+    while time.time() < deadline:
+        time.sleep(1.0)
+        try:
+            status = _qwen_http("GET", f"/sdcpp/v1/jobs/{server_job}", timeout=10.0)
+        except Exception:
+            # the sd-server briefly stops answering while it encodes heavy inputs;
+            # keep polling instead of failing the job on one hiccup
+            continue
+        state_name = str(status.get("status") or "")
+        if state_name in ("completed", "failed", "cancelled"):
+            break
+        _qwen_set_job(phase="queued" if state_name in ("queued", "pending") else "generating")
+
+    if status is None:
+        return None, "the qwen job timed out"
+    state_name = str(status.get("status") or "")
+    if state_name == "cancelled":
+        return status, "cancelled"
+    if state_name == "failed":
+        return status, _qwen_error_message(status.get("error"))
+    if state_name != "completed":
+        return status, "the qwen job timed out"
+    return status, ""
+
+
 def _qwen_http(method: str, path: str, body=None, timeout: float = 30.0):
     """JSON call against the sd-server; localhost must bypass the (dead) system proxy."""
     url = _qwen_manager().get_server_url().rstrip("/") + path
@@ -712,15 +782,35 @@ def _qwen_http(method: str, path: str, body=None, timeout: float = 30.0):
         return json.loads(response.read().decode("utf-8"))
 
 
+def _qwen_free_webui_vram() -> None:
+    """Hand PyTorch's cached CUDA blocks back to the driver.
+
+    Moving the A1111 checkpoint to CPU is not enough on its own: the freed device
+    blocks stay in torch's allocator cache (and a browser session with live previews
+    or earlier generations can leave more behind) - invisible to the sd-server
+    process, which needs the whole free VRAM for its models + VAE reference encode
+    graphs.  devices.torch_gc() (gc + empty_cache + ipc_collect) is what actually
+    releases them.  Cheap, so it also runs on retries.
+    """
+    try:
+        from modules import devices
+
+        devices.torch_gc()
+    except Exception:
+        pass
+
+
 def _qwen_unload_sdxl_locked() -> bool:
-    """Free the A1111 checkpoint. Must run while holding the queue lock."""
+    """Free the A1111 checkpoint + cached VRAM. Must run while holding the queue lock."""
     import modules.shared as shared
     from modules import sd_models
 
-    if shared.sd_model is None:
-        return False
-    sd_models.unload_model_weights()
-    return True
+    moved = False
+    if shared.sd_model is not None:
+        sd_models.unload_model_weights()
+        moved = True
+    _qwen_free_webui_vram()  # release the allocator cache even when no model was loaded
+    return moved
 
 
 def _ensure_sdxl_ready() -> None:
@@ -864,10 +954,12 @@ def _qwen_progress(task_id: str):
     if phase in (None, "done", "failed"):
         return None
     elapsed = max(0.0, time.time() - (job.get("started") or time.time()))
+    attempt = int(job.get("attempt") or 1)
+    retry_note = f" \u00B7 retry {attempt}" if attempt > 1 else ""
     texts = {
-        "preparing": f"qwen-2.1 \u00B7 loading the model\u2026 ({elapsed:.0f}s)",
-        "queued": f"qwen-2.1 \u00B7 queued ({elapsed:.0f}s)",
-        "generating": f"qwen-2.1 \u00B7 generating ({elapsed:.0f}s)",
+        "preparing": f"qwen-2.1 \u00B7 loading the model\u2026 ({elapsed:.0f}s){retry_note}",
+        "queued": f"qwen-2.1 \u00B7 queued ({elapsed:.0f}s){retry_note}",
+        "generating": f"qwen-2.1 \u00B7 generating ({elapsed:.0f}s){retry_note}",
         "saving": "qwen-2.1 \u00B7 saving\u2026",
     }
     return {
@@ -899,8 +991,12 @@ def _run_qwen_job(payload: dict) -> dict:
         raise HTTPException(status_code=409, detail="a qwen job is already running")
 
     task_id = _normalize_task_id(payload.get("task_id"))
-    prompt = str(payload.get("prompt") or "").strip()
-    negative = str(payload.get("negative_prompt") or "")
+    from modules.processing import strip_prompt_comments
+
+    # same contract as the txt2img/img2img prompt editors: '#' comment lines and
+    # #(...) disabled keyword groups are stripped before the prompt reaches the model
+    prompt = strip_prompt_comments(str(payload.get("prompt") or "")).strip()
+    negative = strip_prompt_comments(str(payload.get("negative_prompt") or "")).strip()
     refs = [
         str(item)
         for item in (payload.get("refs") or [])
@@ -934,9 +1030,9 @@ def _run_qwen_job(payload: dict) -> dict:
         body["ref_images"] = refs
 
     started = time.time()
-    _qwen_set_job(task_id=task_id, phase="preparing", started=started, server_job=None, error=None)
+    _qwen_set_job(task_id=task_id, phase="preparing", started=started, server_job=None, error=None, attempt=1)
 
-    server_job = None
+    attempt = 0
     status = None
     failure = ""
     try:
@@ -947,37 +1043,31 @@ def _run_qwen_job(payload: dict) -> dict:
             if not ok:
                 failure = message or "the Qwen-Image 2.1 server could not be started"
             else:
-                try:
-                    submitted = _qwen_http("POST", "/sdcpp/v1/img_gen", body)
-                    server_job = submitted.get("id") or submitted.get("job_id")
-                except Exception as error:
-                    failure = f"could not submit the job: {error}"
-                _qwen_set_job(phase="queued", server_job=server_job)
-
-                deadline = time.time() + _QWEN_JOB_TIMEOUT
-                while server_job and time.time() < deadline:
-                    time.sleep(1.0)
+                while True:
+                    attempt += 1
+                    _qwen_set_job(phase="preparing", attempt=attempt, server_job=None)
+                    if attempt > 1:
+                        # a failed attempt is usually the sd-server failing to free device
+                        # memory for the reference VAE encode: hand back any cached blocks,
+                        # give the model manager a moment, then retry with smaller VAE tiles
+                        # (which ask for less device memory)
+                        _qwen_set_job(phase="preparing", error=failure)
+                        time.sleep(_QWEN_RETRY_DELAY)
+                        _qwen_free_webui_vram()
+                        _qwen_escalate_tiles(body)
                     try:
-                        status = _qwen_http("GET", f"/sdcpp/v1/jobs/{server_job}", timeout=10.0)
-                    except Exception:
-                        # the sd-server briefly stops answering while it encodes heavy
-                        # inputs; keep polling instead of failing the job on one hiccup
-                        continue
-                    state_name = str(status.get("status") or "")
-                    if state_name in ("completed", "failed", "cancelled"):
+                        status, failure = _qwen_run_server_job(body, attempt)
+                    except Exception as error:
+                        status, failure = None, f"could not submit the job: {error}"
+                    if not failure or attempt > _QWEN_JOB_RETRIES or not _qwen_retryable(failure):
                         break
-                    _qwen_set_job(phase="queued" if state_name in ("queued", "pending") else "generating")
-                else:
-                    if server_job and not failure:
-                        failure = "the qwen job timed out"
 
-            if not failure and status is not None:
-                state_name = str(status.get("status") or "")
-                if state_name == "cancelled":
-                    failure = "cancelled"
-                elif state_name == "failed":
-                    failure = str(status.get("error") or "qwen generation failed")
             if failure:
+                if attempt > 1 and _qwen_retryable(failure):
+                    failure = (
+                        f"{failure} (retried {attempt - 1}x; if it persists, try a smaller "
+                        "output size or fewer references)"
+                    )
                 _qwen_set_job(phase="failed", error=failure)
                 raise HTTPException(status_code=503, detail=failure)
 
@@ -1005,8 +1095,45 @@ def _run_qwen_job(payload: dict) -> dict:
         _results[task_id] = result
         while len(_results) > _RESULTS_KEEP:
             _results.popitem(last=False)
-    _qwen_set_job(phase="done")
+    _qwen_set_job(phase="done", error=None)
     return result
+
+
+def run_qwen_job(payload: dict) -> dict:
+    """Run one Qwen-Image-2.1 job in-process (used by the desktop Qwen tab).
+
+    Same engine as ``POST /mlite/api/qwen``: serialises on the A1111 queue lock,
+    unloads the SDXL checkpoint, starts the sd-server when needed and saves the
+    results to outputs/qwen/<date>/<time>/.  Callers get the FastAPI HTTPException
+    on failure (``error.detail`` carries the message).
+    """
+    return _run_qwen_job(payload)
+
+
+def cancel_qwen_job() -> dict:
+    """Ask the sd-server to cancel the active qwen job (queued jobs only)."""
+    job = _qwen_job_snapshot()
+    if job.get("phase") in ("preparing", "queued", "generating") and job.get("server_job"):
+        try:
+            _qwen_http("POST", f"/sdcpp/v1/jobs/{job['server_job']}/cancel", timeout=10.0)
+        except Exception:
+            pass
+        return {"ok": True, "engine": "qwen"}
+    return {"ok": False, "reason": "no queued qwen job to cancel"}
+
+
+def qwen_job_status() -> dict:
+    """Live phase of the current qwen job (desktop tab status line, no task id needed)."""
+    job = _qwen_job_snapshot()
+    started = job.get("started") or 0.0
+    return {
+        "active": _qwen_job_active(),
+        "phase": job.get("phase"),
+        "attempt": int(job.get("attempt") or 1),
+        "elapsed": round(max(0.0, time.time() - started), 1) if started else 0.0,
+        "error": job.get("error"),
+        "server_job": job.get("server_job"),
+    }
 
 
 # --------------------------------------------------------------------------- gallery
@@ -1501,12 +1628,7 @@ def register_routes(app):
             return {"ok": True}
 
         # the sd-server can cancel queued jobs only (cancel_generating = false)
-        job = _qwen_job_snapshot()
-        if job.get("phase") in ("preparing", "queued", "generating") and job.get("server_job"):
-            try:
-                _qwen_http("POST", f"/sdcpp/v1/jobs/{job['server_job']}/cancel", timeout=10.0)
-            except Exception:
-                pass
+        if cancel_qwen_job().get("ok"):
             return {"ok": True, "engine": "qwen"}
 
         shared.state.interrupt()
@@ -1533,6 +1655,10 @@ def register_routes(app):
     @app.get("/mlite/api/qwen/status")
     def mlite_qwen_status():
         return _qwen_status_payload()
+
+    @app.get("/mlite/api/qwen/job")
+    def mlite_qwen_job():
+        return qwen_job_status()
 
     @app.post("/mlite/api/engine")
     def mlite_engine(payload: dict = Body(default={})):
