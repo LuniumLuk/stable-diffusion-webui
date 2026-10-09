@@ -470,8 +470,8 @@ def _none_sdxl_item_key(path: str) -> str:
     return source + "-" + "-".join(part.lower() for part in parts)
 
 
-def _fetch_none_sdxl_records(query: str, page: int, page_size: int):
-    """Return (rows, total) for the None SDXL mode: outputs/qwen + outputs/krea2 scans."""
+def _scan_none_sdxl_files() -> list:
+    """Return [(path, mtime, item_key)] for outputs/qwen + outputs/krea2, newest first."""
     files = []
     for sub in _NONE_SDXL_DIRS:
         base = os.path.join(_NONE_SDXL_ROOT, sub)
@@ -486,18 +486,44 @@ def _fetch_none_sdxl_records(query: str, page: int, page_size: int):
                     mtime = os.path.getmtime(fpath)
                 except OSError:
                     mtime = 0.0
-                files.append((fpath, mtime))
+                files.append((fpath, mtime, _none_sdxl_item_key(fpath)))
 
     files.sort(key=lambda item: item[1], reverse=True)
+    return files
+
+
+def _hidden_none_sdxl_keys(keys: list) -> set:
+    """Keys hidden from the None SDXL scan: archived (moved to Archived) and trashed."""
+    hidden = set()
+    if not keys:
+        return hidden
+    if hasattr(endorsement_db, "get_archived_item_keys"):
+        hidden |= endorsement_db.get_archived_item_keys(keys)
+    if hasattr(endorsement_db, "get_trashed_item_keys"):
+        hidden |= endorsement_db.get_trashed_item_keys(keys)
+    return hidden
+
+
+def _fetch_none_sdxl_records(query: str, page: int, page_size: int):
+    """Return (rows, total) for the None SDXL mode: outputs/qwen + outputs/krea2 scans.
+
+    Archived items are hidden here - they move to the Archived view (which merges
+    them back in); trashed items only live in Trash.
+    """
+    files = _scan_none_sdxl_files()
 
     q = (query or "").strip().lower()
     if q:
         files = [item for item in files if q in _none_sdxl_rel_path(item[0]).lower()]
 
+    hidden = _hidden_none_sdxl_keys([item[2] for item in files])
+    if hidden:
+        files = [item for item in files if item[2] not in hidden]
+
     total = len(files)
     offset = (page - 1) * page_size
     rows = []
-    for fpath, mtime in files[offset: offset + page_size]:
+    for fpath, mtime, _key in files[offset: offset + page_size]:
         rows.append({
             "path": fpath,
             "file_mtime": mtime,
@@ -508,6 +534,71 @@ def _fetch_none_sdxl_records(query: str, page: int, page_size: int):
         })
 
     return rows, total
+
+
+def _archived_none_sdxl_rows(query: str = "", since_ts=None) -> list:
+    """Archived qwen/krea2 outputs as gallery rows (their keys are not in generated_images)."""
+    if not hasattr(endorsement_db, "get_archived_item_keys"):
+        return []
+    files = _scan_none_sdxl_files()
+    if not files:
+        return []
+    archived = endorsement_db.get_archived_item_keys([item[2] for item in files])
+    if not archived:
+        return []
+
+    times = {}
+    try:
+        placeholders = ",".join("?" * len(archived))
+        with endorsement_db._get_conn() as conn:
+            for row in conn.execute(
+                f"SELECT item_key, archived_at FROM archived WHERE item_key IN ({placeholders})",
+                list(archived),
+            ).fetchall():
+                times[row[0]] = row[1]
+    except Exception:
+        times = {}
+
+    q = (query or "").strip().lower()
+    result = []
+    for path, mtime, key in files:
+        if key not in archived:
+            continue
+        if q and q not in _none_sdxl_rel_path(path).lower():
+            continue
+        if since_ts and mtime and float(mtime) < float(since_ts):
+            continue
+        result.append({
+            "path": path,
+            "file_mtime": mtime,
+            "prompt": "",
+            "seed": "",
+            "sampler": "",
+            "model_name": "krea2" if "/krea2/" in path.replace("\\", "/").lower() else "qwen",
+            "item_key": key,
+            "archived_at": str(times.get(key) or ""),
+            "none_sdxl": True,
+        })
+    result.sort(key=lambda row: row["archived_at"], reverse=True)
+    return result
+
+
+def _fetch_archived_records(query: str, page: int, page_size: int, since_ts=None):
+    """Return (total, rows) for the Archived mode: DB archives + archived qwen/krea2 outputs.
+
+    The qwen/krea2 rows cannot come from the DB query (they are not in
+    generated_images), so they are prepended and the DB window is shifted past them.
+    """
+    sidecar = _archived_none_sdxl_rows(query, since_ts)
+    db_total = int(_call_db("count_archived", query, since_ts=since_ts) or 0)
+    total = db_total + len(sidecar)
+    offset = (page - 1) * page_size
+    window_end = offset + page_size
+    rows = list(sidecar[offset:min(window_end, len(sidecar))])
+    db_limit = window_end - max(offset, len(sidecar))
+    if db_limit > 0:
+        rows += list(_call_db("search_archived", query, limit=db_limit, offset=max(0, offset - len(sidecar)), since_ts=since_ts))
+    return total, rows
 
 
 def _extras_details_open_attr(card_extras_mode: str) -> str:
@@ -1343,8 +1434,7 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
             rows = []
     elif mode == "📦 Archived":
         if hasattr(endorsement_db, "count_archived") and hasattr(endorsement_db, "search_archived"):
-            total = _call_db("count_archived", query, since_ts=since_ts)
-            rows = _call_db("search_archived", query, limit=page_size, offset=offset, since_ts=since_ts)
+            total, rows = _fetch_archived_records(query, page, page_size, since_ts)
         else:
             total = 0
             rows = []
@@ -1488,6 +1578,10 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
     is_trash_mode = mode == "🗑 Trash"
     cards = []
     for rec, item_key in zip(rows, item_keys):
+        if rec.get("none_sdxl"):
+            # Archived qwen/krea2 outputs merged into this view - not DB rows.
+            cards.append(_none_sdxl_card_html(rec, is_archived=True, card_extras_mode=card_extras_mode))
+            continue
         path = rec.get("path") or rec.get("image_path", "")
         eid = endorsement_db.get_endorsed_id_by_path(path)
         did = endorsement_db.get_disliked_id_by_path(path)

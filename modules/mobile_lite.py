@@ -2056,7 +2056,14 @@ def _krea2_item_key(path: str) -> str:
 
 
 def _none_sdxl_items(query: str, limit: int, offset: int):
-    """Items for the None SDXL view: outputs/qwen + outputs/krea2 scans (desktop parity)."""
+    """Items for the None SDXL view: outputs/qwen + outputs/krea2 scans (desktop parity).
+
+    Archived items move to the Archived view and trashed items only live in Trash,
+    so both are filtered out here.
+    """
+    _ensure_db()
+    from modules import endorsement_db
+
     files = []
     for sub in ("qwen", "krea2"):
         base = os.path.join(_WEBUI_ROOT, "outputs", sub)
@@ -2079,6 +2086,16 @@ def _none_sdxl_items(query: str, limit: int, offset: int):
             return 0
 
     files.sort(key=_mtime, reverse=True)
+
+    keys = [
+        _krea2_item_key(path) if "/krea2/" in path.replace("\\", "/").lower() else _qwen_item_key(path)
+        for path in files
+    ]
+    hidden = set(endorsement_db.get_archived_item_keys(keys))
+    hidden.update(endorsement_db.get_trashed_item_keys(keys))
+    if hidden:
+        files = [path for path, key in zip(files, keys) if key not in hidden]
+
     rows = []
     for path in files[offset: offset + limit]:
         is_krea2 = "/krea2/" in path.replace("\\", "/").lower()
@@ -2092,6 +2109,60 @@ def _none_sdxl_items(query: str, limit: int, offset: int):
             "krea2": is_krea2,
         })
     return rows, len(files)
+
+
+def _archived_none_sdxl_items(query: str = ""):
+    """Archived qwen/krea2 outputs as rows (their keys are not in the DB state tables)."""
+    _ensure_db()
+    from modules import endorsement_db
+
+    files = []
+    for sub in ("qwen", "krea2"):
+        base = os.path.join(_WEBUI_ROOT, "outputs", sub)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+            for name in filenames:
+                if name.lower().endswith(_IMAGE_EXTS) and not name.startswith("."):
+                    files.append(os.path.join(dirpath, name))
+
+    if not files:
+        return []
+
+    keys = [
+        _krea2_item_key(path) if "/krea2/" in path.replace("\\", "/").lower() else _qwen_item_key(path)
+        for path in files
+    ]
+    archived = endorsement_db.get_archived_item_keys(keys)
+    if not archived:
+        return []
+
+    def _mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    q = (query or "").strip().lower()
+    rows = []
+    for path, key in zip(files, keys):
+        if key not in archived:
+            continue
+        if q and q not in path.replace("\\", "/").lower():
+            continue
+        is_krea2 = "/krea2/" in path.replace("\\", "/").lower()
+        rows.append({
+            "item_key": key,
+            "path": path,
+            "file_mtime": _mtime(path),
+            "prompt": "",
+            "model_name": "krea2" if is_krea2 else "qwen-image-2.1",
+            "qwen": not is_krea2,
+            "krea2": is_krea2,
+        })
+    rows.sort(key=lambda row: row["file_mtime"], reverse=True)
+    return rows
 
 
 def _image_maker_item_key(path: str) -> str:
@@ -2170,8 +2241,14 @@ def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
         total = endorsement_db.count_disliked(query)
         rows = endorsement_db.search_disliked(query, limit=page_size, offset=offset)
     elif view == "archived":
-        total = endorsement_db.count_archived(query)
-        rows = endorsement_db.search_archived(query, limit=page_size, offset=offset)
+        # DB archives plus archived qwen/krea2 outputs (which are not in the DB state tables).
+        sidecar = _archived_none_sdxl_items(query)
+        db_total = endorsement_db.count_archived(query)
+        total = int(db_total or 0) + len(sidecar)
+        rows = list(sidecar[offset:min(offset + page_size, len(sidecar))])
+        db_limit = offset + page_size - max(offset, len(sidecar))
+        if db_limit > 0:
+            rows += endorsement_db.search_archived(query, limit=db_limit, offset=max(0, offset - len(sidecar)))
     elif view == "staged":
         total = endorsement_db.count_staged(query)
         rows = endorsement_db.search_staged(query, limit=page_size, offset=offset)

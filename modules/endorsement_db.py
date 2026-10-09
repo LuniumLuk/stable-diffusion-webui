@@ -1458,6 +1458,38 @@ def _trash_preview_cache_path(path: str, mtime: float) -> str:
     return os.path.join(_DB_ROOT, "cache", "gallery_previews", f"{key}.webp")
 
 
+_SIDECAR_OUTPUT_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+def _sidecar_output_paths_by_key() -> dict:
+    """Map qwen-/krea2- item keys to their file paths.
+
+    Those outputs live outside generated_images; the archive key embeds the
+    outputs-relative path (engine prefix + lowercased parts), so scanning the two
+    engines' output dirs recovers the file for a given key.
+    """
+    mapping = {}
+    outputs_root = os.path.join(_DB_ROOT, "outputs")
+    for engine in ("qwen", "krea2"):
+        base = os.path.join(outputs_root, engine)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, fnames in os.walk(base):
+            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+            for fname in fnames:
+                if fname.startswith(".") or not fname.lower().endswith(_SIDECAR_OUTPUT_EXTS):
+                    continue
+                fpath = os.path.join(dirpath, fname)
+                try:
+                    rel = os.path.relpath(fpath, _DB_ROOT).replace("\\", "/")
+                except ValueError:
+                    continue
+                parts = [part for part in rel.split("/") if part]
+                parts[-1] = os.path.splitext(parts[-1])[0]
+                mapping[engine + "-" + "-".join(part.lower() for part in parts)] = fpath
+    return mapping
+
+
 def trash_archived_and_disliked() -> dict:
     """Move archived and disliked items to trash, deleting originals and thumbnails.
 
@@ -1484,6 +1516,7 @@ def trash_archived_and_disliked() -> dict:
     freed_bytes = 0
 
     files_to_delete = []  # list of (path, mtime) tuples for originals and cache
+    sidecar_paths = None  # lazily built qwen-/krea2- key -> path map
     now = datetime.now().isoformat(timespec="seconds")
 
     with _get_conn() as conn:
@@ -1541,12 +1574,25 @@ def trash_archived_and_disliked() -> dict:
                     else:
                         columns = (None, None, "", "", "", 0, "", 0.0, 0, 0, "", "", "")
 
+            # Qwen/Krea 2 outputs are not in generated_images: their keys embed the
+            # outputs-relative path, so recover the file by scanning the output dirs.
+            if path is None and (item_key.startswith("qwen-") or item_key.startswith("krea2-")):
+                if sidecar_paths is None:
+                    sidecar_paths = _sidecar_output_paths_by_key()
+                path = sidecar_paths.get(item_key)
+                if path and not os.path.isfile(path):
+                    path = None  # already gone
+                if path:
+                    columns = (path, None) + tuple(columns[2:])
+
             # If the DB didn't store mtime, try to read it from the still-existing original.
             if path and mtime is None and os.path.isfile(path):
                 try:
                     mtime = os.path.getmtime(path)
                 except OSError:
                     pass
+                if mtime is not None:
+                    columns = (columns[0], mtime) + tuple(columns[2:])
 
             # Save metadata to trash.
             conn.execute(
