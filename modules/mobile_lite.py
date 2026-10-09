@@ -1045,18 +1045,12 @@ def _qwen_unload_sdxl_locked() -> bool:
 def _ensure_sdxl_ready() -> None:
     """The qwen bridge unloads SDXL to CPU; move it back (or load it) before A1111 runs."""
     import modules.shared as shared
-    from modules import devices, sd_models
+    from modules import sd_models
 
-    model = shared.sd_model
-    if model is None:
+    if shared.sd_model is None:
         sd_models.reload_model_weights()
         return
-    try:
-        parameter = next(model.parameters())
-    except (StopIteration, AttributeError):
-        return
-    if parameter.device.type == "cpu" and devices.device.type != "cpu":
-        sd_models.send_model_to_device(model)
+    sd_models.ensure_model_on_device()
 
 
 def _qwen_start_server() -> tuple:
@@ -1977,6 +1971,7 @@ def _normalize_item(row: dict, view: str) -> dict:
         "width": row.get("width"),
         "height": row.get("height"),
         "model": row.get("model_name") or "",
+        "infotext": str(row.get("infotext") or ""),
         "mtime": float(mtime or 0),
         "view": view,
         "qwen": bool(row.get("qwen")),
@@ -2099,11 +2094,20 @@ def _none_sdxl_items(query: str, limit: int, offset: int):
     rows = []
     for path in files[offset: offset + limit]:
         is_krea2 = "/krea2/" in path.replace("\\", "/").lower()
+        meta = endorsement_db.read_sidecar_metadata(path) if hasattr(endorsement_db, "read_sidecar_metadata") else {}
         rows.append({
             "item_key": _krea2_item_key(path) if is_krea2 else _qwen_item_key(path),
             "path": path,
             "file_mtime": _mtime(path),
-            "prompt": "",
+            "prompt": meta.get("prompt", ""),
+            "negative_prompt": meta.get("negative_prompt", ""),
+            "seed": meta.get("seed", ""),
+            "steps": meta.get("steps", 0) or 0,
+            "sampler": meta.get("sampler", ""),
+            "cfg": meta.get("cfg_scale", 0.0) or 0.0,
+            "width": meta.get("width", 0) or 0,
+            "height": meta.get("height", 0) or 0,
+            "infotext": meta.get("infotext", ""),
             "model_name": "krea2" if is_krea2 else "qwen-image-2.1",
             "qwen": not is_krea2,
             "krea2": is_krea2,
@@ -2152,11 +2156,20 @@ def _archived_none_sdxl_items(query: str = ""):
         if q and q not in path.replace("\\", "/").lower():
             continue
         is_krea2 = "/krea2/" in path.replace("\\", "/").lower()
+        meta = endorsement_db.read_sidecar_metadata(path) if hasattr(endorsement_db, "read_sidecar_metadata") else {}
         rows.append({
             "item_key": key,
             "path": path,
             "file_mtime": _mtime(path),
-            "prompt": "",
+            "prompt": meta.get("prompt", ""),
+            "negative_prompt": meta.get("negative_prompt", ""),
+            "seed": meta.get("seed", ""),
+            "steps": meta.get("steps", 0) or 0,
+            "sampler": meta.get("sampler", ""),
+            "cfg": meta.get("cfg_scale", 0.0) or 0.0,
+            "width": meta.get("width", 0) or 0,
+            "height": meta.get("height", 0) or 0,
+            "infotext": meta.get("infotext", ""),
             "model_name": "krea2" if is_krea2 else "qwen-image-2.1",
             "qwen": not is_krea2,
             "krea2": is_krea2,

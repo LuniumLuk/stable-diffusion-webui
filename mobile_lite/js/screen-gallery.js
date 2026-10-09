@@ -99,6 +99,12 @@ async function sendToCompose(item) {
   });
 }
 
+/** Load a gallery item as a Qwen edit reference (ref-edit loop from the None SDXL view). */
+async function sendToQwenRef(item) {
+  const { addImageAsQwenRef } = await import('./screen-qwen.js');
+  await addImageAsQwenRef({ path: item.path, url: item.url });
+}
+
 function cardNode(item, onTap, withActions) {
   const badges = badgesHtml(item);
   const thumb = el('div', {
@@ -130,14 +136,25 @@ function cardNode(item, onTap, withActions) {
 
   // Scan-only outputs (Image Maker, None SDXL = qwen + krea2) are image-only: sent to
   // img2img/inpaint/compose with NO parameters at all, and they can only be archived
-  // (never rated) - desktop gallery parity
+  // (never rated) - desktop gallery parity. None SDXL items WITH recovered
+  // prompt/settings (sidecar .txt / PNG parameters) get the SDXL-style action set.
   const imageOnly = item.imagemaker || item.qwen || item.krea2;
-  const actions = el('div', { class: 'card-actions' }, imageOnly ? [
+  const imageOnlyMeta = imageOnly && !!(item.infotext || item.prompt);
+  const imageOnlyActions = imageOnlyMeta ? [
+    quickButton('\u{1F5BC}', 'Use as image', () => useAsImage(item, { mode: 'img2img' })),
+    quickButton('\u{1F3A8}', 'Use in inpaint', () => useAsImage(item, { mode: 'inpaint' })),
+    quickButton('\u{1F4DD}', 'Use in text (txt2img) - recovers the seed', () => useMetaInText(metaFromItem(item))),
+    quickButton('\u{1F9E9}', 'Add to Compose (image only)', () => sendToCompose(item)),
+    quickButton('\u{1F4CE}', 'To Qwen (reference image)', () => sendToQwenRef(item)),
+    quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
+  ] : [
     quickButton('\u{1F5BC}', 'Use as image (image only)', () => useAsImage(item, { mode: 'img2img', meta: null })),
     quickButton('\u{1F3A8}', 'Use in inpaint (image only)', () => useAsImage(item, { mode: 'inpaint', meta: null })),
     quickButton('\u{1F9E9}', 'Add to Compose (image only)', () => sendToCompose(item)),
+    quickButton('\u{1F4CE}', 'To Qwen (reference image)', () => sendToQwenRef(item)),
     quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
-  ] : [
+  ];
+  const actions = el('div', { class: 'card-actions' }, imageOnly ? imageOnlyActions : [
     quickButton('\u{1F5BC}', 'Use as image', () => useAsImage(item, { mode: 'img2img' })),
     quickButton('\u{1F3A8}', 'Use in inpaint', () => useAsImage(item, { mode: 'inpaint' })),
     quickButton('\u{1F4DD}', 'Use in text (txt2img) - recovers the seed', () => useMetaInText(metaFromItem(item))),
@@ -164,14 +181,26 @@ function openItemViewer(item) {
       src: viewerSrc(current),
       title: current.seed !== undefined && current.seed !== null ? `seed ${current.seed}` : '',
       meta: makeMetaNode(itemMetaText(current), { folded: true }),
-      actions: (current.imagemaker || current.qwen || current.krea2) ? [
-        { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img', meta: null }) },
-        { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
-        { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
-        current.archived
-          ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
-          : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
-      ] : [
+      actions: (current.imagemaker || current.qwen || current.krea2)
+        ? ((current.infotext || current.prompt) ? [
+          { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
+          { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
+          { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
+          { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
+          { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
+          current.archived
+            ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
+            : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
+        ] : [
+          { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img', meta: null }) },
+          { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
+          { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
+          { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
+          current.archived
+            ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
+            : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
+        ])
+        : [
         { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
         { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
         { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },

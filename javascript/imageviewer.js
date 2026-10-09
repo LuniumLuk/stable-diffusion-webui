@@ -138,19 +138,28 @@ function negmod(n, m) {
 function updateOnBackgroundChange() {
     const modalImage = gradioApp().getElementById("modalImage");
     if (modalImage && modalImage.offsetParent) {
-        if (_modalCompareActive) {
-            _modalCompareActive = false;
-            _updateModalCompareButton();
-        }
         let currentButton = selected_gallery_button();
         let preview = gradioApp().querySelectorAll('.livePreview > img');
-        if (opts.js_live_preview_in_modal_lightbox && preview.length > 0) {
+        const previewSrc = (opts.js_live_preview_in_modal_lightbox && preview.length > 0)
+            ? preview[preview.length - 1].src
+            : null;
+        const resultSrc = previewSrc || ((currentButton?.children?.length > 0) ? currentButton.children[0].src : null);
+
+        if (_modalCompareActive) {
+            // The user is comparing (input image shown): do not stomp their view while
+            // preview frames / results stream in - just remember the latest result so
+            // toggling back shows the newest image.
+            if (resultSrc) _modalResultSrc = resultSrc;
+            return;
+        }
+
+        if (previewSrc) {
             // show preview image if available
-            modalImage.src = preview[preview.length - 1].src;
+            modalImage.src = previewSrc;
             _modalResultSrc = modalImage.src;
             _modalFitToViewport(modalImage);
-        } else if (currentButton?.children?.length > 0 && modalImage.src != currentButton.children[0].src) {
-            modalImage.src = currentButton.children[0].src;
+        } else if (resultSrc && modalImage.src != resultSrc) {
+            modalImage.src = resultSrc;
             _modalResultSrc = modalImage.src;
             _modalFitToViewport(modalImage);
             if (modalImage.style.display === 'none') {
@@ -216,6 +225,9 @@ function modalPrevImage(event) {
 }
 
 function modalKeyHandler(event) {
+    // A second listener (document fallback) may see the same event - handle it once.
+    if (event._lightboxHandled) return;
+    event._lightboxHandled = true;
     switch (event.key) {
     case "s":
         saveImage();
@@ -558,5 +570,17 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 
     document.body.appendChild(modal);
+
+    // Keyboard fallback: if focus leaked outside the modal (e.g. after clicking a
+    // control), still route C / S / arrows / Escape while the lightbox is open.
+    // The handled-flag in modalKeyHandler keeps this from firing twice.
+    document.addEventListener('keydown', function(event) {
+        const lb = gradioApp().getElementById('lightboxModal');
+        if (!lb || lb.style.display !== 'flex') return;
+        const target = event.target || event.srcElement;
+        const tag = ((target && target.tagName) || '').toLowerCase();
+        if (target && (target.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select')) return;
+        modalKeyHandler(event);
+    });
 
 });

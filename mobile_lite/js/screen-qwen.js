@@ -6,7 +6,7 @@ import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
 import { on, qwenParams, state } from './state.js';
-import { busy, closeViewer, el, openViewer, toast } from './ui.js';
+import { busy, closeViewer, el, openViewer, switchTab, toast } from './ui.js';
 import { openResultViewer } from './send.js';
 
 const REF_LIMIT = 10;
@@ -114,6 +114,16 @@ async function addRefFromResult(result) {
   } finally {
     overlay.close();
   }
+}
+
+/** Gallery "To Qwen" quick action: load a gallery item as an edit reference. */
+export async function addImageAsQwenRef(item) {
+  if (!refsGrid) {
+    // The screen initializes lazily on its first visit - open it once so refsGrid exists.
+    switchTab('qwen');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  await addRefFromResult({ path: item.path, url: item.url });
 }
 
 /* ---------------------------------------------------------------- status chip */

@@ -994,6 +994,10 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     else:
         assert p.prompt is not None
 
+    # The qwen/krea2 sidecar hand-over parks SDXL on CPU; bring it back before any
+    # sampling, or the UNet dies with CPU-weights vs CUDA-inputs tensor mismatches.
+    sd_models.ensure_model_on_device()
+
     devices.torch_gc()
 
     seed = get_fixed_seed(p.seed)

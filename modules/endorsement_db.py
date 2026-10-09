@@ -1490,6 +1490,105 @@ def _sidecar_output_paths_by_key() -> dict:
     return mapping
 
 
+_SIDECAR_METADATA_CACHE = {}
+
+
+def _parse_sidecar_infotext(text: str) -> dict:
+    """Parse a stable-diffusion.cpp / webui-style infotext into display fields."""
+    text = (text or "").strip()
+    if not text:
+        return {}
+
+    prompt = text
+    negative = ""
+    metrics = ""
+    match = re.search(r"\n(Steps: .*)\Z", text, re.S)
+    if match:
+        metrics = match.group(1).strip()
+        head = text[: match.start()]
+        neg_match = re.search(r"\nNegative prompt: (.*)\Z", head, re.S)
+        if neg_match:
+            prompt = head[: neg_match.start()].strip()
+            negative = neg_match.group(1).strip()
+        else:
+            prompt = head.strip()
+    else:
+        neg_match = re.search(r"(?i)\bNegative prompt:\s*", text)
+        if neg_match and neg_match.start() == 0:
+            negative = text[neg_match.end():].strip()
+            prompt = ""
+
+    def pick(pattern: str) -> str:
+        found = re.search(pattern, metrics)
+        return found.group(1).strip() if found else ""
+
+    def pick_int(pattern: str) -> int:
+        try:
+            return int(float(pick(pattern) or 0))
+        except ValueError:
+            return 0
+
+    def pick_float(pattern: str) -> float:
+        try:
+            return float(pick(pattern) or 0)
+        except ValueError:
+            return 0.0
+
+    size = re.search(r"Size:\s*(\d+)\s*x\s*(\d+)", metrics)
+    return {
+        "infotext": text,
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "steps": pick_int(r"Steps:\s*(\d+)"),
+        "sampler": pick(r"Sampler:\s*([^,]+)"),
+        "cfg_scale": pick_float(r"CFG scale:\s*([\d.]+)"),
+        "seed": pick(r"Seed:\s*(-?\d+)"),
+        "width": int(size.group(1)) if size else 0,
+        "height": int(size.group(2)) if size else 0,
+        "model": pick(r"Unet:\s*([^,]+)") or pick(r"Model:\s*([^,]+)"),
+    }
+
+
+def read_sidecar_metadata(path: str) -> dict:
+    """Prompt + generation settings for a qwen/krea2 output.
+
+    Prefers the `<stem>.txt` sidecar written next to the image (both sidecar bridges
+    write one); falls back to the PNG's embedded `parameters` chunk. Returns {} when
+    neither is available. Cached per (path, image mtime).
+    """
+    if not path:
+        return {}
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    cache_key = (path, mtime)
+    if cache_key in _SIDECAR_METADATA_CACHE:
+        return _SIDECAR_METADATA_CACHE[cache_key]
+
+    text = ""
+    sidecar = os.path.splitext(path)[0] + ".txt"
+    if os.path.isfile(sidecar):
+        try:
+            with open(sidecar, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            text = ""
+    if not text and path.lower().endswith(".png"):
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                text = str((img.info or {}).get("parameters") or "")
+        except Exception:
+            text = ""
+
+    parsed = _parse_sidecar_infotext(text)
+    if len(_SIDECAR_METADATA_CACHE) > 4096:
+        _SIDECAR_METADATA_CACHE.clear()
+    _SIDECAR_METADATA_CACHE[cache_key] = parsed
+    return parsed
+
+
 def trash_archived_and_disliked() -> dict:
     """Move archived and disliked items to trash, deleting originals and thumbnails.
 

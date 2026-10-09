@@ -524,12 +524,19 @@ def _fetch_none_sdxl_records(query: str, page: int, page_size: int):
     offset = (page - 1) * page_size
     rows = []
     for fpath, mtime, _key in files[offset: offset + page_size]:
+        meta = endorsement_db.read_sidecar_metadata(fpath) if hasattr(endorsement_db, "read_sidecar_metadata") else {}
         rows.append({
             "path": fpath,
             "file_mtime": mtime,
-            "prompt": "",
-            "seed": "",
-            "sampler": "",
+            "prompt": meta.get("prompt", ""),
+            "negative_prompt": meta.get("negative_prompt", ""),
+            "seed": meta.get("seed", ""),
+            "steps": meta.get("steps", 0) or 0,
+            "sampler": meta.get("sampler", ""),
+            "cfg_scale": meta.get("cfg_scale", 0.0) or 0.0,
+            "width": meta.get("width", 0) or 0,
+            "height": meta.get("height", 0) or 0,
+            "infotext": meta.get("infotext", ""),
             "model_name": "krea2" if "/krea2/" in fpath.replace("\\", "/").lower() else "qwen",
         })
 
@@ -568,12 +575,19 @@ def _archived_none_sdxl_rows(query: str = "", since_ts=None) -> list:
             continue
         if since_ts and mtime and float(mtime) < float(since_ts):
             continue
+        meta = endorsement_db.read_sidecar_metadata(path) if hasattr(endorsement_db, "read_sidecar_metadata") else {}
         result.append({
             "path": path,
             "file_mtime": mtime,
-            "prompt": "",
-            "seed": "",
-            "sampler": "",
+            "prompt": meta.get("prompt", ""),
+            "negative_prompt": meta.get("negative_prompt", ""),
+            "seed": meta.get("seed", ""),
+            "steps": meta.get("steps", 0) or 0,
+            "sampler": meta.get("sampler", ""),
+            "cfg_scale": meta.get("cfg_scale", 0.0) or 0.0,
+            "width": meta.get("width", 0) or 0,
+            "height": meta.get("height", 0) or 0,
+            "infotext": meta.get("infotext", ""),
             "model_name": "krea2" if "/krea2/" in path.replace("\\", "/").lower() else "qwen",
             "item_key": key,
             "archived_at": str(times.get(key) or ""),
@@ -735,10 +749,18 @@ def _none_sdxl_card_html(record: dict, is_archived: bool = False, card_extras_mo
     rel_path = _none_sdxl_rel_path(path)
     item_key = _none_sdxl_item_key(path) if path else ""
 
+    # The preview overlay parses the card's data-infotext attribute (same as the SDXL
+    # cards), so the recovered prompt/settings must ride on the thumbnail too.
+    infotext = str(record.get("infotext") or "")
+    has_meta = bool(infotext.strip())
+    infotext_b64 = _b64(infotext) if has_meta else ""
+
+    thumb_infotext_attr = f'data-infotext="{infotext_b64}" ' if has_meta else ""
     thumb_html = (
         f'<img src="{thumb}" alt="qwen or krea2 image" loading="lazy" '
         f'data-orig="{orig_url}" '
         f'data-preview="{preview_url}" '
+        f'{thumb_infotext_attr}'
         f'onclick="endorsedGallery.previewImage(this.dataset.preview || this.dataset.orig || this.src)" />'
     ) if thumb else '<div class="endgal-nothumb">No preview</div>'
 
@@ -748,28 +770,89 @@ def _none_sdxl_card_html(record: dict, is_archived: bool = False, card_extras_mo
     archive_label = "&#128228;" if is_archived else "&#128230;"
     archive_class = "endgal-archive active" if is_archived else "endgal-archive"
     archive_title = "unarchive" if is_archived else "archive"
-
-    # Image-only quick actions (these engines' params live in their own infotext, so
-    # sends carry no prompt/params) + archive toggle.  Emoji as numeric HTML entities:
-    # keeps the source ASCII (edit-tool corruption guard, see tmp/fix_gallery_emoji.py).
-    thumb_action_stack = (
-        '<div class="endgal-thumb-actions">'
-        '<button class="endgal-btn-send2img endgal-btn-composer endgal-act-compose" '
-        'data-icon="&#129513;" data-hint="Composer" '
-        'title="Send to Composer as background (image only)" '
-        f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'\')">&#129513;</button>'
-        '<button class="endgal-btn-send2img endgal-act-i2i" data-icon="&#128444;" data-hint="Send to img2img" '
-        'title="send to img2img" '
-        f'onclick="endorsedGallery.sendTo(\'\', \'img2img\', \'{path_b64}\')">&#128444;</button>'
-        '<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="&#127912;" data-hint="Send to Inpaint" '
-        'title="send to inpaint" '
-        f'onclick="endorsedGallery.sendToInpaint(\'\', \'{path_b64}\')">&#127912;</button>'
+    archive_button = (
         f'<button class="{archive_class} endgal-act-archive" data-hint="{archive_title}" title="{archive_title}" '
         f'onclick="endorsedGallery.action(\'{archive_action}\')">{archive_label}</button>'
-        '</div>'
     )
 
+    # Reference sends to the sidecar engines (ref-edit loop): pushes the local path into
+    # the engine tab's hidden bridge (endorsedGallery.addRefTo -> qwen/krea2 ref list).
+    ref_buttons = (
+        '<button class="endgal-btn-send2img endgal-act-krea2" data-icon="K2" '
+        'data-hint="Send to Krea 2 as reference" title="Send to Krea 2 as reference" '
+        f'onclick="endorsedGallery.addRefTo(\'krea2\', \'{path_b64}\')">K2</button>'
+        '<button class="endgal-btn-send2img endgal-act-qwen-ref" data-icon="Qwen" '
+        'data-hint="Send to Qwen as reference" title="Send to Qwen as reference" '
+        f'onclick="endorsedGallery.addRefTo(\'qwen\', \'{path_b64}\')">Qwen</button>'
+    )
+
+    # Quick actions.  With recovered prompt/settings (sidecar .txt or the PNG's
+    # `parameters` chunk) the sends carry the original params - txt2img recovers the
+    # seed just like the SDXL cards; without metadata they stay image-only.
+    # Emoji as numeric HTML entities: keeps the source ASCII (edit-tool corruption
+    # guard, see tmp/fix_gallery_emoji.py).
+    if has_meta:
+        thumb_action_stack = (
+            '<div class="endgal-thumb-actions">'
+            '<button class="endgal-btn-send2img endgal-act-t2i" data-icon="&#128221;" '
+            'data-hint="Use in text (txt2img) - recovers the seed" title="Use in text (txt2img) - recovers the seed" '
+            f'onclick="endorsedGallery.sendTo(\'{infotext_b64}\', \'txt2img\')">&#128221;</button>'
+            '<button class="endgal-btn-send2img endgal-btn-composer endgal-act-compose" '
+            'data-icon="&#129513;" data-hint="Composer" '
+            'title="Send to Composer as background (image only)" '
+            f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'\')">&#129513;</button>'
+            '<button class="endgal-btn-send2img endgal-act-i2i" data-icon="&#128444;" data-hint="Send to img2img" '
+            'title="send to img2img (with prompt and settings)" '
+            f'onclick="endorsedGallery.sendTo(\'{infotext_b64}\', \'img2img\', \'{path_b64}\')">&#128444;</button>'
+            '<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="&#127912;" data-hint="Send to Inpaint" '
+            'title="send to inpaint (with prompt and settings)" '
+            f'onclick="endorsedGallery.sendToInpaint(\'{infotext_b64}\', \'{path_b64}\')">&#127912;</button>'
+            + ref_buttons +
+            archive_button +
+            '</div>'
+        )
+    else:
+        thumb_action_stack = (
+            '<div class="endgal-thumb-actions">'
+            '<button class="endgal-btn-send2img endgal-btn-composer endgal-act-compose" '
+            'data-icon="&#129513;" data-hint="Composer" '
+            'title="Send to Composer as background (image only)" '
+            f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'\')">&#129513;</button>'
+            '<button class="endgal-btn-send2img endgal-act-i2i" data-icon="&#128444;" data-hint="Send to img2img" '
+            'title="send to img2img" '
+            f'onclick="endorsedGallery.sendTo(\'\', \'img2img\', \'{path_b64}\')">&#128444;</button>'
+            '<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="&#127912;" data-hint="Send to Inpaint" '
+            'title="send to inpaint" '
+            f'onclick="endorsedGallery.sendToInpaint(\'\', \'{path_b64}\')">&#127912;</button>'
+            + ref_buttons +
+            archive_button +
+            '</div>'
+        )
+
     details_open = _extras_details_open_attr(card_extras_mode)
+
+    if has_meta:
+        prompt_full, negative_full, settings_full = _split_infotext_sections(
+            infotext, record.get("prompt", ""), record.get("negative_prompt", "")
+        )
+        prompt_b64 = _b64(prompt_full)
+        negative_b64 = _b64(negative_full)
+        settings_b64 = _b64(settings_full)
+        details_body = (
+            f'<div class="endgal-prompt oneline">{_html.escape(str(record.get("prompt") or rel_path))}</div>'
+            f'<div class="endgal-date">{_html.escape(rel_path)}</div>'
+            f'<details class="endgal-details"><summary>Prompt</summary>'
+            f'<pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64(\'{prompt_b64}\', this)">{_format_prompt_html(prompt_full)}</pre></details>'
+            f'<details class="endgal-details"><summary>Negative prompt</summary>'
+            f'<pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64(\'{negative_b64}\', this)">{_format_prompt_html(negative_full)}</pre></details>'
+            f'<details class="endgal-details"><summary>Settings</summary>'
+            f'<pre class="endgal-infotext endgal-copy-text" title="Click to copy" onclick="endorsedGallery.copyTextB64(\'{settings_b64}\', this)">{_html.escape(settings_full)}</pre></details>'
+        )
+    else:
+        details_body = (
+            f'<div class="endgal-prompt">{_html.escape(rel_path)}</div>'
+            f'<div class="endgal-date">{_html.escape(date)}</div>'
+        )
 
     return f"""
 <div class="endgal-card endgal-nonesdxl-card">
@@ -777,8 +860,7 @@ def _none_sdxl_card_html(record: dict, is_archived: bool = False, card_extras_mo
     <details class="endgal-card-extra"{details_open}>
                 <summary class="endgal-card-extra-summary">Details</summary>
         <div class="endgal-body">
-            <div class="endgal-prompt">{_html.escape(rel_path)}</div>
-            <div class="endgal-date">{_html.escape(date)}</div>
+            {details_body}
         </div>
     </details>
 </div>
@@ -1007,6 +1089,53 @@ def _open_in_explorer(path: str) -> tuple[bool, str]:
     return True, f"Opened in Explorer: {_html.escape(target)}"
 
 
+def _split_infotext_sections(info_text: str, prompt_fallback: str, negative_fallback: str):
+    prompt_text = (prompt_fallback or "").strip()
+    negative_text = (negative_fallback or "").strip()
+    settings_text = ""
+
+    full = str(info_text or "").strip()
+    if full:
+        neg_match = re.search(r"(?i)\bNegative\s+prompt\s*:\s*", full)
+        steps_match = re.search(r"(?i)(?:^|[\n,]\s*)(Steps\s*:)", full)
+
+        steps_start = steps_match.start(1) if steps_match else -1
+
+        if neg_match:
+            prompt_chunk = full[:neg_match.start()].strip().rstrip(",")
+            if prompt_chunk:
+                prompt_text = prompt_chunk
+
+            neg_start = neg_match.end()
+            neg_end = steps_start if steps_start >= 0 and steps_start > neg_start else len(full)
+            negative_chunk = full[neg_start:neg_end].strip().rstrip(",")
+            if negative_chunk:
+                negative_text = negative_chunk
+
+            if steps_start >= 0:
+                settings_text = full[steps_start:].lstrip(", ").strip()
+        else:
+            if steps_start >= 0:
+                prompt_chunk = full[:steps_start].strip().rstrip(",")
+                if prompt_chunk:
+                    prompt_text = prompt_chunk
+                settings_text = full[steps_start:].lstrip(", ").strip()
+            else:
+                prompt_text = full
+
+    if not settings_text:
+        settings_text = str(info_text or "").strip()
+
+    if not prompt_text:
+        prompt_text = "(empty)"
+    if not negative_text:
+        negative_text = "(empty)"
+    if not settings_text:
+        settings_text = "(empty)"
+
+    return prompt_text, negative_text, settings_text
+
+
 def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | None = None,
                is_archived: bool = False, is_staged: bool = False, is_trash: bool = False,
                card_extras_mode: str = "Expanded") -> str:
@@ -1138,52 +1267,6 @@ def _card_html(record: dict, endorsed_id=None, disliked_id=None, tags: list | No
     )
 
     details_open = _extras_details_open_attr(card_extras_mode)
-
-    def _split_infotext_sections(info_text: str, prompt_fallback: str, negative_fallback: str):
-        prompt_text = (prompt_fallback or "").strip()
-        negative_text = (negative_fallback or "").strip()
-        settings_text = ""
-
-        full = str(info_text or "").strip()
-        if full:
-            neg_match = re.search(r"(?i)\bNegative\s+prompt\s*:\s*", full)
-            steps_match = re.search(r"(?i)(?:^|[\n,]\s*)(Steps\s*:)", full)
-
-            steps_start = steps_match.start(1) if steps_match else -1
-
-            if neg_match:
-                prompt_chunk = full[:neg_match.start()].strip().rstrip(",")
-                if prompt_chunk:
-                    prompt_text = prompt_chunk
-
-                neg_start = neg_match.end()
-                neg_end = steps_start if steps_start >= 0 and steps_start > neg_start else len(full)
-                negative_chunk = full[neg_start:neg_end].strip().rstrip(",")
-                if negative_chunk:
-                    negative_text = negative_chunk
-
-                if steps_start >= 0:
-                    settings_text = full[steps_start:].lstrip(", ").strip()
-            else:
-                if steps_start >= 0:
-                    prompt_chunk = full[:steps_start].strip().rstrip(",")
-                    if prompt_chunk:
-                        prompt_text = prompt_chunk
-                    settings_text = full[steps_start:].lstrip(", ").strip()
-                else:
-                    prompt_text = full
-
-        if not settings_text:
-            settings_text = str(info_text or "").strip()
-
-        if not prompt_text:
-            prompt_text = "(empty)"
-        if not negative_text:
-            negative_text = "(empty)"
-        if not settings_text:
-            settings_text = "(empty)"
-
-        return prompt_text, negative_text, settings_text
 
     steps = str(record.get("steps", ""))
     cfg_scale = str(record.get("cfg_scale", ""))

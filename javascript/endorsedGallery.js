@@ -2175,6 +2175,30 @@
             const refreshBtn = gradioApp().querySelector('#endgal_refresh_btn');
             if (refreshBtn) refreshBtn.click();
         },
+
+        /**
+         * Gallery -> sidecar reference bridge: pushes an image path into the Krea 2 /
+         * Qwen tab's reference list through its hidden textbox + button (see
+         * add_references_from_bridge in the tab scripts). Stays on the gallery tab;
+         * a banner confirms the add.
+         */
+        addRefTo: function (engine, pathB64) {
+            const prefix = engine === 'krea2' ? 'krea2' : 'qwen';
+            const path = b64Decode(pathB64);
+            if (!path) return;
+            if (!setGradioTextbox(`${prefix}_ref_bridge`, path)) {
+                console.warn('[endorsedGallery] reference bridge not found for', engine);
+                return;
+            }
+            clickGradioBtn(`${prefix}_ref_add_btn`);
+            const name = path.split(/[\\/]/).pop();
+            if (window.webuiBanner && window.webuiBanner.show) {
+                window.webuiBanner.show(
+                    `${prefix === 'krea2' ? 'Krea 2' : 'Qwen'} reference: ${name}`,
+                    { kind: 'success', duration: 2600 },
+                );
+            }
+        },
         undo: function () {
             const entry = actionUndoStack.pop();
             if (!entry) return;

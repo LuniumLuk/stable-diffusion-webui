@@ -766,6 +766,28 @@ def send_model_to_device(m):
         m.to(shared.device)
 
 
+def ensure_model_on_device(m=None):
+    """Move the checkpoint back to the compute device when it was parked on CPU.
+
+    The Qwen/Krea 2 sidecar engine hand-over frees VRAM with unload_model_weights(),
+    which only sends the model to CPU (shared.sd_model stays set). A later A1111
+    generation would then die with "Input type (torch.cuda.HalfTensor) and weight type
+    (torch.HalfTensor) should be the same". Cheap no-op when the model is absent,
+    already on the device, or the compute device itself is CPU.
+    """
+    m = m if m is not None else shared.sd_model
+    if m is None:
+        return False
+    try:
+        parameter = next(m.parameters())
+    except (StopIteration, AttributeError):
+        return False
+    if parameter.device.type == "cpu" and devices.device.type != "cpu":
+        send_model_to_device(m)
+        return True
+    return False
+
+
 def send_model_to_trash(m):
     m.to(device="meta")
     devices.torch_gc()

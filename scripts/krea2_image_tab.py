@@ -88,7 +88,24 @@ def _file_path(item) -> str:
     path = getattr(item, "name", None)
     if isinstance(path, str):
         return path
+    path = getattr(item, "path", None)
+    if isinstance(path, str):
+        return path
     return str(item)
+
+
+def _ref_fingerprint(path: str) -> str:
+    """Content hash used to dedupe bridge-added references ("" when unreadable)."""
+    import hashlib
+
+    try:
+        digest = hashlib.md5()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 16), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
 
 
 def _collect_references(ref_files):
@@ -176,6 +193,71 @@ def run_krea2_generation(prompt_text, negative_text, ref_files, steps, cfg, widt
 
 def clear_references():
     return gr.update(value=[])
+
+
+def add_references_from_bridge(current_refs, payload):
+    """Append reference paths pushed by the gallery "To Krea 2" quick action.
+
+    payload: a JSON list of paths or newline-separated plain paths. Dedupes against the
+    current selection and enforces the reference limit.
+    """
+    import json
+    import os
+
+    raw_refs = list(current_refs) if isinstance(current_refs, (list, tuple)) else ([current_refs] if current_refs else [])
+    # Normalise to plain paths: gr.File hands back tempfile wrappers, which gradio's
+    # Files.postprocess cannot serialise back into a gr.update(...).
+    files = [p for p in (_file_path(item) for item in raw_refs) if p]
+    text = str(payload or "").strip()
+    paths = []
+    if text:
+        try:
+            parsed = json.loads(text)
+            paths = [str(part) for part in parsed] if isinstance(parsed, list) else [str(parsed)]
+        except ValueError:
+            paths = [line.strip() for line in text.splitlines() if line.strip()]
+
+    existing = set(files)
+    existing_names = {os.path.basename(p) for p in files}
+    existing_prints = {_ref_fingerprint(p) for p in files}
+    existing_prints.discard("")
+    added, notes = [], []
+    for raw in paths:
+        path = raw.strip().strip('"')
+        if not path:
+            continue
+        if not os.path.isfile(path):
+            notes.append(f"{os.path.basename(path) or path} (not found)")
+            continue
+        # Stored references are gradio tmp copies, so match by content; two different
+        # images that share a basename are both valid references.
+        fingerprint = _ref_fingerprint(path)
+        if fingerprint and fingerprint in existing_prints:
+            notes.append(f"{os.path.basename(path)} (already added)")
+            continue
+        if not fingerprint and (path in existing or os.path.basename(path) in existing_names):
+            notes.append(f"{os.path.basename(path)} (already added)")
+            continue
+        if len(files) >= KREA2_REF_LIMIT:
+            notes.append(f"{os.path.basename(path)} (limit {KREA2_REF_LIMIT})")
+            continue
+        files.append(path)
+        existing.add(path)
+        existing_names.add(os.path.basename(path))
+        if fingerprint:
+            existing_prints.add(fingerprint)
+        added.append(os.path.basename(path))
+
+    if added:
+        message = f"✅ Added {len(added)} reference(s): " + ", ".join(added[:4])
+        if len(added) > 4:
+            message += f" (+{len(added) - 4} more)"
+    else:
+        message = "⚠️ No reference added."
+    if notes:
+        message += " · skipped: " + "; ".join(notes[:4])
+    message += f"\n\nReferences: {len(files)}/{KREA2_REF_LIMIT} — with references the prompt edits them."
+    return gr.update(value=files), message
 
 
 def cancel_krea2_generation():
@@ -464,6 +546,11 @@ def on_ui_tabs():
         )
         cancel_btn.click(fn=cancel_krea2_generation, inputs=[], outputs=[result_status], show_progress=False)
         clear_refs_btn.click(fn=clear_references, inputs=[], outputs=[refs], show_progress=False)
+
+        # Gallery "To Krea 2" bridge: endorsedGallery.addRefTo pushes a local path here.
+        ref_bridge = gr.Textbox(value="", visible=False, elem_id="krea2_ref_bridge")
+        ref_add_btn = gr.Button("", visible=False, elem_id="krea2_ref_add_btn")
+        ref_add_btn.click(fn=add_references_from_bridge, inputs=[refs, ref_bridge], outputs=[refs, result_status], show_progress=False)
 
     return [(krea2_ui, "Krea 2", "krea2_image_tab")]
 
