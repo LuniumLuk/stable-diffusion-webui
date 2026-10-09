@@ -87,6 +87,12 @@ export async function applyModel(title) {
 }
 
 const QWEN_SIZES = [
+  [384, 384],
+  [512, 512],
+  [512, 768],
+  [768, 512],
+  [384, 512],
+  [512, 384],
   [1024, 1024],
   [1024, 1536],
   [1536, 1024],
@@ -174,7 +180,7 @@ function openQwenParamsSheet() {
     sizePreview,
     el('div', { class: 'chips' }, sizeChips),
     el('div', { class: 'row tight' }, [widthInput, el('span', { text: '\u00D7' }), heightInput]),
-    el('div', { class: 'small muted', text: 'Qwen sizes round to multiples of 32. 1024 is quick; the 2K sizes take minutes.' }),
+    el('div', { class: 'small muted', text: 'Qwen sizes round to multiples of 32. Low-res (384-512) is near-instant; 1024 is quick; the 2K sizes take minutes.' }),
   ]);
   body.append(sizeField);
 

@@ -101,11 +101,11 @@ export function useMetaInText(meta) {
   return true;
 }
 
-/** Qwen outputs are image-only: sent without any parameters and never rated. */
-export function isQwenItem(item) {
+/** None SDXL outputs (qwen + krea2) are image-only: sent without any parameters and never rated. */
+export function isNoneSdxlItem(item) {
   if (!item) return false;
-  if (item.screen === 'qwen' || item.qwen) return true;
-  return /(^|[\\/])outputs[\\/]qwen([\\/]|$)/i.test(String(item.path || ''));
+  if (item.screen === 'qwen' || item.screen === 'krea2' || item.qwen || item.krea2) return true;
+  return /(^|[\\/])outputs[\\/](qwen|krea2)([\\/]|$)/i.test(String(item.path || ''));
 }
 
 /** Image Maker outputs are image-only too: sent without any parameters and never rated. */
@@ -127,7 +127,7 @@ export function openResultViewer(result, { list = null, index = -1, extraActions
 
   const show = () => {
     const item = items[position];
-    const imageOnly = isQwenItem(item) || isImageMakerItem(item);
+    const imageOnly = isNoneSdxlItem(item) || isImageMakerItem(item);
     const extras = typeof extraActions === 'function' ? extraActions(item) : extraActions;
     const actions = [
       ...extras,

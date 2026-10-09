@@ -13,6 +13,9 @@ REM   - Models (Q4_K_M DiT + Qwen3VL-8B Q4_K_M text encoder + VAE)
 REM     live in models\Qwen-Image-2.1\.
 REM   - First run loads ~10GB of weights from disk; keep the window open.
 REM   - The WebUI tab "Qwen-Image 2.1" can start/stop this server.
+REM   - EasyCache (--cache-mode easycache threshold=0.15) adaptively skips
+REM     redundant DiT steps: ~1.8x faster sampling; drop the two cache flags
+REM     for exact-step output.
 REM   - Serves the patched frontend (frontend\index.html): every completed
 REM     generation is auto-saved as JPEG to outputs\qwen\<date>\<hh-mm-ss>\<n>.jpg
 REM     by save_receiver.py (started below, port 7863).
@@ -34,5 +37,6 @@ if exist "%SD_CPP%\save_receiver.py" start "" /b "%SCRIPT_DIR%.venv\Scripts\pyth
   --llm_vision "%MODELS%\text_encoders\mmproj-Qwen3VL-8B-Instruct-F16.gguf" ^
   --cfg-scale 6.0 --sampling-method euler ^
   --diffusion-fa --vae-tiling ^
+  --cache-mode easycache --cache-option "threshold=0.15" ^
   --serve-html-path "%SD_CPP%\frontend\index.html" ^
   --listen-ip 127.0.0.1 --listen-port 7862 %*

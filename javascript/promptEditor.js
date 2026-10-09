@@ -25,7 +25,7 @@
 (function () {
     'use strict';
 
-    const HOST_IDS = ['txt2img_prompt', 'txt2img_neg_prompt', 'img2img_prompt', 'img2img_neg_prompt', 'qwen_prompt', 'qwen_neg_prompt'];
+    const HOST_IDS = ['txt2img_prompt', 'txt2img_neg_prompt', 'img2img_prompt', 'img2img_neg_prompt', 'qwen_prompt', 'qwen_neg_prompt', 'krea2_prompt', 'krea2_neg_prompt'];
     const LS_MODE = 'pedit.mode';           // 'chips' | 'text'
     const LS_STEP = 'pedit.step';           // weight step, default '0.05'
     const LS_RECENT = 'pedit.recent';       // MRU keyword list (JSON array)

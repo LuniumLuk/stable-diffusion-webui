@@ -31,7 +31,10 @@ SAVE_RECEIVER = os.path.join(_SD_CPP_DIR, "save_receiver.py")
 SAVE_PORT = int(os.environ.get("QWEN_SAVE_PORT", "7863"))
 
 # Verified on RTX 5070 Ti 16GB: DiT stays fully in VRAM (fast sampling),
-# VAE tiling avoids the 1024px decode OOM, ~50s per 1024x1024 / 20 steps.
+# VAE tiling avoids the 1024px decode OOM.  EasyCache (adaptive DiT step skipping,
+# threshold 0.15) cuts sampling ~1.8x -> ~27s per 1024x1024 / 20 steps; set
+# QWEN_CACHE_MODE=off to disable it, QWEN_CACHE_OPTION=threshold=<x> to tune
+# (0.10 conservative, 0.25 aggressive).
 # --llm_vision (Qwen3-VL mmproj) is required for reference-image editing.
 _SERVER_ARGS = [
     "--diffusion-model", DIFFUSION_MODEL,
@@ -47,6 +50,13 @@ _SERVER_ARGS = [
     "--listen-port", str(_SERVER_PORT),
 ]
 
+_CACHE_MODE = (os.environ.get("QWEN_CACHE_MODE") or "easycache").strip()
+_CACHE_OPTION = (os.environ.get("QWEN_CACHE_OPTION") or "threshold=0.15").strip()
+if _CACHE_MODE.lower() not in ("", "off", "none", "0"):
+    _SERVER_ARGS += ["--cache-mode", _CACHE_MODE]
+    if _CACHE_OPTION:
+        _SERVER_ARGS += ["--cache-option", _CACHE_OPTION]
+
 _process = None
 _receiver_process = None
 _lock = threading.Lock()
@@ -60,8 +70,19 @@ def get_server_url() -> str:
     return _SERVER_URL
 
 
+def get_log_path() -> str:
+    """Path of the sd-server stdout/stderr log (progress bars are parsed from it)."""
+    return _LOG_PATH
+
+
 def _is_process_alive(proc) -> bool:
     return proc is not None and proc.poll() is None
+
+
+def is_managed() -> bool:
+    """True when THIS process manages a live sd-server child (no network probe)."""
+    with _lock:
+        return _is_process_alive(_process)
 
 
 def _http_ok() -> bool:
@@ -73,8 +94,10 @@ def _http_ok() -> bool:
 
 
 def _port_open(host: str, port: int) -> bool:
+    # Loopback connects answer in microseconds; a 0.5s cap keeps probes cheap on
+    # machines where a closed port reports "refused" only after a ~2s delay.
     try:
-        with socket.create_connection((host, port), timeout=1.0):
+        with socket.create_connection((host, port), timeout=0.5):
             return True
     except OSError:
         return False
@@ -133,8 +156,10 @@ def get_status() -> dict:
         managed = _is_process_alive(_process)
         pid = _process.pid if managed else None
 
-    reachable = _http_ok()
+    # Cheap TCP probe first; only a listening port can answer HTTP (see
+    # krea2_image_manager.get_status for the delayed-refused rationale).
     port_open = _port_open(_SERVER_HOST, _SERVER_PORT)
+    reachable = _http_ok() if port_open else False
     mode = "managed" if managed else "external" if reachable else "stopped"
     missing = _missing_files()
 
@@ -146,16 +171,24 @@ def get_status() -> dict:
         "port_open": port_open,
         "mode": mode,
         "missing_files": missing,
-        "save_receiver": _receiver_port_open(),
+        # When nothing is up the receiver state is informational only: skip the
+        # dead-port probe and answer from local state instead.
+        "save_receiver": _receiver_port_open() if (port_open or managed) else _is_process_alive(_receiver_process),
     }
 
 
-def _wait_until_ready(timeout: float = 300.0) -> bool:
+def _wait_until_ready(proc, timeout: float = 300.0) -> bool:
     end = time.time() + timeout
     while time.time() < end:
         if _http_ok():
             return True
-        time.sleep(1.0)
+        if proc is not None and proc.poll() is not None:
+            # Stopped externally mid-startup (an engine switch / another job released
+            # the server while it was still loading): bail out now instead of probing
+            # a dead port for the full timeout (that left callers' "starting" flag
+            # stuck for minutes - found via py-spy dump 2026-10-09).
+            return False
+        time.sleep(0.5)
     return False
 
 
@@ -169,7 +202,7 @@ def start_server() -> dict:
             status["action"] = "noop"
             return status
 
-    if _http_ok():
+    if _port_open(_SERVER_HOST, _SERVER_PORT) and _http_ok():
         status = get_status()
         status["message"] = "Qwen-Image 2.1 server is already running externally."
         status["action"] = "noop"
@@ -208,7 +241,7 @@ def start_server() -> dict:
     with _lock:
         _process = proc
 
-    ready = _wait_until_ready(timeout=300.0)
+    ready = _wait_until_ready(proc, timeout=300.0)
     status = get_status()
     status["action"] = "start"
     if ready:

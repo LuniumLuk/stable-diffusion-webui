@@ -129,6 +129,35 @@
     return minutes > 0 ? minutes + "m " + String(total % 60).padStart(2, "0") + "s" : total + "s";
   }
 
+  function qwenEtaLabel(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    if (total < 60) return "~" + total + "s";
+    if (total < 3600) return "~" + Math.floor(total / 60) + "m " + String(total % 60).padStart(2, "0") + "s";
+    return "~" + Math.floor(total / 3600) + "h " + String(Math.floor((total % 3600) / 60)).padStart(2, "0") + "m";
+  }
+
+  // Sampling / decoding sub-phase text: the sd-server has no progress API, so the
+  // bridge parses the step bars out of its stdout log and the job endpoint exposes
+  // them, plus the bridge's learned ETA (current image and whole batch).
+  function qwenPhaseText(data) {
+    if (data.phase === "generating") {
+      let text = "";
+      if (data.vae_step && data.vae_steps) text = "decoding " + data.vae_step + "/" + data.vae_steps;
+      else if (data.sampling_step && data.sampling_steps) text = "sampling " + data.sampling_step + "/" + data.sampling_steps;
+      if (text) {
+        if (data.eta_current != null) text += " - ETA " + qwenEtaLabel(data.eta_current);
+        const batch = Number(data.batch_total) || 1;
+        if (batch > 1) {
+          const image = Math.min(batch, (Number(data.images_done) || 0) + 1);
+          text += " - image " + image + "/" + batch;
+          if (data.eta_total != null) text += " - total ETA " + qwenEtaLabel(data.eta_total);
+        }
+        return text;
+      }
+    }
+    return QWEN_PHASE_LABELS[data.phase] || "qwen...";
+  }
+
   // Live phase line for the native panel: the Generate callback blocks until the job is
   // done, so the phase is polled from /mlite/api/qwen/job (only one qwen job can run).
   function setupQwenTaskStatus() {
@@ -162,7 +191,7 @@
         if (data && data.active) {
           sawActive = true;
           const retry = data.attempt > 1 ? " · retry " + data.attempt : "";
-          render((QWEN_PHASE_LABELS[data.phase] || "⏳ qwen…") + ' <span class="muted">(' + qwenElapsed(data.elapsed) + retry + ")</span>", false);
+          render(qwenPhaseText(data) + ' <span class="muted">(' + qwenElapsed(data.elapsed) + retry + ")</span>", false);
           return;
         }
         if (sawActive) {

@@ -18,6 +18,12 @@ from modules import mobile_lite, qwen_image_manager, script_callbacks
 QWEN_REF_LIMIT = 10
 QWEN_REF_MAX_SIDE = 1600  # bigger references are downscaled before upload
 QWEN_SIZES = [
+    ("384 1:1", 384, 384),
+    ("512 1:1", 512, 512),
+    ("512 2:3", 512, 768),
+    ("512 3:2", 768, 512),
+    ("384 3:4", 384, 512),
+    ("512 4:3", 512, 384),
     ("1K 1:1", 1024, 1024),
     ("1K 2:3", 1024, 1536),
     ("1K 3:2", 1536, 1024),
@@ -25,6 +31,8 @@ QWEN_SIZES = [
     ("2K 2:3", 1696, 2528),
     ("2K 3:2", 2528, 1696),
 ]
+# The low-res group renders on its own row (the strip wraps badly past ~6 buttons).
+QWEN_LOW_RES_COUNT = 6
 
 
 def _encode_reference(path: str) -> str:
@@ -388,10 +396,16 @@ def on_ui_tabs():
                 negative = gr.Textbox(label="Negative prompt", lines=2, placeholder="things to avoid (optional)", elem_id="qwen_neg_prompt")
 
                 with gr.Row():
-                    preset_buttons = [
+                    preset_buttons_low = [
                         gr.Button(label, size="sm", elem_id=f"qwen_size_{preset_width}x{preset_height}")
-                        for label, preset_width, preset_height in QWEN_SIZES
+                        for label, preset_width, preset_height in QWEN_SIZES[:QWEN_LOW_RES_COUNT]
                     ]
+                with gr.Row():
+                    preset_buttons_high = [
+                        gr.Button(label, size="sm", elem_id=f"qwen_size_{preset_width}x{preset_height}")
+                        for label, preset_width, preset_height in QWEN_SIZES[QWEN_LOW_RES_COUNT:]
+                    ]
+                preset_buttons = preset_buttons_low + preset_buttons_high
 
                 with gr.Row():
                     width = gr.Slider(minimum=64, maximum=4096, step=32, value=1024, label="Width", elem_id="qwen_width")

@@ -715,6 +715,8 @@
             { ids: ['img2img_neg_prompt', 'img2img_negative_prompt'], key: 'Negative prompt' },
             { ids: ['qwen_prompt'], key: 'Prompt' },
             { ids: ['qwen_neg_prompt'], key: 'Negative prompt' },
+            { ids: ['krea2_prompt'], key: 'Prompt' },
+            { ids: ['krea2_neg_prompt'], key: 'Negative prompt' },
         ];
 
         hosts.forEach((entry) => {

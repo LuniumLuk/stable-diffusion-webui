@@ -3466,6 +3466,15 @@ body.resizing .resize-handle {
     border-color: #fbbf24;
     box-shadow: 0 0 0 2px #fbbf2422;
 }
+
+/* ---- None SDXL (qwen + krea2) gallery cards ---- */
+.endgal-nonesdxl-card {
+    border-color: #334155;
+}
+.endgal-nonesdxl-card:hover {
+    border-color: #2dd4bf;
+    box-shadow: 0 0 0 2px #2dd4bf22;
+}
 .endgal-btn-composer {
     background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
     border-color: #818cf8;
@@ -4711,6 +4720,22 @@ body.resizing .resize-handle {
 }
 
 #qwen_task_status .qwen-task-line .muted {
+    opacity: 0.65;
+}
+
+/* ==== Krea 2 desktop tab (scripts/krea2_image_tab.py) ==== */
+
+#krea2_task_status .krea2-task-line {
+    font-size: 12.5px;
+    padding: 2px 0 4px;
+    opacity: 0.92;
+}
+
+#krea2_task_status .krea2-task-line.err {
+    color: #f87171;
+}
+
+#krea2_task_status .krea2-task-line .muted {
     opacity: 0.65;
 }
 

@@ -442,6 +442,74 @@ def _fetch_image_maker_records(query: str, page: int, page_size: int):
     return rows, total
 
 
+# ---- None SDXL (qwen + krea2 sidecar outputs) ----
+
+_NONE_SDXL_ROOT = os.path.join(_ROOT_DIR, "outputs")
+_NONE_SDXL_DIRS = ("qwen", "krea2")
+
+
+def _none_sdxl_rel_path(path: str) -> str:
+    """Return the outputs-relative path (posix separators) for display/search."""
+    try:
+        rel = os.path.relpath(path, _NONE_SDXL_ROOT)
+    except Exception:
+        rel = path
+    return str(rel).replace(chr(92), "/")
+
+
+def _none_sdxl_item_key(path: str) -> str:
+    """Archive key for a qwen/krea2 output (matches the SD Lite qwen key scheme).
+
+    Every run writes 000.png, so the key embeds the full outputs-relative path;
+    the prefix marks the engine (qwen- / krea2-).
+    """
+    rel = os.path.relpath(path, _ROOT_DIR).replace("\\", "/")
+    parts = [part for part in rel.split("/") if part]
+    parts[-1] = os.path.splitext(parts[-1])[0]
+    source = "krea2" if "/outputs/krea2/" in f"/{rel.lower()}/" else "qwen"
+    return source + "-" + "-".join(part.lower() for part in parts)
+
+
+def _fetch_none_sdxl_records(query: str, page: int, page_size: int):
+    """Return (rows, total) for the None SDXL mode: outputs/qwen + outputs/krea2 scans."""
+    files = []
+    for sub in _NONE_SDXL_DIRS:
+        base = os.path.join(_NONE_SDXL_ROOT, sub)
+        if not os.path.isdir(base):
+            continue
+        for root, _dirs, fnames in os.walk(base):
+            for fname in fnames:
+                if not fname.lower().endswith(_IMAGE_MAKER_EXTS):
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                except OSError:
+                    mtime = 0.0
+                files.append((fpath, mtime))
+
+    files.sort(key=lambda item: item[1], reverse=True)
+
+    q = (query or "").strip().lower()
+    if q:
+        files = [item for item in files if q in _none_sdxl_rel_path(item[0]).lower()]
+
+    total = len(files)
+    offset = (page - 1) * page_size
+    rows = []
+    for fpath, mtime in files[offset: offset + page_size]:
+        rows.append({
+            "path": fpath,
+            "file_mtime": mtime,
+            "prompt": "",
+            "seed": "",
+            "sampler": "",
+            "model_name": "krea2" if "/krea2/" in fpath.replace("\\", "/").lower() else "qwen",
+        })
+
+    return rows, total
+
+
 def _extras_details_open_attr(card_extras_mode: str) -> str:
     mode = (card_extras_mode or "Expanded").strip().lower()
     return "" if mode.startswith("f") else " open"
@@ -552,6 +620,68 @@ def _image_maker_card_html(record: dict, card_extras_mode: str = "Expanded") -> 
 
     return f"""
 <div class="endgal-card endgal-imagemaker-card">
+  <div class="endgal-thumb">{thumb_html}{date_overlay}{thumb_action_stack}</div>
+    <details class="endgal-card-extra"{details_open}>
+                <summary class="endgal-card-extra-summary">Details</summary>
+        <div class="endgal-body">
+            <div class="endgal-prompt">{_html.escape(rel_path)}</div>
+            <div class="endgal-date">{_html.escape(date)}</div>
+        </div>
+    </details>
+</div>
+"""
+
+
+def _none_sdxl_card_html(record: dict, is_archived: bool = False, card_extras_mode: str = "Expanded") -> str:
+    import datetime as _dt
+    path = record.get("path", "")
+    mtime = record.get("file_mtime")
+    date = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else ""
+    thumb = _get_thumb(path) if path else ""
+    preview_url = _get_preview_thumb(path) if path else ""
+    orig_url = _file_url(path)
+    path_b64 = _b64(path)
+    rel_path = _none_sdxl_rel_path(path)
+    item_key = _none_sdxl_item_key(path) if path else ""
+
+    thumb_html = (
+        f'<img src="{thumb}" alt="qwen or krea2 image" loading="lazy" '
+        f'data-orig="{orig_url}" '
+        f'data-preview="{preview_url}" '
+        f'onclick="endorsedGallery.previewImage(this.dataset.preview || this.dataset.orig || this.src)" />'
+    ) if thumb else '<div class="endgal-nothumb">No preview</div>'
+
+    date_overlay = f'<div class="endgal-date endgal-date-overlay">{_html.escape(date)}</div>' if date else ""
+
+    archive_action = _b64(json.dumps({"type": "unarchive" if is_archived else "archive", "item_key": item_key}))
+    archive_label = "&#128228;" if is_archived else "&#128230;"
+    archive_class = "endgal-archive active" if is_archived else "endgal-archive"
+    archive_title = "unarchive" if is_archived else "archive"
+
+    # Image-only quick actions (these engines' params live in their own infotext, so
+    # sends carry no prompt/params) + archive toggle.  Emoji as numeric HTML entities:
+    # keeps the source ASCII (edit-tool corruption guard, see tmp/fix_gallery_emoji.py).
+    thumb_action_stack = (
+        '<div class="endgal-thumb-actions">'
+        '<button class="endgal-btn-send2img endgal-btn-composer endgal-act-compose" '
+        'data-icon="&#129513;" data-hint="Composer" '
+        'title="Send to Composer as background (image only)" '
+        f'onclick="endorsedGallery.sendToComposer(\'{path_b64}\', \'\')">&#129513;</button>'
+        '<button class="endgal-btn-send2img endgal-act-i2i" data-icon="&#128444;" data-hint="Send to img2img" '
+        'title="send to img2img" '
+        f'onclick="endorsedGallery.sendTo(\'\', \'img2img\', \'{path_b64}\')">&#128444;</button>'
+        '<button class="endgal-btn-send2img endgal-act-inpaint" data-icon="&#127912;" data-hint="Send to Inpaint" '
+        'title="send to inpaint" '
+        f'onclick="endorsedGallery.sendToInpaint(\'\', \'{path_b64}\')">&#127912;</button>'
+        f'<button class="{archive_class} endgal-act-archive" data-hint="{archive_title}" title="{archive_title}" '
+        f'onclick="endorsedGallery.action(\'{archive_action}\')">{archive_label}</button>'
+        '</div>'
+    )
+
+    details_open = _extras_details_open_attr(card_extras_mode)
+
+    return f"""
+<div class="endgal-card endgal-nonesdxl-card">
   <div class="endgal-thumb">{thumb_html}{date_overlay}{thumb_action_stack}</div>
     <details class="endgal-card-extra"{details_open}>
                 <summary class="endgal-card-extra-summary">Details</summary>
@@ -1202,6 +1332,8 @@ def _fetch_mode_records(mode: str, query: str, page: int, page_size: int, date_f
         rows, total = _fetch_composed_records(query, page, page_size)
     elif mode == "📷 Image Maker":
         rows, total = _fetch_image_maker_records(query, page, page_size)
+    elif mode == "\U0001F6AB None SDXL":
+        rows, total = _fetch_none_sdxl_records(query, page, page_size)
     elif mode == "⬜ Unrated":
         if hasattr(endorsement_db, "count_unrated") and hasattr(endorsement_db, "search_unrated"):
             total = _call_db("count_unrated", query, since_ts=since_ts)
@@ -1321,6 +1453,22 @@ def render_gallery(mode: str, query: str, page: int, page_size: int, date_filter
         cards = [_image_maker_card_html(rec, card_extras_mode=card_extras_mode) for rec in rows]
         header = f'<div class="endgal-count">{total} image maker image(s)</div>'
         grid = f'<div class="endgal-grid endgal-imagemaker-grid {size_class}" style="--endgal-card-min:{card_min}px">' + "".join(cards) + "</div>"
+        page_info = f"{total} items · page {page}/{pages}"
+        return header + grid, page_info, page, is_last_page
+
+    if mode == "\U0001F6AB None SDXL":
+        page_keys = [_none_sdxl_item_key(rec["path"]) for rec in rows if rec.get("path")]
+        archived_keys = endorsement_db.get_archived_item_keys(page_keys) if hasattr(endorsement_db, "get_archived_item_keys") else set()
+        cards = [
+            _none_sdxl_card_html(
+                rec,
+                is_archived=(_none_sdxl_item_key(rec["path"]) in archived_keys) if rec.get("path") else False,
+                card_extras_mode=card_extras_mode,
+            )
+            for rec in rows
+        ]
+        header = f'<div class="endgal-count">{total} qwen / krea2 image(s)</div>'
+        grid = f'<div class="endgal-grid endgal-nonesdxl-grid {size_class}" style="--endgal-card-min:{card_min}px">' + "".join(cards) + "</div>"
         page_info = f"{total} items · page {page}/{pages}"
         return header + grid, page_info, page, is_last_page
 
@@ -1684,6 +1832,14 @@ def get_gallery_statistics() -> str:
 
     unrated = max(0, total_gen - endorsed - disliked - archived - staged)
 
+    none_sdxl_count = 0
+    for _sub in ("qwen", "krea2"):
+        _base = os.path.join(_ROOT_DIR, "outputs", _sub)
+        if not os.path.isdir(_base):
+            continue
+        for _root, _dirs, _files in os.walk(_base):
+            none_sdxl_count += sum(1 for f in _files if f.lower().endswith(_IMAGE_MAKER_EXTS))
+
     rows = [
         ("📸 Total indexed images", str(total_gen)),
         ("💾 Origin files on disk", f"{origins_on_disk} ({_format_bytes(origins_total_bytes)})"),
@@ -1695,6 +1851,7 @@ def get_gallery_statistics() -> str:
         ("👎 Disliked", str(disliked)),
         ("📦 Archived", str(archived)),
         ("🗑 Trash", str(trash)),
+        ("\U0001F6AB None SDXL (qwen + krea2)", str(none_sdxl_count)),
         ("⬜ Unrated", str(unrated)),
     ]
 
@@ -1728,7 +1885,7 @@ def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as gallery_ui:
         with gr.Row(elem_id="endgal_mode_row"):
             mode_radio = gr.Radio(
-                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📷 Image Maker", "📦 Archived", "👎 Disliked", "🗑 Trash"],
+                choices=["⭐ Endorsed", "📌 Staged", "🖼 All Generated", "⬜ Unrated", "🎨 Composed", "📷 Image Maker", "\U0001F6AB None SDXL", "📦 Archived", "👎 Disliked", "🗑 Trash"],
                 value="⭐ Endorsed",
                 label="",
                 elem_id="endgal_mode_radio",

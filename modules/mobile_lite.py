@@ -106,6 +106,26 @@ _qwen_job = {
     "error": None,
 }
 
+# ---- Krea 2 sidecar state ---------------------------------------------------
+# Same single-GPU hand-over rules as the Qwen bridge: SDXL, Qwen and Krea 2 cannot
+# hold the 16GB of VRAM at the same time, so each engine frees the others first.
+_KREA2_JOB_TIMEOUT = 1800.0  # 8-step turbo jobs are fast; big canvases / retries get room
+_KREA2_JOB_RETRIES = 2  # extra attempts after a transient no-results failure
+_KREA2_RETRY_DELAY = 3.0  # seconds between attempts (lets the sd-server model manager settle)
+_KREA2_RETRY_TILE_SIZE = 16  # retries run the VAE in smaller tiles (asks for less device memory)
+
+_krea2_lock = threading.Lock()  # serialises sd-server starts (prepare thread vs job thread)
+_krea2_state_lock = threading.RLock()  # guards _krea2_starting / _krea2_job
+_krea2_starting = False  # an engine-switch prepare is loading the server in the background
+_krea2_job = {
+    "task_id": None,
+    "phase": None,  # preparing | queued | generating | saving | done | failed
+    "started": 0.0,
+    "server_job": None,
+    "attempt": 1,  # >1 while a failed attempt is being retried
+    "error": None,
+}
+
 # Fallbacks for when ui-config.json is missing; the desktop UI keeps its live
 # defaults there, so the lite UI opens with the same values the Gradio UI has.
 _MASKED_CONTENT = {"fill": 0, "original": 1, "latent noise": 2, "latent nothing": 3}
@@ -608,9 +628,10 @@ def _run_job(payload: dict, tab: str) -> dict:
 
     progress_module.add_task_to_queue(task_id)
     with queue_lock:
-        # single GPU: the Qwen sidecar (~10GB) must release the VRAM before A1111 runs
+        # single GPU: the Qwen / Krea 2 sidecars (~10GB+) must release the VRAM before A1111 runs
         _qwen_stop_server()
-        # ... and a preceding qwen job left the checkpoint on the CPU
+        _krea2_stop_server()
+        # ... and a preceding sidecar job left the checkpoint on the CPU
         _ensure_sdxl_ready()
         progress_module.start_task(task_id)
         # Start time is stamped after the queue lock is held: a previous job may still have
@@ -737,8 +758,211 @@ def _qwen_escalate_tiles(body: dict) -> None:
     body["vae_tiling_params"] = tiling
 
 
+def _log_size(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _read_text_since(path: str, mark: int) -> str:
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(mark)
+            return handle.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+# sd.cpp progress bars: "|=====>  | 3/8 - 1.29it/s"; weight loads use GB/s and never match.
+_SDCPP_BAR_RE = re.compile(r"\|\s*[#=>\s]*\s*\|\s*(\d+)/(\d+) - ([\d.]+)(it/s|s/it)")
+
+
+def _sdcpp_step_progress(segment: str, steps: int) -> dict:
+    """Sampling-step / VAE-tile progress parsed from an sd.cpp log segment.
+
+    The native job API carries no progress fields, so the server's stdout log is
+    the only source (it exists when the WebUI manages the server; a manually
+    launched server logs to its own console and yields no steps).  Bars matching
+    the step count are sampling; a later sampling bar clears the decode state so
+    batch generations track the image that is currently sampling.
+    """
+    sampling_step = None
+    vae_step = vae_total = None
+    for match in _SDCPP_BAR_RE.finditer(segment or ""):
+        done, total = int(match.group(1)), int(match.group(2))
+        if steps > 0 and total == steps:
+            sampling_step = done
+            vae_step = vae_total = None
+        elif sampling_step is not None:
+            # bars after the sampling bar are VAE tiles.  Before it, non-step
+            # bars belong to the conditioner (reference-image token encoding,
+            # e.g. "k/961" vision passes) - showing those as decoding would
+            # confuse the ref-edit flow, so they are skipped.
+            vae_step, vae_total = done, total
+    return {
+        "sampling_step": sampling_step,
+        "sampling_steps": steps if steps > 0 else None,
+        "vae_step": vae_step,
+        "vae_steps": vae_total,
+    }
+
+
+def _sidecar_steps_summary(job: dict) -> tuple:
+    """(text suffix, progress percent) for the parsed sampling / decoding steps."""
+    sampling_step = int(job.get("sampling_step") or 0)
+    sampling_steps = int(job.get("sampling_steps") or 0)
+    vae_step = int(job.get("vae_step") or 0)
+    vae_steps = int(job.get("vae_steps") or 0)
+    detail = ""
+    if vae_step and vae_steps:
+        detail = f" \u00B7 decoding {vae_step}/{vae_steps}"
+    elif sampling_step and sampling_steps:
+        detail = f" \u00B7 sampling {sampling_step}/{sampling_steps}"
+    percent = 0.0
+    if sampling_step and sampling_steps:
+        percent = 90.0 * min(1.0, sampling_step / sampling_steps)
+    if vae_step and vae_steps:
+        percent = max(percent, 90.0 + 9.0 * min(1.0, vae_step / vae_steps))
+    return detail, percent
+
+
+def _format_eta(seconds) -> str:
+    """Compact duration for ETA labels: '42s', '1m 20s', '1h 05m'."""
+    total = max(0, int(round(float(seconds or 0))))
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        return f"{total // 60}m {total % 60:02d}s"
+    return f"{total // 3600}h {(total % 3600) // 60:02d}m"
+
+
+def _sidecar_eta_summary(job: dict) -> tuple:
+    """(eta text suffix for the generating phase, total ETA seconds or None)."""
+    eta_current = job.get("eta_current")
+    eta_total = job.get("eta_total")
+    batch_total = int(job.get("batch_total") or 1)
+    images_done = int(job.get("images_done") or 0)
+    note = ""
+    if isinstance(eta_current, (int, float)):
+        note += f" \u00B7 ETA ~{_format_eta(eta_current)}"
+    if batch_total > 1:
+        note += f" \u00B7 image {min(batch_total, images_done + 1)}/{batch_total}"
+        if isinstance(eta_total, (int, float)):
+            note += f" \u00B7 total ETA ~{_format_eta(eta_total)}"
+    total = eta_total if isinstance(eta_total, (int, float)) else None
+    return note, total
+
+
+class _StepEta:
+    """Wall-clock ETA for a sidecar job, learned from the parsed step bars.
+
+    The sd-server reports no per-step timing, so each poll feeds the parsed
+    progress into this tracker: per-step and per-VAE-tile durations are sampled
+    as exponential moving averages (deltas between polls), and a completed VAE
+    pass is measured to time the decodes.  A smaller sampling step count than
+    the previous poll marks the next image of a batch; remaining images reuse
+    the current round's numbers, which is right for same-settings batches.
+    """
+
+    def __init__(self, steps: int, batch: int) -> None:
+        self.steps = max(0, int(steps))
+        self.batch = max(1, int(batch))
+        self.rounds_done = 0
+        self.step_rate = 0.0   # seconds per sampling step (EMA)
+        self.tile_rate = 0.0   # seconds per VAE tile (EMA)
+        self.decode_cost = 0.0  # measured wall time of the last full VAE pass
+        self._last_sampling = 0
+        self._step_ref = None   # (step, monotonic) of the last sampled delta
+        self._tile_ref = None
+        self._decode_start = 0.0
+
+    @staticmethod
+    def _ema(previous: float, sample: float) -> float:
+        return sample if previous <= 0 else previous * 0.6 + sample * 0.4
+
+    def _fields(self, eta_current, eta_total) -> dict:
+        def clean(value):
+            return round(max(0.0, float(value)), 1) if isinstance(value, (int, float)) else None
+
+        return {
+            "eta_current": clean(eta_current),
+            "eta_total": clean(eta_total),
+            "images_done": self.rounds_done,
+            "batch_total": self.batch,
+        }
+
+    def update(self, progress: dict, now: float) -> dict:
+        """Fold one parsed progress snapshot in; returns the job ETA fields."""
+        sampling = int(progress.get("sampling_step") or 0)
+        vae = int(progress.get("vae_step") or 0)
+        vae_total = int(progress.get("vae_steps") or 0)
+
+        # a smaller step count than before = the next batch image started sampling
+        if sampling and self._last_sampling and sampling < self._last_sampling:
+            self.rounds_done += 1
+            self._step_ref = None
+            self._tile_ref = None
+            self._decode_start = 0.0
+        if sampling:
+            self._last_sampling = sampling
+        if not vae:
+            self._decode_start = 0.0  # new sampling round clears the decode state
+
+        if sampling:
+            if self._step_ref is None:
+                self._step_ref = (sampling, now)
+            elif sampling > self._step_ref[0]:
+                delta = sampling - self._step_ref[0]
+                self.step_rate = self._ema(self.step_rate, (now - self._step_ref[1]) / delta)
+                self._step_ref = (sampling, now)
+
+        if vae:
+            if self._decode_start == 0.0:
+                self._decode_start = now
+            if self._tile_ref is None:
+                self._tile_ref = (vae, now)
+            elif vae > self._tile_ref[0]:
+                delta = vae - self._tile_ref[0]
+                self.tile_rate = self._ema(self.tile_rate, (now - self._tile_ref[1]) / delta)
+                self._tile_ref = (vae, now)
+            if vae_total and vae >= vae_total and self._decode_start:
+                self.decode_cost = max(0.1, now - self._decode_start)
+                self._decode_start = 0.0
+
+        return self.summary(sampling, vae, vae_total, now)
+
+    def summary(self, sampling: int, vae: int, vae_total: int, now: float) -> dict:
+        decode_est = self.decode_cost
+        if decode_est <= 0 and self.tile_rate and vae_total:
+            decode_est = self.tile_rate * vae_total
+
+        eta_current = None
+        if vae and vae_total:
+            # decoding: prefer the measured full-decode time, else extrapolate
+            if self.decode_cost > 0:
+                eta_current = self.decode_cost * (1.0 - vae / vae_total)
+            elif self.tile_rate:
+                eta_current = self.tile_rate * (vae_total - vae)
+            elif self._decode_start:
+                elapsed = max(0.0, now - self._decode_start)
+                eta_current = elapsed * (vae_total - vae) / vae
+        elif sampling and self.steps and self.step_rate:
+            eta_current = self.step_rate * (self.steps - sampling) + decode_est
+
+        if eta_current is None:
+            return self._fields(None, None)
+        per_image = (self.step_rate * self.steps if self.step_rate else 0.0) + decode_est
+        remaining = max(0, self.batch - self.rounds_done - 1)
+        return self._fields(eta_current, eta_current + remaining * per_image)
+
+
 def _qwen_run_server_job(body: dict, attempt: int) -> tuple:
     """Submit one job to the sd-server and poll it to completion; (status, failure)."""
+    steps = int((body.get("sample_params") or {}).get("sample_steps") or 0)
+    eta = _StepEta(steps, int(body.get("batch_count") or 1))
+    log_path = _qwen_manager().get_log_path()
+    log_mark = _log_size(log_path)
     submitted = _qwen_http("POST", "/sdcpp/v1/img_gen", body)
     server_job = submitted.get("id") or submitted.get("job_id")
     if not server_job:
@@ -748,7 +972,7 @@ def _qwen_run_server_job(body: dict, attempt: int) -> tuple:
     deadline = time.time() + _QWEN_JOB_TIMEOUT
     status = None
     while time.time() < deadline:
-        time.sleep(1.0)
+        time.sleep(0.5)  # snappier completion detection; the GETs are cheap
         try:
             status = _qwen_http("GET", f"/sdcpp/v1/jobs/{server_job}", timeout=10.0)
         except Exception:
@@ -758,7 +982,12 @@ def _qwen_run_server_job(body: dict, attempt: int) -> tuple:
         state_name = str(status.get("status") or "")
         if state_name in ("completed", "failed", "cancelled"):
             break
-        _qwen_set_job(phase="queued" if state_name in ("queued", "pending") else "generating")
+        progress = _sdcpp_step_progress(_read_text_since(log_path, log_mark), steps)
+        _qwen_set_job(
+            phase="queued" if state_name in ("queued", "pending") else "generating",
+            **progress,
+            **eta.update(progress, time.monotonic()),
+        )
 
     if status is None:
         return None, "the qwen job timed out"
@@ -840,10 +1069,15 @@ def _qwen_start_server() -> tuple:
 
 
 def _qwen_stop_server() -> None:
-    """Stop the managed sd-server (frees ~10GB VRAM). External servers are left alone."""
+    """Stop the managed sd-server (frees ~10GB VRAM). External servers are left alone.
+
+    Checks the local manage flag, not a status probe: on machines where a closed
+    loopback port reports "refused" only after ~2s, probing a dead sidecar here
+    put seconds of pure overhead into every job (see krea2 profiling 2026-10-09).
+    """
     try:
         manager = _qwen_manager()
-        if manager.get_status().get("managed"):
+        if manager.is_managed():
             manager.stop_server()
     except Exception:
         pass
@@ -956,22 +1190,33 @@ def _qwen_progress(task_id: str):
     elapsed = max(0.0, time.time() - (job.get("started") or time.time()))
     attempt = int(job.get("attempt") or 1)
     retry_note = f" \u00B7 retry {attempt}" if attempt > 1 else ""
+    detail, percent = _sidecar_steps_summary(job)
+    eta_note, eta_total = _sidecar_eta_summary(job) if phase == "generating" else ("", None)
+    if phase != "generating":
+        detail = ""
+    if phase == "saving":
+        percent = 99.0
     texts = {
         "preparing": f"qwen-2.1 \u00B7 loading the model\u2026 ({elapsed:.0f}s){retry_note}",
         "queued": f"qwen-2.1 \u00B7 queued ({elapsed:.0f}s){retry_note}",
-        "generating": f"qwen-2.1 \u00B7 generating ({elapsed:.0f}s){retry_note}",
+        "generating": f"qwen-2.1 \u00B7 generating{detail}{eta_note} ({elapsed:.0f}s){retry_note}",
         "saving": "qwen-2.1 \u00B7 saving\u2026",
     }
     return {
         "active": phase in ("generating", "saving"),
         "queued": phase in ("preparing", "queued"),
         "completed": False,
-        "progress": 0.0,
-        "eta": None,
+        "progress": round(percent, 1),
+        "eta": eta_total,
         "live_preview": None,
         "id_live_preview": -1,
         "textinfo": texts.get(phase, "qwen-2.1"),
-        "state": {"job": "mlite_qwen", "job_count": 1, "job_no": 0, "sampling_step": 0, "sampling_steps": 0, "skipped": False, "interrupted": False},
+        "state": {
+            "job": "mlite_qwen", "job_count": 1, "job_no": 0,
+            "sampling_step": int(job.get("sampling_step") or 0),
+            "sampling_steps": int(job.get("sampling_steps") or 0),
+            "skipped": False, "interrupted": False,
+        },
         "current_image": None,
         "job_count": 1,
         "job_no": 0,
@@ -1030,13 +1275,17 @@ def _run_qwen_job(payload: dict) -> dict:
         body["ref_images"] = refs
 
     started = time.time()
-    _qwen_set_job(task_id=task_id, phase="preparing", started=started, server_job=None, error=None, attempt=1)
+    _qwen_set_job(task_id=task_id, phase="preparing", started=started, server_job=None, error=None, attempt=1,
+                  sampling_step=None, sampling_steps=None, vae_step=None, vae_steps=None,
+                  eta_current=None, eta_total=None, images_done=0, batch_total=int(batch))
 
     attempt = 0
     status = None
     failure = ""
     try:
         with queue_lock:
+            # the other sidecar (Krea 2) cannot hold VRAM while qwen runs
+            _krea2_stop_server()
             _qwen_unload_sdxl_locked()
             with _qwen_lock:
                 ok, message = _qwen_start_server()
@@ -1133,6 +1382,507 @@ def qwen_job_status() -> dict:
         "elapsed": round(max(0.0, time.time() - started), 1) if started else 0.0,
         "error": job.get("error"),
         "server_job": job.get("server_job"),
+        "sampling_step": job.get("sampling_step"),
+        "sampling_steps": job.get("sampling_steps"),
+        "vae_step": job.get("vae_step"),
+        "vae_steps": job.get("vae_steps"),
+        "eta_current": job.get("eta_current"),
+        "eta_total": job.get("eta_total"),
+        "images_done": int(job.get("images_done") or 0),
+        "batch_total": int(job.get("batch_total") or 1),
+    }
+
+
+# --------------------------------------------------------------------------- krea2 bridge
+
+
+def _krea2_manager():
+    from modules import krea2_image_manager
+
+    return krea2_image_manager
+
+
+def _krea2_status_payload() -> dict:
+    """Small status block for the UI (engine chip + availability)."""
+    try:
+        status = _krea2_manager().get_status()
+    except Exception as error:  # pragma: no cover - defensive (import/OS errors)
+        return {"available": False, "reachable": False, "managed": False, "mode": "error", "error": str(error)}
+    with _krea2_state_lock:
+        starting = _krea2_starting
+    missing = [os.path.relpath(path, _WEBUI_ROOT) for path in status.get("missing_files") or []]
+    return {
+        "available": not missing,
+        "missing_files": missing,
+        "url": status.get("url"),
+        "reachable": bool(status.get("reachable")),
+        "managed": bool(status.get("managed")),
+        "mode": status.get("mode") or "stopped",
+        "starting": bool(starting and not status.get("reachable")),
+        "model": status.get("model"),
+    }
+
+
+def _krea2_set_job(**fields) -> None:
+    with _krea2_state_lock:
+        _krea2_job.update(fields)
+
+
+def _krea2_job_snapshot() -> dict:
+    with _krea2_state_lock:
+        return dict(_krea2_job)
+
+
+def _krea2_job_active() -> bool:
+    return _krea2_job_snapshot().get("phase") in ("preparing", "queued", "generating", "saving")
+
+
+def _krea2_error_message(error) -> str:
+    """Readable message from the sd-server error field (string or {code, message})."""
+    if isinstance(error, dict):
+        message = str(error.get("message") or "").strip()
+        code = str(error.get("code") or "").strip()
+        if message:
+            return f"{message} ({code})" if code else message
+        return json.dumps(error, ensure_ascii=False)
+    text = str(error or "").strip()
+    return text or "the krea2 job failed"
+
+
+def _krea2_retryable(failure: str) -> bool:
+    """Transient sd-server failures worth another attempt (VRAM / no-result flakes)."""
+    text = (failure or "").lower()
+    return (
+        "generation_failed" in text
+        or "returned no results" in text
+        or "out of memory" in text
+    )
+
+
+def _krea2_escalate_tiles(body: dict) -> None:
+    """Retry attempts run the VAE in smaller tiles to reduce the device memory ask."""
+    tiling = dict(body.get("vae_tiling_params") or {})
+    tiling["enabled"] = True
+    tiling["tile_size_x"] = _KREA2_RETRY_TILE_SIZE
+    tiling["tile_size_y"] = _KREA2_RETRY_TILE_SIZE
+    body["vae_tiling_params"] = tiling
+
+
+def _krea2_run_server_job(body: dict, attempt: int) -> tuple:
+    """Submit one job to the sd-server and poll it to completion; (status, failure)."""
+    steps = int((body.get("sample_params") or {}).get("sample_steps") or 0)
+    eta = _StepEta(steps, int(body.get("batch_count") or 1))
+    log_path = _krea2_manager().get_log_path()
+    log_mark = _log_size(log_path)
+    submitted = _krea2_http("POST", "/sdcpp/v1/img_gen", body)
+    server_job = submitted.get("id") or submitted.get("job_id")
+    if not server_job:
+        return None, "the sd-server did not return a job id"
+    _krea2_set_job(phase="queued", server_job=server_job, attempt=attempt)
+
+    deadline = time.time() + _KREA2_JOB_TIMEOUT
+    status = None
+    while time.time() < deadline:
+        time.sleep(0.5)  # snappier completion detection; the GETs are cheap
+        try:
+            status = _krea2_http("GET", f"/sdcpp/v1/jobs/{server_job}", timeout=10.0)
+        except Exception:
+            # the sd-server briefly stops answering while it loads weights; keep polling
+            continue
+        state_name = str(status.get("status") or "")
+        if state_name in ("completed", "failed", "cancelled"):
+            break
+        progress = _sdcpp_step_progress(_read_text_since(log_path, log_mark), steps)
+        _krea2_set_job(
+            phase="queued" if state_name in ("queued", "pending") else "generating",
+            **progress,
+            **eta.update(progress, time.monotonic()),
+        )
+
+    if status is None:
+        return None, "the krea2 job timed out"
+    state_name = str(status.get("status") or "")
+    if state_name == "cancelled":
+        return status, "cancelled"
+    if state_name == "failed":
+        return status, _krea2_error_message(status.get("error"))
+    if state_name != "completed":
+        return status, "the krea2 job timed out"
+    return status, ""
+
+
+def _krea2_http(method: str, path: str, body=None, timeout: float = 30.0):
+    """JSON call against the sd-server; localhost must bypass the (dead) system proxy.
+
+    Shares the qwen bridge's no-proxy opener - both sidecars answer on localhost.
+    """
+    url = _krea2_manager().get_server_url().rstrip("/") + path
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with _QWEN_OPENER.open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _krea2_free_webui_vram() -> None:
+    """Hand PyTorch's cached CUDA blocks back to the driver (see _qwen_free_webui_vram)."""
+    try:
+        from modules import devices
+
+        devices.torch_gc()
+    except Exception:
+        pass
+
+
+def _krea2_unload_sdxl_locked() -> bool:
+    """Free the A1111 checkpoint + cached VRAM. Must run while holding the queue lock."""
+    import modules.shared as shared
+    from modules import sd_models
+
+    moved = False
+    if shared.sd_model is not None:
+        sd_models.unload_model_weights()
+        moved = True
+    _krea2_free_webui_vram()  # release the allocator cache even when no model was loaded
+    return moved
+
+
+def _krea2_start_server() -> tuple:
+    """Start the sd-server if it is not up yet; (ok, message)."""
+    manager = _krea2_manager()
+    if manager.get_status().get("reachable"):
+        return True, "already running"
+    result = manager.start_server()
+    return bool(result.get("reachable")), str(result.get("message") or "")
+
+
+def _krea2_stop_server() -> None:
+    """Stop the managed sd-server (frees ~12GB VRAM). External servers are left alone.
+
+    Checks the local manage flag, not a status probe (see _qwen_stop_server).
+    """
+    try:
+        manager = _krea2_manager()
+        if manager.is_managed():
+            manager.stop_server()
+    except Exception:
+        pass
+
+
+def _krea2_prepare_async() -> None:
+    """Engine switch -> Krea 2: free the SDXL model, then load sd-server in the background."""
+    global _krea2_starting
+    # check job activity BEFORE taking the state lock - the helper locks it itself
+    if _krea2_job_active():
+        return
+    with _krea2_state_lock:
+        if _krea2_starting:
+            return
+        _krea2_starting = True
+
+    def work():
+        global _krea2_starting
+        try:
+            from modules.call_queue import queue_lock
+
+            with _krea2_lock:
+                if _krea2_manager().get_status().get("reachable"):
+                    return
+                with queue_lock:  # wait out a running A1111 job, then free its VRAM
+                    _krea2_unload_sdxl_locked()
+                _krea2_start_server()
+        except Exception:
+            pass
+        finally:
+            with _krea2_state_lock:
+                _krea2_starting = False
+
+    threading.Thread(target=work, name="mlite-krea2-prepare", daemon=True).start()
+
+
+def _clamp_krea2_size(value, default: int) -> int:
+    """Krea 2 sizes must be divisible by 32 (patch + VAE downscale)."""
+    number = _clamp_int(value, 64, 4096, default)
+    return max(64, int((number + 16) // 32) * 32)
+
+
+def _krea2_infotext(prompt: str, negative: str, steps: int, cfg: float, seed, width: int, height: int, model: str,
+                    ref_count: int = 0) -> str:
+    body = (
+        f"Steps: {steps}, CFG scale: {cfg}, Seed: {seed}, Size: {width}x{height}, "
+        f"Model: {model}, Sampler: euler"
+        + (f", References: {ref_count}" if ref_count else "")
+    )
+    parts = [prompt, f"Negative prompt: {negative}" if negative else None, body]
+    return "\n".join(part for part in parts if part)
+
+
+def _store_krea2_images(
+    status: dict, prompt: str, negative: str, steps: int, cfg: float, seed, width: int, height: int,
+    ref_count: int = 0,
+) -> list:
+    """Decode the base64 results into outputs/krea2/<date>/<time>/<n>.png (+ .txt sidecar)."""
+    entries = ((status.get("result") or {}).get("images")) or []
+    if not entries:
+        raise ValueError("the server returned no images")
+
+    try:
+        model = _krea2_manager().get_model_name()
+    except Exception:
+        model = "krea2"
+
+    stamp = datetime.now()
+    outdir = os.path.join(_WEBUI_ROOT, "outputs", "krea2", stamp.strftime("%Y-%m-%d"), stamp.strftime("%H-%M-%S"))
+    os.makedirs(outdir, exist_ok=True)
+
+    images = []
+    for index, entry in enumerate(entries):
+        raw = base64.b64decode(entry.get("b64_json") or "")
+        if not raw:
+            continue
+        # sd.cpp embeds webui-compatible parameters in the PNG - prefer them (real seed!)
+        infotext = ""
+        try:
+            with Image.open(io.BytesIO(raw)) as parsed:
+                infotext = str((parsed.info or {}).get("parameters") or "")
+        except Exception:
+            infotext = ""
+        image_seed = seed
+        match = re.search(r"Seed:\s*(-?\d+)", infotext)
+        if match:
+            image_seed = int(match.group(1))
+        if not infotext:
+            infotext = _krea2_infotext(prompt, negative, steps, cfg, image_seed, width, height, model, ref_count)
+
+        path = os.path.join(outdir, f"{index:03d}.png")
+        with open(path, "wb") as handle:
+            handle.write(raw)
+        with open(os.path.splitext(path)[0] + ".txt", "w", encoding="utf-8") as handle:
+            handle.write(infotext)
+
+        mtime = os.path.getmtime(path)
+        images.append({
+            "path": path,
+            "url": _file_url(path),
+            "thumb": _cached_image_url(path, mtime, "thumb"),
+            "preview": _cached_image_url(path, mtime, "viewer"),
+            "seed": image_seed,
+            "infotext": infotext,
+        })
+    return images
+
+
+def _krea2_progress(task_id: str):
+    """Progress payload for the active krea2 job (None = not ours, use normal progress)."""
+    job = _krea2_job_snapshot()
+    if not job.get("task_id") or job["task_id"] != task_id:
+        return None
+    phase = job.get("phase")
+    if phase in (None, "done", "failed"):
+        return None
+    elapsed = max(0.0, time.time() - (job.get("started") or time.time()))
+    attempt = int(job.get("attempt") or 1)
+    retry_note = f" \u00B7 retry {attempt}" if attempt > 1 else ""
+    detail, percent = _sidecar_steps_summary(job)
+    eta_note, eta_total = _sidecar_eta_summary(job) if phase == "generating" else ("", None)
+    if phase != "generating":
+        detail = ""
+    if phase == "saving":
+        percent = 99.0
+    texts = {
+        "preparing": f"krea2 \u00B7 loading the model\u2026 ({elapsed:.0f}s){retry_note}",
+        "queued": f"krea2 \u00B7 queued ({elapsed:.0f}s){retry_note}",
+        "generating": f"krea2 \u00B7 generating{detail}{eta_note} ({elapsed:.0f}s){retry_note}",
+        "saving": "krea2 \u00B7 saving\u2026",
+    }
+    return {
+        "active": phase in ("generating", "saving"),
+        "queued": phase in ("preparing", "queued"),
+        "completed": False,
+        "progress": round(percent, 1),
+        "eta": eta_total,
+        "live_preview": None,
+        "id_live_preview": -1,
+        "textinfo": texts.get(phase, "krea2"),
+        "state": {
+            "job": "mlite_krea2", "job_count": 1, "job_no": 0,
+            "sampling_step": int(job.get("sampling_step") or 0),
+            "sampling_steps": int(job.get("sampling_steps") or 0),
+            "skipped": False, "interrupted": False,
+        },
+        "current_image": None,
+        "job_count": 1,
+        "job_no": 0,
+    }
+
+
+def _run_krea2_job(payload: dict) -> dict:
+    """Run one Krea 2 generation through the sd-server sidecar.
+
+    Uses the native async API (submit -> poll) because the compat layer has no job
+    status; the whole job holds the A1111 queue lock so the single GPU stays serial.
+    """
+    from fastapi import HTTPException
+    from modules.call_queue import queue_lock
+
+    if _krea2_job_active():
+        raise HTTPException(status_code=409, detail="a krea2 job is already running")
+
+    task_id = _normalize_task_id(payload.get("task_id"))
+    from modules.processing import strip_prompt_comments
+
+    # same contract as the txt2img/img2img prompt editors: '#' comment lines and
+    # #(...) disabled keyword groups are stripped before the prompt reaches the model
+    prompt = strip_prompt_comments(str(payload.get("prompt") or "")).strip()
+    negative = strip_prompt_comments(str(payload.get("negative_prompt") or "")).strip()
+    # Krea 2 edit works best with a single reference; allow a few for composition.
+    refs = [
+        str(item)
+        for item in (payload.get("refs") or [])
+        if isinstance(item, str) and item.startswith("data:")
+    ][:4]
+    steps = _payload_number(payload, "steps", 1, 100, 8)
+    cfg = _payload_number(payload, "cfg", 0.0, 30.0, 1.0, cast=float)
+    width = _clamp_krea2_size(payload.get("width"), 1024)
+    height = _clamp_krea2_size(payload.get("height"), 1024)
+    batch = _payload_number(payload, "batch", 1, 4, 1)
+    seed = _clamp_int(payload.get("seed"), -1, 2 ** 31 - 1, -1)
+
+    body = {
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "width": width,
+        "height": height,
+        "batch_count": batch,
+        "seed": seed,
+        "output_format": "png",
+        "auto_resize_ref_image": True,
+        "vae_tiling_params": {"enabled": True},
+        "sample_params": {
+            "scheduler": "default",
+            "sample_method": "euler",
+            "sample_steps": steps,
+            "guidance": {"txt_cfg": cfg},
+        },
+    }
+    if refs:
+        body["ref_images"] = refs
+
+    started = time.time()
+    _krea2_set_job(task_id=task_id, phase="preparing", started=started, server_job=None, error=None, attempt=1,
+                   sampling_step=None, sampling_steps=None, vae_step=None, vae_steps=None,
+                   eta_current=None, eta_total=None, images_done=0, batch_total=int(batch))
+
+    attempt = 0
+    status = None
+    failure = ""
+    try:
+        with queue_lock:
+            # the qwen sidecar cannot hold VRAM while krea2 runs
+            _qwen_stop_server()
+            _krea2_unload_sdxl_locked()
+            with _krea2_lock:
+                ok, message = _krea2_start_server()
+            if not ok:
+                failure = message or "the Krea 2 server could not be started"
+            else:
+                while True:
+                    attempt += 1
+                    _krea2_set_job(phase="preparing", attempt=attempt, server_job=None)
+                    if attempt > 1:
+                        # a failed attempt is usually the sd-server failing to free
+                        # device memory: hand back any cached blocks, give the model
+                        # manager a moment, then retry with smaller VAE tiles
+                        _krea2_set_job(phase="preparing", error=failure)
+                        time.sleep(_KREA2_RETRY_DELAY)
+                        _krea2_free_webui_vram()
+                        _krea2_escalate_tiles(body)
+                    try:
+                        status, failure = _krea2_run_server_job(body, attempt)
+                    except Exception as error:
+                        status, failure = None, f"could not submit the job: {error}"
+                    if not failure or attempt > _KREA2_JOB_RETRIES or not _krea2_retryable(failure):
+                        break
+
+            if failure:
+                if attempt > 1 and _krea2_retryable(failure):
+                    failure = (
+                        f"{failure} (retried {attempt - 1}x; if it persists, try a smaller "
+                        "output size)"
+                    )
+                _krea2_set_job(phase="failed", error=failure)
+                raise HTTPException(status_code=503, detail=failure)
+
+            _krea2_set_job(phase="saving")
+            try:
+                images = _store_krea2_images(status or {}, prompt, negative, steps, cfg, seed, width, height, len(refs))
+            except Exception as error:
+                _krea2_set_job(phase="failed", error=str(error))
+                raise HTTPException(status_code=500, detail=f"could not save the result: {error}")
+    except HTTPException:
+        raise
+    except Exception as error:
+        _krea2_set_job(phase="failed", error=str(error))
+        raise HTTPException(status_code=500, detail=str(error))
+
+    result = {
+        "task_id": task_id,
+        "engine": "krea2",
+        "images": images,
+        "seeds": [entry.get("seed") for entry in images if entry.get("seed") is not None],
+        "infotexts": [entry.get("infotext") or "" for entry in images],
+        "elapsed": round(time.time() - started, 2),
+    }
+    with _results_lock:
+        _results[task_id] = result
+        while len(_results) > _RESULTS_KEEP:
+            _results.popitem(last=False)
+    _krea2_set_job(phase="done", error=None)
+    return result
+
+
+def run_krea2_job(payload: dict) -> dict:
+    """Run one Krea 2 job in-process (used by the desktop Krea 2 tab).
+
+    Same engine as ``POST /mlite/api/krea2``: serialises on the A1111 queue lock,
+    unloads the SDXL checkpoint, starts the sd-server when needed and saves the
+    results to outputs/krea2/<date>/<time>/.  Callers get the FastAPI HTTPException
+    on failure (``error.detail`` carries the message).
+    """
+    return _run_krea2_job(payload)
+
+
+def cancel_krea2_job() -> dict:
+    """Ask the sd-server to cancel the active krea2 job (queued jobs only)."""
+    job = _krea2_job_snapshot()
+    if job.get("phase") in ("preparing", "queued", "generating") and job.get("server_job"):
+        try:
+            _krea2_http("POST", f"/sdcpp/v1/jobs/{job['server_job']}/cancel", timeout=10.0)
+        except Exception:
+            pass
+        return {"ok": True, "engine": "krea2"}
+    return {"ok": False, "reason": "no queued krea2 job to cancel"}
+
+
+def krea2_job_status() -> dict:
+    """Live phase of the current krea2 job (desktop tab status line, no task id needed)."""
+    job = _krea2_job_snapshot()
+    started = job.get("started") or 0.0
+    return {
+        "active": _krea2_job_active(),
+        "phase": job.get("phase"),
+        "attempt": int(job.get("attempt") or 1),
+        "elapsed": round(max(0.0, time.time() - started), 1) if started else 0.0,
+        "error": job.get("error"),
+        "server_job": job.get("server_job"),
+        "sampling_step": job.get("sampling_step"),
+        "sampling_steps": job.get("sampling_steps"),
+        "vae_step": job.get("vae_step"),
+        "vae_steps": job.get("vae_steps"),
+        "eta_current": job.get("eta_current"),
+        "eta_total": job.get("eta_total"),
+        "images_done": int(job.get("images_done") or 0),
+        "batch_total": int(job.get("batch_total") or 1),
     }
 
 
@@ -1230,6 +1980,7 @@ def _normalize_item(row: dict, view: str) -> dict:
         "mtime": float(mtime or 0),
         "view": view,
         "qwen": bool(row.get("qwen")),
+        "krea2": bool(row.get("krea2")),
         "imagemaker": bool(row.get("imagemaker")),
     }
     if path and os.path.exists(path):
@@ -1284,7 +2035,7 @@ _GALLERY_VIEWS = [
     ("staged", "Staged"),
     ("composed", "Composed"),
     ("imagemaker", "Image Maker"),
-    ("qwen", "Qwen"),
+    ("nonesdxl", "None SDXL"),
 ]
 
 
@@ -1296,18 +2047,26 @@ def _qwen_item_key(path: str) -> str:
     return "qwen-" + "-".join(part.lower() for part in parts)
 
 
-def _qwen_items(query: str, limit: int, offset: int):
-    """Items for the Qwen view: a plain scan of outputs/qwen/<date>/<time>/<n>.png."""
-    qwen_dir = os.path.join(_WEBUI_ROOT, "outputs", "qwen")
-    if not os.path.isdir(qwen_dir):
-        return [], 0
+def _krea2_item_key(path: str) -> str:
+    """Unique archive key for a krea2 output (mirrors the qwen key scheme)."""
+    rel = os.path.relpath(path, _WEBUI_ROOT).replace("\\", "/")
+    parts = [part for part in rel.split("/") if part]
+    parts[-1] = os.path.splitext(parts[-1])[0]
+    return "krea2-" + "-".join(part.lower() for part in parts)
 
+
+def _none_sdxl_items(query: str, limit: int, offset: int):
+    """Items for the None SDXL view: outputs/qwen + outputs/krea2 scans (desktop parity)."""
     files = []
-    for dirpath, dirnames, filenames in os.walk(qwen_dir):
-        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
-        for name in filenames:
-            if name.lower().endswith(_IMAGE_EXTS) and not name.startswith("."):
-                files.append(os.path.join(dirpath, name))
+    for sub in ("qwen", "krea2"):
+        base = os.path.join(_WEBUI_ROOT, "outputs", sub)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+            for name in filenames:
+                if name.lower().endswith(_IMAGE_EXTS) and not name.startswith("."):
+                    files.append(os.path.join(dirpath, name))
 
     q = (query or "").strip().lower()
     if q:
@@ -1322,13 +2081,15 @@ def _qwen_items(query: str, limit: int, offset: int):
     files.sort(key=_mtime, reverse=True)
     rows = []
     for path in files[offset: offset + limit]:
+        is_krea2 = "/krea2/" in path.replace("\\", "/").lower()
         rows.append({
-            "item_key": _qwen_item_key(path),
+            "item_key": _krea2_item_key(path) if is_krea2 else _qwen_item_key(path),
             "path": path,
             "file_mtime": _mtime(path),
             "prompt": "",
-            "model_name": "qwen-image-2.1",
-            "qwen": True,
+            "model_name": "krea2" if is_krea2 else "qwen-image-2.1",
+            "qwen": not is_krea2,
+            "krea2": is_krea2,
         })
     return rows, len(files)
 
@@ -1397,8 +2158,8 @@ def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
         rows, total = _composed_items(query, page_size, offset)
     elif view == "imagemaker":
         rows, total = _image_maker_items(query, page_size, offset)
-    elif view == "qwen":
-        rows, total = _qwen_items(query, page_size, offset)
+    elif view == "nonesdxl":
+        rows, total = _none_sdxl_items(query, page_size, offset)
     elif view == "endorsed":
         total = endorsement_db.count_endorsements(query)
         rows = endorsement_db.search_endorsements(query, limit=page_size, offset=offset)
@@ -1461,12 +2222,14 @@ def _gallery_action(payload: dict) -> dict:
         except Exception:
             item_key = ""
 
-    # Qwen outputs live outside the rated database: they can only be archived by hand
-    # (and the bulk "archive unrated" can never reach them - they are not generated_images rows)
+    # Qwen + Krea 2 outputs live outside the rated database: they can only be archived by
+    # hand (and the bulk "archive unrated" can never reach them - they are not
+    # generated_images rows)
     normalized_path = f"/{path.replace(chr(92), '/').lower().strip('/')}/"
-    if item_key.startswith("qwen-") or "/outputs/qwen/" in normalized_path:
+    if (item_key.startswith("qwen-") or item_key.startswith("krea2-")
+            or "/outputs/qwen/" in normalized_path or "/outputs/krea2/" in normalized_path):
         if action not in ("archive", "unarchive"):
-            return {"ok": False, "error": "qwen images cannot be rated - archive or unarchive only"}
+            return {"ok": False, "error": "qwen/krea2 images cannot be rated - archive or unarchive only"}
 
     # Image Maker outputs (outputs/image_maker) are scan-only too - same archive-only rule.
     if item_key.startswith("imagemaker-") or "/outputs/image_maker/" in normalized_path:
@@ -1603,6 +2366,10 @@ def register_routes(app):
         payload["qwen_active"] = _qwen_job_active()
         if payload["qwen_active"]:
             payload["qwen_task_id"] = job.get("task_id")
+        krea2_job = _krea2_job_snapshot()
+        payload["krea2_active"] = _krea2_job_active()
+        if payload["krea2_active"]:
+            payload["krea2_task_id"] = krea2_job.get("task_id")
         return payload
 
     @app.post("/mlite/api/progress")
@@ -1617,6 +2384,9 @@ def register_routes(app):
         qwen = _qwen_progress(request.id_task)
         if qwen is not None:
             return qwen
+        krea2 = _krea2_progress(request.id_task)
+        if krea2 is not None:
+            return krea2
         return progress.progressapi(request)
 
     @app.post("/mlite/api/interrupt")
@@ -1630,6 +2400,8 @@ def register_routes(app):
         # the sd-server can cancel queued jobs only (cancel_generating = false)
         if cancel_qwen_job().get("ok"):
             return {"ok": True, "engine": "qwen"}
+        if cancel_krea2_job().get("ok"):
+            return {"ok": True, "engine": "krea2"}
 
         shared.state.interrupt()
         return {"ok": True}
@@ -1660,25 +2432,51 @@ def register_routes(app):
     def mlite_qwen_job():
         return qwen_job_status()
 
+    @app.get("/mlite/api/krea2/status")
+    def mlite_krea2_status():
+        return _krea2_status_payload()
+
+    @app.get("/mlite/api/krea2/job")
+    def mlite_krea2_job():
+        return krea2_job_status()
+
     @app.post("/mlite/api/engine")
     def mlite_engine(payload: dict = Body(default={})):
         engine = str(payload.get("engine") or "").strip().lower()
         if engine == "qwen":
+            # the other sidecar cannot hold VRAM while qwen loads
+            if not _krea2_job_active():
+                _krea2_stop_server()
             # free the SDXL model now, load the sd-server in the background
             _qwen_prepare_async()
             return {"ok": True, "engine": "qwen", "qwen": _qwen_status_payload()}
-        if engine == "sdxl":
-            # give the ~10GB back unless a qwen job is using the server right now
+        if engine == "krea2":
+            # the other sidecar cannot hold VRAM while krea2 loads
             if not _qwen_job_active():
                 _qwen_stop_server()
-            return {"ok": True, "engine": "sdxl", "qwen": _qwen_status_payload()}
-        raise HTTPException(status_code=422, detail="engine must be 'sdxl' or 'qwen'")
+            # free the SDXL model now, load the sd-server in the background
+            _krea2_prepare_async()
+            return {"ok": True, "engine": "krea2", "krea2": _krea2_status_payload()}
+        if engine == "sdxl":
+            # give the ~10GB back unless a sidecar job is using a server right now
+            if not _qwen_job_active():
+                _qwen_stop_server()
+            if not _krea2_job_active():
+                _krea2_stop_server()
+            return {"ok": True, "engine": "sdxl", "qwen": _qwen_status_payload(), "krea2": _krea2_status_payload()}
+        raise HTTPException(status_code=422, detail="engine must be 'sdxl', 'qwen' or 'krea2'")
 
     @app.post("/mlite/api/qwen")
     def mlite_qwen(payload: dict = Body(default={})):
         if not str(payload.get("prompt") or "").strip():
             raise HTTPException(status_code=422, detail="prompt is required")
         return _run_qwen_job(payload)
+
+    @app.post("/mlite/api/krea2")
+    def mlite_krea2(payload: dict = Body(default={})):
+        if not str(payload.get("prompt") or "").strip():
+            raise HTTPException(status_code=422, detail="prompt is required")
+        return _run_krea2_job(payload)
 
     @app.get("/mlite/api/gallery")
     def mlite_gallery(

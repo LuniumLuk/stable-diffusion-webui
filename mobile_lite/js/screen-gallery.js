@@ -14,7 +14,7 @@ const VIEWS = [
   { id: 'staged', label: '\u{1F4CC} Staged' },
   { id: 'composed', label: '\u{1F3A8} Composed' },
   { id: 'imagemaker', label: '\u{1F4F7} Image Maker' },
-  { id: 'qwen', label: '\u{1F916} Qwen' },
+  { id: 'nonesdxl', label: '\u{1F6AB} None SDXL' },
 ];
 
 const PAGE_SIZE = 48;
@@ -57,8 +57,8 @@ export function metaFromItem(item) {
 }
 
 function itemMetaText(item) {
-  if (item.qwen) {
-    return ['Qwen-Image 2.1', item.path || ''].filter(Boolean).join('\n');
+  if (item.qwen || item.krea2) {
+    return [item.qwen ? 'Qwen-Image 2.1' : 'Krea 2', item.path || ''].filter(Boolean).join('\n');
   }
   if (item.imagemaker) {
     return ['Image Maker', item.path || ''].filter(Boolean).join('\n');
@@ -128,16 +128,14 @@ function cardNode(item, onTap, withActions) {
 
   if (!withActions) return el('div', { class: 'thumb-wrap' }, [thumb]);
 
-  // Scan-only outputs (Image Maker, Qwen) are image-only: sent to img2img/inpaint/compose
-  // with NO parameters at all, and they can only be archived (never rated)
-  const actions = el('div', { class: 'card-actions' }, item.imagemaker ? [
+  // Scan-only outputs (Image Maker, None SDXL = qwen + krea2) are image-only: sent to
+  // img2img/inpaint/compose with NO parameters at all, and they can only be archived
+  // (never rated) - desktop gallery parity
+  const imageOnly = item.imagemaker || item.qwen || item.krea2;
+  const actions = el('div', { class: 'card-actions' }, imageOnly ? [
     quickButton('\u{1F5BC}', 'Use as image (image only)', () => useAsImage(item, { mode: 'img2img', meta: null })),
     quickButton('\u{1F3A8}', 'Use in inpaint (image only)', () => useAsImage(item, { mode: 'inpaint', meta: null })),
     quickButton('\u{1F9E9}', 'Add to Compose (image only)', () => sendToCompose(item)),
-    quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
-  ] : item.qwen ? [
-    quickButton('\u{1F5BC}', 'Use as image (image only)', () => useAsImage(item, { mode: 'img2img', meta: null })),
-    quickButton('\u{1F3A8}', 'Use in inpaint (image only)', () => useAsImage(item, { mode: 'inpaint', meta: null })),
     quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
   ] : [
     quickButton('\u{1F5BC}', 'Use as image', () => useAsImage(item, { mode: 'img2img' })),
@@ -166,16 +164,10 @@ function openItemViewer(item) {
       src: viewerSrc(current),
       title: current.seed !== undefined && current.seed !== null ? `seed ${current.seed}` : '',
       meta: makeMetaNode(itemMetaText(current), { folded: true }),
-      actions: current.imagemaker ? [
+      actions: (current.imagemaker || current.qwen || current.krea2) ? [
         { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img', meta: null }) },
         { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
         { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
-        current.archived
-          ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
-          : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
-      ] : current.qwen ? [
-        { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img', meta: null }) },
-        { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
         current.archived
           ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
           : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
