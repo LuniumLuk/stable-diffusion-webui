@@ -505,6 +505,33 @@ body.mask-editing { overflow: hidden; }
 .view-chips .chip { flex: 0 0 auto; white-space: nowrap; }
 .view-chips .chip.on { background: var(--accent-soft); border-color: var(--accent); color: #ffd9b8; }
 
+/* Album chips (v2 albums, browse-only) */
+.albums-row { padding-bottom: 2px; }
+.albums-row .chip { background: var(--surface3); font-size: 12px; }
+.albums-row .chip.on { background: var(--accent-soft); border-color: var(--accent); color: #ffd9b8; }
+.albums-row[hidden] { display: none; }
+
+/* Back to top */
+.gallery-top {
+  position: absolute;
+  right: 12px;
+  bottom: 74px;
+  z-index: 30;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.gallery-top:active { background: var(--surface3); }
+.gallery-top[hidden] { display: none; }
+
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -66,6 +66,7 @@ export const state = {
     samCandidate: 0,
     galleryView: 'all',
     galleryQuery: '',
+    galleryAlbum: 0,
     lastTab: 'text',
     peditMode: 'chips',
     suggestionsOpen: false,

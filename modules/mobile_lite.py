@@ -1977,11 +1977,58 @@ def _normalize_item(row: dict, view: str) -> dict:
         "qwen": bool(row.get("qwen")),
         "krea2": bool(row.get("krea2")),
         "imagemaker": bool(row.get("imagemaker")),
+        "scan_only": bool(row.get("scan_only")),
     }
     if path and os.path.exists(path):
         item["thumb"] = _cached_image_url(path, mtime, "thumb")
         item["preview"] = _cached_image_url(path, mtime, "viewer")
     return item
+
+
+_RATED_SOURCES = {"txt2img", "img2img", "inpaint"}
+
+
+def _gallery_row_from_v2(row: dict) -> dict:
+    """Map a gallery.db item row to the mobile row shape (album view)."""
+    from modules import gallery_api
+
+    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+    source = str(row.get("source") or "")
+    return {
+        "item_key": gallery_api._item_legacy_key(row),
+        "path": row.get("path") or row.get("alias_path") or "",
+        "file_mtime": row.get("mtime"),
+        "prompt": row.get("prompt") or "",
+        "negative_prompt": row.get("negative_prompt") or "",
+        "seed": meta.get("seed"),
+        "steps": meta.get("steps"),
+        "sampler": meta.get("sampler"),
+        "cfg_scale": meta.get("cfg"),
+        "width": row.get("width"),
+        "height": row.get("height"),
+        "model_name": meta.get("model") or "",
+        "qwen": source == "qwen",
+        "krea2": source == "krea2",
+        "imagemaker": source == "image_maker",
+        # non-A1111 sources are scan-only: archive + send actions, never rating
+        "scan_only": source not in _RATED_SOURCES,
+    }
+
+
+def _album_items(album_id: int, query: str, limit: int, offset: int):
+    """Items of one v2 album (gallery.db membership; desktop album-view parity)."""
+    _ensure_db()
+    from modules import gallery_query
+
+    if not album_id:
+        return [], 0
+    fs = {"albums": [int(album_id)], "q": (query or "").strip()}
+    try:
+        page = gallery_query.query(fs, "time_desc", limit, offset, with_tags=False, with_meta=True)
+    except Exception:
+        return [], 0
+    rows = [_gallery_row_from_v2(row) for row in page.get("rows") or []]
+    return rows, int(page.get("total") or 0)
 
 
 def _composed_items(query: str, limit: int, offset: int):
@@ -2031,6 +2078,7 @@ _GALLERY_VIEWS = [
     ("composed", "Composed"),
     ("imagemaker", "Image Maker"),
     ("nonesdxl", "None SDXL"),
+    ("album", "Album"),
 ]
 
 
@@ -2229,7 +2277,7 @@ def _image_maker_items(query: str, limit: int, offset: int):
     return rows, len(files)
 
 
-def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
+def _gallery_page(view: str, query: str, page: int, page_size: int, album: int = 0) -> dict:
     _ensure_db()
     from modules import endorsement_db
 
@@ -2240,6 +2288,8 @@ def _gallery_page(view: str, query: str, page: int, page_size: int) -> dict:
 
     if view == "composed":
         rows, total = _composed_items(query, page_size, offset)
+    elif view == "album":
+        rows, total = _album_items(int(album or 0), query, page_size, offset)
     elif view == "imagemaker":
         rows, total = _image_maker_items(query, page_size, offset)
     elif view == "nonesdxl":
@@ -2570,9 +2620,9 @@ def register_routes(app):
 
     @app.get("/mlite/api/gallery")
     def mlite_gallery(
-        view: str = "all", q: str = "", page: int = 1, size: int = 48
+        view: str = "all", q: str = "", page: int = 1, size: int = 48, album: int = 0
     ):
-        return _gallery_page(view, q, page, size)
+        return _gallery_page(view, q, page, size, album)
 
     @app.post("/mlite/api/gallery/action")
     def mlite_gallery_action(payload: dict = Body(default={})):
@@ -2581,6 +2631,21 @@ def register_routes(app):
             # never report success for a no-op: a key/path mismatch used to look like it worked
             raise HTTPException(status_code=422, detail=result.get("error") or "action failed")
         return result
+
+    @app.get("/mlite/api/albums")
+    def mlite_albums():
+        """V2 albums for the simple mobile gallery (browse-only: id + name + count)."""
+        _ensure_db()
+        from modules import gallery_db
+
+        try:
+            rows = gallery_db.list_albums()
+        except Exception:
+            rows = []
+        return {"albums": [
+            {"id": int(a["id"]), "name": str(a["name"]), "count": int(a.get("count") or 0)}
+            for a in rows
+        ]}
 
     @app.get("/mlite/api/suggestions")
     def mlite_suggestions():

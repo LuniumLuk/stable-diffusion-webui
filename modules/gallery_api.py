@@ -200,6 +200,30 @@ def register_routes(app):
         item["similar"] = [r["id"] for r in gallery_query.similar(item_id, limit=12)]
         return item
 
+    @app.post("/gallery/api/reveal")
+    def gallery_reveal(payload: dict = Body(default={})):
+        """Reveal an item's file in the OS file manager (selects the file on Windows)."""
+        import subprocess
+        import sys
+        from modules import gallery_db
+        item_id = gallery_db.resolve_item_id(payload.get("id") or payload.get("key"))
+        item = gallery_db.get_item(item_id) if item_id else None
+        if not item:
+            raise HTTPException(status_code=404, detail="item not found")
+        path = os.path.abspath(str(item.get("path") or item.get("alias_path") or ""))
+        if not path or not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="file not found on disk")
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="failed to open the file manager: %s" % exc)
+        return {"ok": True, "path": path}
+
     @app.get("/gallery/api/composer")
     def gallery_composer(id: str = ""):
         from modules import gallery_db

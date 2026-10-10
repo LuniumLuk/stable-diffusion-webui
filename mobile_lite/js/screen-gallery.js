@@ -20,7 +20,7 @@ const VIEWS = [
 const PAGE_SIZE = 48;
 
 const feed = {
-  view: 'all', query: '', page: 1, total: 0, items: [], loading: false, done: false,
+  view: 'all', album: 0, query: '', page: 1, total: 0, items: [], loading: false, done: false,
   token: 0, // increments per request; stale responses are dropped (quick view switches)
 };
 
@@ -29,6 +29,8 @@ let sentinel;
 let counter;
 let searchInput;
 let chipsRow;
+let albumsRow;
+let albums = [];
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -89,6 +91,41 @@ function quickButton(label, title, onClick, on = false) {
   return el('button', { class: 'qa' + (on ? ' on' : ''), type: 'button', text: label, title, onClick });
 }
 
+/** Save an image to the device: original file first, stored preview as fallback. */
+async function downloadItem(item) {
+  const name = (item.path || 'image.png').split(/[\\/]/).pop() || 'image.png';
+  const attempts = [];
+  if (item.url) attempts.push([item.url, name]);
+  if (item.preview && item.preview !== item.url) {
+    attempts.push([item.preview, name.replace(/\.[^.]+$/, '') + ' (preview).webp']);
+  }
+  if (!attempts.length) { toast('nothing to download', 'err'); return; }
+
+  let lastError = null;
+  for (const [src, fname] of attempts) {
+    try {
+      const response = await fetch(src);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('empty file');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast(`saving ${fname}\u2026`, 'ok', 2200);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  toast(`download failed: ${lastError ? lastError.message : 'unknown error'}`, 'err', 4200);
+}
+
 /** Load a gallery item onto the Compose screen as a new layer (desktop "To Composer" parity). */
 async function sendToCompose(item) {
   const { addImageToCompose } = await import('./screen-compose.js');
@@ -138,7 +175,7 @@ function cardNode(item, onTap, withActions) {
   // img2img/inpaint/compose with NO parameters at all, and they can only be archived
   // (never rated) - desktop gallery parity. None SDXL items WITH recovered
   // prompt/settings (sidecar .txt / PNG parameters) get the SDXL-style action set.
-  const imageOnly = item.imagemaker || item.qwen || item.krea2;
+  const imageOnly = item.imagemaker || item.qwen || item.krea2 || item.scan_only;
   const imageOnlyMeta = imageOnly && !!(item.infotext || item.prompt);
   const imageOnlyActions = imageOnlyMeta ? [
     quickButton('\u{1F5BC}', 'Use as image', () => useAsImage(item, { mode: 'img2img' })),
@@ -181,13 +218,14 @@ function openItemViewer(item) {
       src: viewerSrc(current),
       title: current.seed !== undefined && current.seed !== null ? `seed ${current.seed}` : '',
       meta: makeMetaNode(itemMetaText(current), { folded: true }),
-      actions: (current.imagemaker || current.qwen || current.krea2)
+      actions: (current.imagemaker || current.qwen || current.krea2 || current.scan_only)
         ? ((current.infotext || current.prompt) ? [
           { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
           { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
           { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
           { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
+          { label: '\u2B07 Save', onClick: () => downloadItem(current) },
           current.archived
             ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
             : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
@@ -196,6 +234,7 @@ function openItemViewer(item) {
           { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
           { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
+          { label: '\u2B07 Save', onClick: () => downloadItem(current) },
           current.archived
             ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
             : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
@@ -204,6 +243,7 @@ function openItemViewer(item) {
         { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
         { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
         { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
+        { label: '\u2B07 Save', onClick: () => downloadItem(current) },
         current.endorsed
           ? { label: '\u2B50 Un-endorse', onClick: () => act('unendorse', current) }
           : { label: '\u2B50 Endorse', onClick: () => act('endorse', current) },
@@ -251,7 +291,10 @@ async function loadPage({ reset = false } = {}) {
   }
 
   try {
-    const data = await api_.gallery({ view: feed.view, q: feed.query, page: feed.page, size: PAGE_SIZE });
+    const data = await api_.gallery({
+      view: feed.album ? 'album' : feed.view,
+      q: feed.query, page: feed.page, size: PAGE_SIZE, album: feed.album || 0,
+    });
     if (token !== feed.token) return; // superseded by a newer request
     const start = reset ? 0 : feed.items.length;
     feed.items = feed.items.concat(data.items);
@@ -282,9 +325,49 @@ async function loadPage({ reset = false } = {}) {
 
 function selectView(view) {
   feed.view = view;
+  feed.album = 0;
   state.ui.galleryView = view;
+  state.ui.galleryAlbum = 0;
   persist();
   for (const chip of chipsRow.children) chip.classList.toggle('on', chip.dataset.view === view);
+  renderAlbumsRow();
+  loadPage({ reset: true });
+}
+
+async function loadAlbums() {
+  try {
+    const data = await api_.albums();
+    albums = (data && data.albums) || [];
+  } catch (_error) {
+    albums = [];
+  }
+  renderAlbumsRow();
+}
+
+/** Horizontal album chips (v2 albums) - tap to browse, tap again to leave. */
+function renderAlbumsRow() {
+  if (!albumsRow) return;
+  clear(albumsRow);
+  albumsRow.hidden = !albums.length;
+  for (const album of albums) {
+    albumsRow.append(el('button', {
+      class: `chip ${feed.album === album.id ? 'on' : ''}`,
+      type: 'button',
+      text: `${album.name} \u00B7 ${album.count}`,
+      title: `Show the items of "${album.name}"`,
+      onClick: () => selectAlbum(album.id),
+    }));
+  }
+}
+
+function selectAlbum(id) {
+  feed.album = feed.album === id ? 0 : id;
+  state.ui.galleryAlbum = feed.album;
+  persist();
+  for (const chip of chipsRow.children) {
+    chip.classList.toggle('on', !feed.album && chip.dataset.view === feed.view);
+  }
+  renderAlbumsRow();
   loadPage({ reset: true });
 }
 
@@ -339,10 +422,11 @@ export function init(container) {
   }, 350));
 
   chipsRow = el('div', { class: 'view-chips' }, VIEWS.map((view) => el('button', {
-    class: `chip ${state.ui.galleryView === view.id ? 'on' : ''}`,
+    class: `chip ${state.ui.galleryView === view.id && !state.ui.galleryAlbum ? 'on' : ''}`,
     type: 'button', text: view.label, dataset: { view: view.id },
     onClick: () => selectView(view.id),
   })));
+  albumsRow = el('div', { class: 'view-chips albums-row', hidden: true });
 
   counter = el('span', { class: 'small muted' });
   gridInner = el('div', { class: 'gallery-grid' });
@@ -352,11 +436,18 @@ export function init(container) {
     el('div', { class: 'card gallery-toolbar' }, [
       searchInput,
       chipsRow,
+      albumsRow,
       el('div', { class: 'row tight' }, [counter, el('div', { style: { flex: '1 1 auto' } }), archiveUnratedButton()]),
     ]),
     gridInner,
   ]);
   container.append(body);
+
+  // Back to top: long infinite-scroll galleries need a one-tap way home.
+  const topButton = el('button', { class: 'gallery-top', type: 'button', text: '\u2191', title: 'Back to top', hidden: true });
+  topButton.addEventListener('click', () => body.scrollTo({ top: 0, behavior: 'smooth' }));
+  container.append(topButton);
+  body.addEventListener('scroll', () => { topButton.hidden = body.scrollTop < 700; }, { passive: true });
 
   const observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) loadPage();
@@ -365,8 +456,10 @@ export function init(container) {
 
   feed.view = state.ui.galleryView || 'all';
   feed.query = state.ui.galleryQuery || '';
+  feed.album = state.ui.galleryAlbum || 0;
 
-  on('gallery-refresh', () => loadPage({ reset: true }));
+  loadAlbums();
+  on('gallery-refresh', () => { loadAlbums(); loadPage({ reset: true }); });
   on('job-finished', () => {
     if (document.body.dataset.tab === 'gallery') loadPage({ reset: true });
   });

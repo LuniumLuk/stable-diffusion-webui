@@ -1552,6 +1552,53 @@
     return '/file=' + encodeURIComponent(String(p).replace(/\\/g, '/'));
   }
 
+  function itemFileName(item) {
+    var p = (item && (item.path || item.alias_path)) || '';
+    if (!p) return '';
+    return String(p).split(/[\\/]/).pop() || '';
+  }
+
+  function downloadItem(item) {
+    var name = itemFileName(item);
+    var original = item.state === 'trashed' ? '' : itemFileUrl(item);
+    var preview = blobUrl(item, 'preview');
+    var previewName = (name ? name.replace(/\.[^.]+$/, '') : (item.uid || 'image')) + ' (preview).webp';
+    // Fetch -> blob -> object URL keeps the exact filename in the save dialog and
+    // works regardless of the server's content-disposition header.
+    var attempt = function (src, fname, onFail) {
+      fetch(src).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      }).then(function (blob) {
+        if (!blob.size) throw new Error('empty file');
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = fname;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      }).catch(function (err) { onFail(err); });
+    };
+    if (!original) {
+      toast('original file is gone \u2014 downloading the stored preview instead');
+      attempt(preview, previewName, function (err) { toast('Download failed: ' + err.message, true); });
+      return;
+    }
+    attempt(original, name || 'image.png', function () {
+      toast('original file not readable \u2014 downloading the stored preview instead');
+      attempt(preview, previewName, function (err) { toast('Download failed: ' + err.message, true); });
+    });
+  }
+
+  function revealItem(item) {
+    api('/gallery/api/reveal', { id: item.uid }).catch(function (err) {
+      toast('Reveal failed: ' + err.message, true);
+    });
+  }
+
   function detailViewerSrc(item, previewSrc, cb) {
     var url = item.state === 'trashed' ? '' : itemFileUrl(item);
     if (!url) { cb(previewSrc); return; }
@@ -1723,6 +1770,14 @@
         '<button id="gv2-detail-close" class="gv2-detail-close">\u00d7</button>' +
         img +
         '<div class="gv2-detail-body">' +
+          (item.state !== 'trashed'
+            ? '<div class="gv2-detail-fileops">' +
+                '<button class="gv2-btn gv2-btn-quiet" data-detail-op="download" ' +
+                  'title="Download the original file (falls back to the stored preview if it is gone)">\u2B07 Download</button>' +
+                '<button class="gv2-btn gv2-btn-quiet" data-detail-op="explorer" ' +
+                  'title="Reveal the file in the system file manager">\u{1F4C2} Find in Explorer</button>' +
+              '</div>'
+            : '') +
           '<div class="gv2-detail-badges">' +
             (item.state && item.state !== 'active' ? badge(item.state, 'gv2-badge-' + item.state) : '') +
             (expiry ? badge(expiry, 'gv2-badge-archived') : '') +
@@ -1772,6 +1827,13 @@
     if (detailImg) {
       detailImg.addEventListener('click', function () { openDetailViewer(item); });
     }
+    box.querySelectorAll('[data-detail-op]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var op = btn.getAttribute('data-detail-op');
+        if (op === 'download') downloadItem(item);
+        else if (op === 'explorer') revealItem(item);
+      });
+    });
     box.querySelectorAll('[data-send-act]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         sendItemTo(item, btn.getAttribute('data-send-act'));

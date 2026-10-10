@@ -48,7 +48,7 @@ function _updateModalCompareButton() {
     const btn = gradioApp().getElementById('modalCompare');
     if (!btn) return;
     btn.classList.toggle('active', _modalCompareActive);
-    btn.title = _modalCompareActive ? 'Show result image (C)' : 'Compare with input image (C)';
+    btn.dataset.label = _modalCompareActive ? 'Show result (C)' : 'Compare with input (C)';
 }
 
 function _findImg2imgInputImage() {
@@ -110,7 +110,11 @@ function openLightbox(src) {
     if (!modalImage || !lb) return;
     const modalToggleLivePreviewBtn = gradioApp().getElementById("modal_toggle_live_preview");
     if (modalToggleLivePreviewBtn) {
+        // Live preview only applies to the output galleries - hide it for
+        // externally opened images (Gallery v2) where it would be a no-op.
+        modalToggleLivePreviewBtn.style.display = window.gv2LightboxNav ? 'none' : '';
         modalToggleLivePreviewBtn.innerHTML = opts.js_live_preview_in_modal_lightbox ? "&#x1F5C7;" : "&#x1F5C6;";
+        modalToggleLivePreviewBtn.dataset.label = 'Live preview: ' + (opts.js_live_preview_in_modal_lightbox ? 'on' : 'off');
     }
     modalImage.src = src;
     _modalResultSrc = src;
@@ -340,6 +344,7 @@ function modalLivePreviewToggle(event) {
     const modalToggleLivePreview = gradioApp().getElementById("modal_toggle_live_preview");
     opts.js_live_preview_in_modal_lightbox = !opts.js_live_preview_in_modal_lightbox;
     modalToggleLivePreview.innerHTML = opts.js_live_preview_in_modal_lightbox ? "&#x1F5C7;" : "&#x1F5C6;";
+    modalToggleLivePreview.dataset.label = 'Live preview: ' + (opts.js_live_preview_in_modal_lightbox ? 'on' : 'off');
     event.stopPropagation();
 }
 
@@ -444,15 +449,17 @@ document.addEventListener("DOMContentLoaded", function() {
     const modalZoom = document.createElement('span');
     modalZoom.className = 'modalZoom cursor';
     modalZoom.innerHTML = '&#10529;';
+    modalZoom.dataset.label = 'Zoom 1:1 / fit';
+    modalZoom.setAttribute('aria-label', 'Toggle between 1:1 pixel zoom and fit to screen');
     modalZoom.addEventListener('click', modalZoomToggle, true);
-    modalZoom.title = "Toggle zoomed view";
     modalControls.appendChild(modalZoom);
 
     const modalTileImage = document.createElement('span');
     modalTileImage.className = 'modalTileImage cursor';
     modalTileImage.innerHTML = '&#8862;';
+    modalTileImage.dataset.label = 'Tile image';
+    modalTileImage.setAttribute('aria-label', 'Show the image tiled as the background');
     modalTileImage.addEventListener('click', modalTileImageToggle, true);
-    modalTileImage.title = "Preview tiling";
     modalControls.appendChild(modalTileImage);
 
     const modalCompare = document.createElement('span');
@@ -460,7 +467,8 @@ document.addEventListener("DOMContentLoaded", function() {
     modalCompare.id = 'modalCompare';
     modalCompare.innerHTML = '&#8646;';
     modalCompare.addEventListener('click', modalCompareToggle, true);
-    modalCompare.title = 'Compare with input image (C)';
+    modalCompare.dataset.label = 'Compare with input (C)';
+    modalCompare.setAttribute('aria-label', 'Compare with the img2img input image');
     modalCompare.style.display = 'none';
     modalControls.appendChild(modalCompare);
 
@@ -469,7 +477,8 @@ document.addEventListener("DOMContentLoaded", function() {
     modalSave.id = "modal_save";
     modalSave.innerHTML = "&#x1F5AB;";
     modalSave.addEventListener("click", modalSaveImage, true);
-    modalSave.title = "Save Image(s)";
+    modalSave.dataset.label = 'Save image (S)';
+    modalSave.setAttribute('aria-label', 'Save this image to the outputs folder');
     modalControls.appendChild(modalSave);
 
     const modalToggleLivePreview = document.createElement('span');
@@ -477,14 +486,16 @@ document.addEventListener("DOMContentLoaded", function() {
     modalToggleLivePreview.id = "modal_toggle_live_preview";
     modalToggleLivePreview.innerHTML = "&#x1F5C6;";
     modalToggleLivePreview.onclick = modalLivePreviewToggle;
-    modalToggleLivePreview.title = "Toggle live preview";
+    modalToggleLivePreview.dataset.label = 'Live preview: off';
+    modalToggleLivePreview.setAttribute('aria-label', 'Toggle live preview in the viewer');
     modalControls.appendChild(modalToggleLivePreview);
 
     const modalClose = document.createElement('span');
     modalClose.className = 'modalClose cursor';
     modalClose.innerHTML = '&times;';
     modalClose.onclick = closeModal;
-    modalClose.title = "Close image viewer";
+    modalClose.dataset.label = 'Close (Esc)';
+    modalClose.setAttribute('aria-label', 'Close the image viewer');
     modalControls.appendChild(modalClose);
 
     const modalImage = document.createElement('img');
@@ -571,6 +582,7 @@ document.addEventListener("DOMContentLoaded", function() {
     const modalPrev = document.createElement('a');
     modalPrev.className = 'modalPrev';
     modalPrev.innerHTML = '&#10094;';
+    modalPrev.dataset.label = 'Previous (\u2190)';
     modalPrev.tabIndex = 0;
     modalPrev.addEventListener('click', modalPrevImage, true);
     modalPrev.addEventListener('keydown', modalKeyHandler, true);
@@ -579,6 +591,7 @@ document.addEventListener("DOMContentLoaded", function() {
     const modalNext = document.createElement('a');
     modalNext.className = 'modalNext';
     modalNext.innerHTML = '&#10095;';
+    modalNext.dataset.label = 'Next (\u2192)';
     modalNext.tabIndex = 0;
     modalNext.addEventListener('click', modalNextImage, true);
     modalNext.addEventListener('keydown', modalKeyHandler, true);

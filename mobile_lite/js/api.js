@@ -91,9 +91,10 @@ export const api_ = {
   qwen: (payload, options) => apiUpload('/mlite/api/qwen', payload, options),
   qwenStatus: () => api('/mlite/api/qwen/status'),
   engine: (payload) => api('/mlite/api/engine', { method: 'POST', body: payload }),
-  gallery: ({ view = 'all', q = '', page = 1, size = 48 } = {}) =>
-    api(`/mlite/api/gallery?view=${encodeURIComponent(view)}&q=${encodeURIComponent(q)}&page=${page}&size=${size}`),
+  gallery: ({ view = 'all', q = '', page = 1, size = 48, album = 0 } = {}) =>
+    api(`/mlite/api/gallery?view=${encodeURIComponent(view)}&q=${encodeURIComponent(q)}&page=${page}&size=${size}&album=${encodeURIComponent(album || 0)}`),
   galleryAction: (payload) => api('/mlite/api/gallery/action', { method: 'POST', body: payload }),
+  albums: () => api('/mlite/api/albums'),
   suggestions: () => api('/mlite/api/suggestions'),
   saveImage: (payload) => api('/mlite/api/save-image', { method: 'POST', body: payload }),
   options: (payload) => api('/mlite/api/options', { method: 'POST', body: payload }),

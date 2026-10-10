@@ -1516,11 +1516,51 @@ table.popup-table .link{
     font-weight: bold;
     cursor: pointer;
     width: 1em;
+    border-radius: 10px;
+    transition: background-color 120ms ease, color 120ms ease;
 }
 
 .modalControls span:hover, .modalControls span:focus{
-    color: #999;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.14);
     text-decoration: none;
+}
+
+/* Hover labels: the raw glyphs are cryptic, so every control explains itself on hover/focus. */
+.modalControls span[data-label],
+.modalPrev[data-label],
+.modalNext[data-label] {
+    position: relative;
+}
+
+.modalControls span[data-label]::after,
+.modalPrev[data-label]::after,
+.modalNext[data-label]::after {
+    content: attr(data-label);
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 500;
+    color: #e2e8f0;
+    background: rgba(15, 23, 42, 0.96);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 6px;
+    padding: 4px 9px;
+    opacity: 0;
+    pointer-events: none;
+    text-shadow: none;
+    transition: opacity 120ms ease;
+    z-index: 2;
+}
+
+.modalControls span[data-label]:hover::after,
+.modalControls span[data-label]:focus::after,
+.modalPrev[data-label]:hover::after,
+.modalNext[data-label]:hover::after {
+    opacity: 1;
 }
 
 .modalControls .modalCompare.active{
@@ -5698,6 +5738,13 @@ body.resizing .resize-handle {
 
 .gv2-detail-body {
     padding-top: 10px;
+}
+
+.gv2-detail-fileops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
 }
 
 .gv2-detail-badges {
