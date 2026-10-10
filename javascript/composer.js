@@ -1,5 +1,19 @@
 (function () {
+  var _composerLog = function () { var args = ['[composer]']; for (var i = 0; i < arguments.length; i++) args.push(arguments[i]); console.debug.apply(console, args); };
+  // crypto.randomUUID is only available in secure contexts (HTTPS or localhost).
+  // The webui is served over plain HTTP, so provide a fallback that still works.
+  function _composerUuid() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
   function makeComposerController(root) {
+    _composerLog('makeComposerController() called, root.id=' + (root && root.id));
     const state = {
       layers: [],
       active: -1,
@@ -17,29 +31,65 @@
       tool: "move",
       drawColor: "#ff3366",
       brushSize: 18,
+      layerHsvHue: 0,
+      layerHsvSat: 0,
+      layerHsvVal: 0,
+      _hsvTrackLayer: -1,
+      _hsvPreviewCache: null,
+      _hsvPreviewRaf: null,
+      replaceHueThreshold: 20,
+      replaceSatThreshold: 20,
+      replaceValThreshold: 30,
+      hsvReplaceMode: "h",
+      hsvReplaceThresholds: { h: 20, s: 20, v: 30 },
+      hsvApplyMode: "replace",
+      hsvReplaceMin: { h: 10, s: 10, v: 15 },
+      hsvReplaceMax: { h: 40, s: 40, v: 50 },
+      hsvReplaceSFilt: 100,
+      hsvReplaceVFilt: 100,
+      hsvSelectMode: false,
+      shiftSelectCanvas: null,
       linePreview: null,
       cropSelection: null,
       cropPreview: null,
       brushLastPoint: null,
+      // ALT+right-drag resize state
+      altResizeStartClientX: null,
+      altResizeStartBrushSize: null,
+      altResizeAnchorClientX: null,
+      altResizeAnchorClientY: null,
+      altResizeAccumDx: 0,
       viewportX: 0,
       viewportY: 0,
       viewportScale: 1,
+      viewportScaleMin: 0.25,
+      // Maximum number of CSS pixels a single canvas internal pixel may map to
+      // (adaptive max scale = maxCanvasPixelScreen * canvas.width / clientWidth)
+      maxCanvasPixelScreen: 8,
       startClientX: 0,
       startClientY: 0,
       startViewportX: 0,
       startViewportY: 0,
       useColorBackground: false,
       backgroundColor: "#1e293b",
+      _picker_prev_tool: null,
       paintUndoStack: [],
       paintRedoStack: [],
       maxPaintHistory: 80,
+      // Whether Left Ctrl is required to zoom the canvas (default: false)
+      requireLeftCtrlForZoom: false,
+      // Track left-CTRL state (used to enable canvas zoom on scroll)
+      leftCtrlDown: false,
     };
 
     const canvas = root.querySelector("#composer_canvas");
+    _composerLog('  canvas=' + !!canvas + ' (' + (canvas ? canvas.width + 'x' + canvas.height : 'MISSING') + ')');
     const ctx = canvas.getContext("2d");
     const canvasWrap = root.querySelector("#composer_canvas_wrap");
     const bgUploadWrap = document.getElementById("composer_bg_upload");
+    _composerLog('  bgUploadWrap=' + !!bgUploadWrap);
     const charsUploadWrap = document.getElementById("composer_chars_upload");
+    _composerLog('  charsUploadWrap=' + !!charsUploadWrap);
     const layerList = root.querySelector("#composer_layers");
     const assetList = root.querySelector("#composer_assets");
     const lockModeBtn = root.querySelector("#composer_lock_mode_btn");
@@ -54,23 +104,85 @@
     const layerDownBtn = root.querySelector("#composer_layer_down_btn");
     const toolMoveBtn = root.querySelector("#composer_tool_move_btn");
     const toolBrushBtn = root.querySelector("#composer_tool_brush_btn");
+    const toolEraserBtn = root.querySelector("#composer_tool_eraser_btn");
     const toolLineBtn = root.querySelector("#composer_tool_line_btn");
     const toolPickerBtn = root.querySelector("#composer_tool_picker_btn");
     const toolCropBtn = root.querySelector("#composer_tool_crop_btn");
     const drawColorInput = root.querySelector("#composer_draw_color");
     const brushSizeInput = root.querySelector("#composer_brush_size");
     const brushSizeValue = root.querySelector("#composer_brush_size_value");
+    const layerHsvHueInput = root.querySelector("#composer_layer_hsv_hue");
+    const layerHsvHueValue = root.querySelector("#composer_layer_hsv_hue_value");
+    const layerHsvSatInput = root.querySelector("#composer_layer_hsv_sat");
+    const layerHsvSatValue = root.querySelector("#composer_layer_hsv_sat_value");
+    const layerHsvValInput = root.querySelector("#composer_layer_hsv_val");
+    const layerHsvValValue = root.querySelector("#composer_layer_hsv_val_value");
+    const layerHsvApplyBtn = root.querySelector("#composer_layer_hsv_apply_btn");
     const cropApplyBtn = root.querySelector("#composer_crop_apply_btn");
     const cropCancelBtn = root.querySelector("#composer_crop_cancel_btn");
+    const replaceSourceColorInput = root.querySelector("#composer_replace_source_color");
+    const replaceToColorInput = root.querySelector("#composer_replace_to_color");
+    const replaceHueThresholdInput = root.querySelector("#composer_replace_hue_threshold");
+    const replaceHueThresholdValue = root.querySelector("#composer_replace_hue_threshold_value");
+    const replaceSatThresholdInput = root.querySelector("#composer_replace_sat_threshold");
+    const replaceSatThresholdValue = root.querySelector("#composer_replace_sat_threshold_value");
+    const replaceValThresholdInput = root.querySelector("#composer_replace_val_threshold");
+    const replaceValThresholdValue = root.querySelector("#composer_replace_val_threshold_value");
+    const replaceApplyBtn = root.querySelector("#composer_replace_apply_btn");
+    const hsvSourceColorInput = root.querySelector("#composer_hsv_source_color");
+    const hsvToColorInput = root.querySelector("#composer_hsv_to_color");
+    const hsvModeHBtn = root.querySelector("#composer_hsv_mode_h_btn");
+    const hsvModeSBtn = root.querySelector("#composer_hsv_mode_s_btn");
+    const hsvModeVBtn = root.querySelector("#composer_hsv_mode_v_btn");
+    const hsvThresholdInput = root.querySelector("#composer_hsv_threshold");
+    const hsvThresholdLabel = root.querySelector("#composer_hsv_threshold_label");
+    const hsvThresholdValue = root.querySelector("#composer_hsv_threshold_value");
+    const hsvApplyBtn = root.querySelector("#composer_hsv_apply_btn");
+    const hsvApplyReplaceBtn = root.querySelector("#composer_hsv_apply_replace_btn");
+    const hsvApplyLerpBtn = root.querySelector("#composer_hsv_apply_lerp_btn");
+    const hsvApplyAlphaBtn = root.querySelector("#composer_hsv_apply_alpha_btn");
+    const hsvThresholdRow = root.querySelector("#composer_hsv_thresh_row");
+    const hsvMinRow = root.querySelector("#composer_hsv_min_row");
+    const hsvMaxRow = root.querySelector("#composer_hsv_max_row");
+    const hsvMinThresholdInput = root.querySelector("#composer_hsv_min_threshold");
+    const hsvMinThresholdValue = root.querySelector("#composer_hsv_min_threshold_value");
+    const hsvMaxThresholdInput = root.querySelector("#composer_hsv_max_threshold");
+    const hsvMaxThresholdValue = root.querySelector("#composer_hsv_max_threshold_value");
+    const hsvSFilterRow = root.querySelector("#composer_hsv_s_filter_row");
+    const hsvSFilterInput = root.querySelector("#composer_hsv_s_filter");
+    const hsvSFilterValue = root.querySelector("#composer_hsv_s_filter_value");
+    const hsvVFilterRow = root.querySelector("#composer_hsv_v_filter_row");
+    const hsvVFilterInput = root.querySelector("#composer_hsv_v_filter");
+    const hsvVFilterValue = root.querySelector("#composer_hsv_v_filter_value");
+    const hsvApplyShiftBtn = root.querySelector("#composer_hsv_apply_shift_btn");
+    const hsvSelectRow = root.querySelector("#composer_hsv_select_row");
+    const hsvSelectBtn = root.querySelector("#composer_hsv_select_btn");
     const statusText = root.querySelector("#composer_status_text");
+    const canvasWidthInput = root.querySelector("#composer_canvas_width");
+    const canvasHeightInput = root.querySelector("#composer_canvas_height");
+    const canvasSizeApplyBtn = root.querySelector("#composer_canvas_size_apply");
 
     const toolButtons = {
       move: toolMoveBtn,
       brush: toolBrushBtn,
+      eraser: toolEraserBtn,
       line: toolLineBtn,
       picker: toolPickerBtn,
       crop: toolCropBtn,
     };
+    const flattenPaintBtn = root.querySelector("#composer_flatten_paint_btn");
+    const useLctrlZoomBtn = root.querySelector('#composer_use_lctrl_zoom_btn');
+    // Show hover tooltips describing keyboard shortcuts for each tool
+    try {
+      if (toolMoveBtn) toolMoveBtn.title = "Move (Q / 1)";
+      if (toolBrushBtn) toolBrushBtn.title = "Brush (W / B / 2)";
+      if (toolEraserBtn) toolEraserBtn.title = "Eraser (X / 6) — selected layer";
+      if (toolLineBtn) toolLineBtn.title = "Line (E / 3)";
+      if (toolPickerBtn) toolPickerBtn.title = "Picker (R / I / 4)";
+      if (toolCropBtn) toolCropBtn.title = "Crop (T / 5)";
+    } catch (e) {
+      // ignore environments that don't support setting title
+    }
 
     function updateLockModeUi() {
       if (!lockModeBtn) return;
@@ -92,6 +204,10 @@
       statusText.textContent = text;
     }
 
+    function paintToolName() {
+      return state.tool === "line" ? "Line" : state.tool === "eraser" ? "Eraser" : "Brush";
+    }
+
     function updateToolUi() {
       Object.entries(toolButtons).forEach(([name, btn]) => {
         if (btn) {
@@ -101,6 +217,378 @@
 
       if (brushSizeValue) {
         brushSizeValue.textContent = `${state.brushSize} px`;
+      }
+      // update canvas cursor for active tool
+      try {
+        if (canvas) {
+          if (state.dragMode === "pan_canvas") {
+            canvas.style.cursor = "grabbing";
+          } else {
+            switch (state.tool) {
+              case "move":
+                canvas.style.cursor = "grab";
+                break;
+            case "brush":
+            case "line":
+                // Use a small custom cursor (dot) for brush/line so movement
+                // feels native while still showing our size indicator overlay.
+                try {
+                  canvas.style.cursor = ensureBrushCursor(state.drawColor);
+                } catch (e) {
+                  canvas.style.cursor = "crosshair";
+                }
+                break;
+              case "eraser":
+                // Ring cursor: reads as an eraser and stays visible over any
+                // background without depending on the draw color.
+                try {
+                  canvas.style.cursor = ensureEraserCursor();
+                } catch (e) {
+                  canvas.style.cursor = "crosshair";
+                }
+                break;
+              case "picker":
+                canvas.style.cursor = "crosshair";
+                break;
+              case "crop":
+                canvas.style.cursor = "crosshair";
+                break;
+              default:
+                canvas.style.cursor = "default";
+            }
+          }
+        }
+      } catch (e) {
+        // ignore cursor errors in odd environments
+      }
+    }
+
+    // Cursor position tracking for preview placement
+    state.cursorClientX = null;
+    state.cursorClientY = null;
+    let _sizePreviewTimeout = null;
+
+    function ensureSizePreviewEl() {
+      // make a unique id for this composer root so multiple composer instances
+      // don't collide
+      const uid = root.dataset.composerUid || (root.dataset.composerUid = _composerUuid());
+      let el = document.querySelector(`.composer-size-preview[data-composer-uid="${uid}"]`);
+      if (el) return el;
+      // container
+      el = document.createElement('div');
+      el.className = 'composer-size-preview';
+      el.setAttribute('data-composer-uid', uid);
+      Object.assign(el.style, {
+        position: 'fixed',
+        pointerEvents: 'none',
+        zIndex: 10000,
+        left: '0px',
+        top: '0px',
+        transform: 'translate(-50%, -50%)',
+        display: 'none',
+      });
+
+      // inner dot
+      const dot = document.createElement('div');
+      dot.className = 'composer-size-preview-dot';
+      Object.assign(dot.style, {
+        border: '2px solid rgba(255,255,255,0.85)',
+        borderRadius: '50%',
+        background: 'rgba(0,0,0,0.12)',
+        boxSizing: 'border-box',
+        transform: 'translate(-50%, -50%)',
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+      });
+      el.appendChild(dot);
+
+      // label
+      const label = document.createElement('div');
+      label.className = 'composer-size-preview-label';
+      Object.assign(label.style, {
+        position: 'absolute',
+        left: '50%',
+        top: 'calc(50% + 8px)',
+        transform: 'translateX(-50%)',
+        color: '#fff',
+        background: 'rgba(0,0,0,0.6)',
+        fontSize: '12px',
+        padding: '2px 6px',
+        borderRadius: '4px',
+        whiteSpace: 'nowrap',
+        pointerEvents: 'none',
+      });
+      el.appendChild(label);
+
+      // store references for quick access
+      el._dot = dot;
+      el._label = label;
+
+      document.body.appendChild(el);
+      return el;
+    }
+
+    function hexToRgba(hex, alpha) {
+      if (!hex || typeof hex !== 'string') return null;
+      let c = hex.replace(/^#/, '');
+      if (c.length === 3) c = c.split('').map((ch) => ch + ch).join('');
+      if (c.length !== 6) return null;
+      const r = parseInt(c.slice(0, 2), 16);
+      const g = parseInt(c.slice(2, 4), 16);
+      const b = parseInt(c.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function ensureBrushCursor(color) {
+      try {
+        const dpr = window.devicePixelRatio || 1;
+        const key = `${(color || state.drawColor || '#000000')}|${dpr}`;
+        if (!canvas._brushCursorCache) canvas._brushCursorCache = {};
+        if (canvas._brushCursorCache[key]) return canvas._brushCursorCache[key];
+
+        const baseSize = 32;
+        const cvs = document.createElement('canvas');
+        cvs.width = baseSize * dpr;
+        cvs.height = baseSize * dpr;
+        const cctx = cvs.getContext('2d');
+        cctx.scale(dpr, dpr);
+        cctx.clearRect(0, 0, baseSize, baseSize);
+
+        // Draw a small filled dot with a subtle stroke for contrast
+        const radius = 0.5;
+        const cx = baseSize / 2;
+        const cy = baseSize / 2;
+        cctx.beginPath();
+        cctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        cctx.fillStyle = color || state.drawColor || '#000000';
+        cctx.fill();
+        cctx.lineWidth = 0.8;
+        cctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        cctx.stroke();
+
+        const dataUrl = cvs.toDataURL('image/png');
+        // Hotspot coordinates should be specified in image pixels; use the
+        // canvas actual pixel dimensions so the hotspot lands in the center
+        // even on high-DPI displays.
+        const hotspotX = Math.floor(cvs.width / 2);
+        const hotspotY = Math.floor(cvs.height / 2);
+        const cursorStr = `url(${dataUrl}) ${hotspotX} ${hotspotY}, auto`;
+        canvas._brushCursorCache[key] = cursorStr;
+        return cursorStr;
+      } catch (e) {
+        return 'crosshair';
+      }
+    }
+
+    function ensureEraserCursor() {
+      try {
+        if (canvas._eraserCursorCache) return canvas._eraserCursorCache;
+
+        const baseSize = 32;
+        const cvs = document.createElement('canvas');
+        cvs.width = baseSize;
+        cvs.height = baseSize;
+        const cctx = cvs.getContext('2d');
+        cctx.clearRect(0, 0, baseSize, baseSize);
+
+        // Ring cursor: dark outer ring + light inner ring with a transparent
+        // center, so it stays visible over any background.
+        const cx = baseSize / 2;
+        const cy = baseSize / 2;
+        cctx.beginPath();
+        cctx.arc(cx, cy, 7, 0, Math.PI * 2);
+        cctx.lineWidth = 2;
+        cctx.strokeStyle = 'rgba(0,0,0,0.9)';
+        cctx.stroke();
+        cctx.beginPath();
+        cctx.arc(cx, cy, 6, 0, Math.PI * 2);
+        cctx.lineWidth = 2;
+        cctx.strokeStyle = 'rgba(255,255,255,0.95)';
+        cctx.stroke();
+
+        const dataUrl = cvs.toDataURL('image/png');
+        const cursorStr = `url(${dataUrl}) ${cx} ${cy}, auto`;
+        canvas._eraserCursorCache = cursorStr;
+        return cursorStr;
+      } catch (e) {
+        return 'crosshair';
+      }
+    }
+
+    function showSizePreview(clientX, clientY, color) {
+      const el = ensureSizePreviewEl();
+      if (!el) return;
+      // fallback to last-known cursor if event didn't provide coords
+      const rect = canvas.getBoundingClientRect();
+      const fallbackX = state.cursorClientX || (rect.left + rect.width / 2);
+      const fallbackY = state.cursorClientY || (rect.top + rect.height / 2);
+      const clientXUsed = (clientX || clientX === 0) ? clientX : fallbackX;
+      const clientYUsed = (clientY || clientY === 0) ? clientY : fallbackY;
+
+      // Map client coordinates to canvas internal coordinates, then map
+      // back to transformed/display CSS coordinates so the preview sits
+      // exactly where the brush stroke will appear on-screen even when
+      // the canvas is panned/scaled.
+      const canvasPt = clientToCanvas(clientXUsed, clientYUsed);
+      let displayX = clientXUsed;
+      let displayY = clientYUsed;
+      if (canvasPt && canvas.width > 0 && canvas.height > 0) {
+        displayX = rect.left + (canvasPt.x / canvas.width) * rect.width;
+        displayY = rect.top + (canvasPt.y / canvas.height) * rect.height;
+      }
+
+      // Determine the target layer for painting (paint overlay if present,
+      // otherwise the active layer). The stroke width used when drawing is
+      // `state.brushSize / layer.scale` in canvas/internal pixels. Convert
+      // that to CSS pixels for the DOM preview by multiplying with
+      // (rect.width / canvas.width).
+      const paintLayer = state.layers.find((x) => x.isPaintOverlay) || state.layers[state.active] || null;
+      const layerScale = paintLayer ? Math.max(0.05, paintLayer.scale || 1) : 1;
+      const editLineWidth = Math.max(1, state.brushSize / layerScale);
+      const sizeCss = Math.max(1, Math.round(editLineWidth * (rect.width / canvas.width)));
+
+      // update inner dot and label. Use a semi-transparent fill and colored
+      // border so the circle is visible but not obtrusive.
+      const baseColor = color || state.drawColor || '#ffffff';
+      if (el._dot) {
+        el._dot.style.width = `${sizeCss}px`;
+        el._dot.style.height = `${sizeCss}px`;
+        el._dot.style.border = `2px solid ${baseColor}`;
+        const bg = hexToRgba(baseColor, 0.12) || 'transparent';
+        el._dot.style.background = bg;
+        // keep dot centered inside the container
+        el._dot.style.transform = 'translate(-50%, -50%)';
+      } else {
+        el.style.width = `${sizeCss}px`;
+        el.style.height = `${sizeCss}px`;
+      }
+      if (el._label) {
+        el._label.textContent = `${Math.round(state.brushSize)} px`;
+      }
+      el.style.left = `${displayX}px`;
+      el.style.top = `${displayY}px`;
+      el.style.display = 'block';
+      // keep visible until explicitly hidden (hide on pointerleave/tool change)
+      if (_sizePreviewTimeout) {
+        clearTimeout(_sizePreviewTimeout);
+        _sizePreviewTimeout = null;
+      }
+      // force reflow so size change is applied immediately
+      // eslint-disable-next-line no-unused-expressions
+      el.offsetWidth;
+    }
+
+    function hideSizePreview() {
+      const uid = root.dataset.composerUid;
+      if (!uid) return;
+      const sel = `.composer-size-preview[data-composer-uid="${uid}"]`;
+      const el = document.querySelector(sel);
+      if (!el) return;
+      if (_sizePreviewTimeout) {
+        clearTimeout(_sizePreviewTimeout);
+        _sizePreviewTimeout = null;
+      }
+      el.style.display = 'none';
+    }
+
+    // Convert client coordinates to canvas internal pixels
+    function clientToCanvas(clientX, clientY) {
+      try {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return {
+          x: (clientX - rect.left) * scaleX,
+          y: (clientY - rect.top) * scaleY,
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function ensureColorPreviewEl() {
+      const uid = root.dataset.composerUid || (root.dataset.composerUid = _composerUuid());
+      let el = document.querySelector(`.composer-color-preview[data-composer-uid="${uid}"]`);
+      if (el) return el;
+
+      el = document.createElement('div');
+      el.className = 'composer-color-preview';
+      el.setAttribute('data-composer-uid', uid);
+      Object.assign(el.style, {
+        position: 'fixed',
+        pointerEvents: 'none',
+        zIndex: 10002,
+        left: '0px',
+        top: '0px',
+        transform: 'translate(-50%, -80%)',
+        display: 'none',
+      });
+
+      const swatch = document.createElement('div');
+      swatch.className = 'composer-color-preview-swatch';
+      Object.assign(swatch.style, {
+        width: '20px',
+        height: '20px',
+        borderRadius: '4px',
+        border: '1px solid rgba(0,0,0,0.6)',
+        boxSizing: 'border-box',
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        marginRight: '6px',
+      });
+
+      const label = document.createElement('div');
+      label.className = 'composer-color-preview-label';
+      Object.assign(label.style, {
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        color: '#fff',
+        fontSize: '12px',
+        background: 'rgba(0,0,0,0.6)',
+        padding: '2px 6px',
+        borderRadius: '4px',
+      });
+
+      el.appendChild(swatch);
+      el.appendChild(label);
+      el._swatch = swatch;
+      el._label = label;
+
+      document.body.appendChild(el);
+      return el;
+    }
+
+    function showColorPreview(clientX, clientY, color) {
+      const el = ensureColorPreviewEl();
+      if (!el) return;
+      if (color) {
+        el._swatch.style.background = color;
+        el._label.textContent = color;
+      } else {
+        el._swatch.style.background = 'transparent';
+        el._label.textContent = '';
+      }
+      el.style.left = `${clientX}px`;
+      el.style.top = `${clientY}px`;
+      el.style.display = 'block';
+    }
+
+    function hideColorPreview() {
+      const uid = root.dataset.composerUid;
+      if (!uid) return;
+      const sel = `.composer-color-preview[data-composer-uid="${uid}"]`;
+      const el = document.querySelector(sel);
+      if (!el) return;
+      el.style.display = 'none';
+    }
+
+    function sampleCurrentCanvasColor(px, py) {
+      try {
+        const data = ctx.getImageData(Math.round(px), Math.round(py), 1, 1).data;
+        return `#${[data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+      } catch (e) {
+        return null;
       }
     }
 
@@ -114,6 +602,36 @@
       }
       updateToolUi();
       draw();
+
+      // Show or hide the brush/line size preview depending on the active tool.
+      try {
+        if (toolName === "brush" || toolName === "line" || toolName === "eraser") {
+          const rect = canvas.getBoundingClientRect();
+          const cx = state.cursorClientX || (rect.left + rect.width / 2);
+          const cy = state.cursorClientY || (rect.top + rect.height / 2);
+          showSizePreview(cx, cy);
+        } else {
+          hideSizePreview();
+        }
+      } catch (e) {
+        // ignore preview errors
+      }
+
+      // Show or hide the picker color preview depending on the active tool.
+      try {
+        if (toolName === "picker") {
+          const rect = canvas.getBoundingClientRect();
+          const cx = state.cursorClientX || (rect.left + rect.width / 2);
+          const cy = state.cursorClientY || (rect.top + rect.height / 2);
+          const c = clientToCanvas(cx, cy);
+          const color = c ? sampleCurrentCanvasColor(c.x, c.y) : null;
+          showColorPreview(cx, cy, color);
+        } else {
+          hideColorPreview();
+        }
+      } catch (e) {
+        // ignore preview failures
+      }
     }
 
     function getBackgroundIndex() {
@@ -169,6 +687,28 @@
     function applyCanvasViewport() {
       canvas.style.transformOrigin = "0 0";
       canvas.style.transform = `translate(${state.viewportX}px, ${state.viewportY}px) scale(${state.viewportScale})`;
+
+      // Choose filtering strategy:
+      // - When magnifying (viewportScale >= 1) use nearest (pixelated) for crisp zoom-in
+      // - When minifying (viewportScale < 1) use smoothing (area-like) for better downscale
+      try {
+        if (state.viewportScale >= 1) {
+          canvas.style.imageRendering = "pixelated";
+          if (ctx && typeof ctx.imageSmoothingEnabled !== 'undefined') {
+            ctx.imageSmoothingEnabled = false;
+          }
+        } else {
+          canvas.style.imageRendering = "auto";
+          if (ctx && typeof ctx.imageSmoothingEnabled !== 'undefined') {
+            ctx.imageSmoothingEnabled = true;
+            if (typeof ctx.imageSmoothingQuality !== 'undefined') {
+              ctx.imageSmoothingQuality = 'high';
+            }
+          }
+        }
+      } catch (e) {
+        // ignore browser-specific failures
+      }
     }
 
     function captureLayerSnapshot(layer) {
@@ -209,20 +749,85 @@
       state.paintRedoStack = [];
     }
 
+    // Record a generated layer (Color Replace / HSV Replace / HSV Shift) so
+    // undo can remove it and redo can bring it back. Optionally remembers the
+    // consumed dst selection (shift mode) so undo restores it too.
+    function pushLayerAddUndo(layer, shiftSelectCanvasBefore) {
+      const record = {
+        type: "removeLayer",
+        layerId: layer.id,
+        index: state.layers.indexOf(layer),
+        layer: {
+          id: layer.id,
+          name: layer.name,
+          src: layer.src,
+          x: layer.x,
+          y: layer.y,
+          scale: layer.scale,
+          rot: layer.rot,
+          mirror: layer.mirror,
+          opacity: layer.opacity,
+          isBackground: layer.isBackground,
+          isPaintOverlay: layer.isPaintOverlay,
+        },
+        shiftSelectDataUrl: shiftSelectCanvasBefore ? shiftSelectCanvasBefore.toDataURL("image/png") : null,
+      };
+      state.paintUndoStack.push(record);
+      if (state.paintUndoStack.length > state.maxPaintHistory) {
+        state.paintUndoStack.shift();
+      }
+      state.paintRedoStack = [];
+    }
+
     async function undoPaint() {
       if (state.paintUndoStack.length === 0) {
         setStatus("Nothing to undo.");
         return;
       }
 
-      const overlay = ensurePaintOverlayLayer();
-      const current = captureLayerSnapshot(overlay);
-      const previous = state.paintUndoStack.pop();
-      if (!previous) {
+      const record = state.paintUndoStack.pop();
+      if (!record) {
         setStatus("Nothing to undo.");
         return;
       }
 
+      if (record.type === "removeLayer") {
+        // Undo a color/hsv/shift apply: remove the generated layer and, for
+        // shift applies, bring the consumed dst selection back.
+        const idx = state.layers.findIndex((x) => x.id === record.layerId);
+        if (idx < 0) {
+          setStatus("Undo failed (generated layer not found).");
+          return;
+        }
+        state.layers.splice(idx, 1);
+        if (state.active === idx) {
+          state.active = Math.min(idx, state.layers.length - 1);
+        } else if (state.active > idx) {
+          state.active -= 1;
+        }
+        if (record.shiftSelectDataUrl) {
+          const img = await loadImageFromDataUrl(record.shiftSelectDataUrl);
+          if (img) {
+            const c = document.createElement("canvas");
+            c.width = img.width;
+            c.height = img.height;
+            c.getContext("2d").drawImage(img, 0, 0);
+            state.shiftSelectCanvas = c;
+          }
+        }
+        state.paintRedoStack.push(record);
+        if (state.paintRedoStack.length > state.maxPaintHistory) {
+          state.paintRedoStack.shift();
+        }
+        renderLayerList();
+        draw();
+        setStatus("Undo: removed generated layer.");
+        return;
+      }
+
+      // Stroke snapshot: capture the current state of the layer it belongs to.
+      const target = state.layers.find((x) => x.id === record.layerId);
+      const current = target ? captureLayerSnapshot(target) : null;
       if (current) {
         state.paintRedoStack.push(current);
         if (state.paintRedoStack.length > state.maxPaintHistory) {
@@ -230,10 +835,10 @@
         }
       }
 
-      const restored = await restoreLayerSnapshot(previous);
+      const restored = await restoreLayerSnapshot(record);
       if (restored) {
         draw();
-        setStatus("Undo paint stroke.");
+        setStatus("Undo last stroke.");
       } else {
         setStatus("Undo failed.");
       }
@@ -245,14 +850,51 @@
         return;
       }
 
-      const overlay = ensurePaintOverlayLayer();
-      const current = captureLayerSnapshot(overlay);
-      const next = state.paintRedoStack.pop();
-      if (!next) {
+      const record = state.paintRedoStack.pop();
+      if (!record) {
         setStatus("Nothing to redo.");
         return;
       }
 
+      if (record.type === "removeLayer") {
+        // Redo a color/hsv/shift apply: re-add the generated layer and consume
+        // the dst selection again.
+        const img = await loadImageFromDataUrl(record.layer.src);
+        if (!img) {
+          setStatus("Redo failed (generated layer image unavailable).");
+          return;
+        }
+        const layer = {
+          id: record.layerId,
+          name: record.layer.name,
+          src: record.layer.src,
+          img,
+          x: record.layer.x,
+          y: record.layer.y,
+          scale: record.layer.scale,
+          rot: record.layer.rot,
+          mirror: record.layer.mirror,
+          opacity: record.layer.opacity,
+          isBackground: record.layer.isBackground,
+          isPaintOverlay: record.layer.isPaintOverlay,
+        };
+        const idx = Math.max(0, Math.min(record.index ?? state.layers.length, state.layers.length));
+        state.layers.splice(idx, 0, layer);
+        state.active = idx;
+        state.shiftSelectCanvas = null;
+        state.paintUndoStack.push(record);
+        if (state.paintUndoStack.length > state.maxPaintHistory) {
+          state.paintUndoStack.shift();
+        }
+        renderLayerList();
+        draw();
+        setStatus("Redo: generated layer restored.");
+        return;
+      }
+
+      // Stroke snapshot.
+      const target = state.layers.find((x) => x.id === record.layerId);
+      const current = target ? captureLayerSnapshot(target) : null;
       if (current) {
         state.paintUndoStack.push(current);
         if (state.paintUndoStack.length > state.maxPaintHistory) {
@@ -260,10 +902,10 @@
         }
       }
 
-      const restored = await restoreLayerSnapshot(next);
+      const restored = await restoreLayerSnapshot(record);
       if (restored) {
         draw();
-        setStatus("Redo paint stroke.");
+        setStatus("Redo last stroke.");
       } else {
         setStatus("Redo failed.");
       }
@@ -313,13 +955,16 @@
     }
 
     async function restoreFromConfigJson(configJson) {
+      _composerLog('restoreFromConfigJson() len=' + (configJson ? configJson.length : 0));
       let payload;
       try {
         payload = JSON.parse(configJson);
       } catch (e) {
+        _composerLog('  JSON parse FAILED: ' + e.message);
         setStatus("Failed to parse config file.");
         return;
       }
+      _composerLog('  parsed OK, layers=' + (payload.layers ? payload.layers.length : 0) + ' w=' + (payload.width || '?') + ' h=' + (payload.height || '?'));
 
       if (payload.width && payload.height) {
         canvas.width = payload.width;
@@ -341,7 +986,7 @@
         const img = await loadImageFromDataUrl(ld.src);
         if (!img) continue;
         layers.push({
-          id: crypto.randomUUID(),
+          id: _composerUuid(),
           name: ld.name || "Layer",
           src: ld.src,
           img,
@@ -367,7 +1012,7 @@
         const key = `restored::${layer.name}`;
         if (state.assetKeys.has(key)) continue;
         state.assets.push({
-          id: crypto.randomUUID(),
+          id: _composerUuid(),
           key,
           name: layer.name,
           img: layer.img,
@@ -376,9 +1021,11 @@
         state.assetKeys.add(key);
       }
 
+      _composerLog('  built ' + layers.length + ' layer(s), canvas=' + canvas.width + 'x' + canvas.height);
       renderLayerList();
       renderAssetList();
       fitCanvasToParent();
+      syncCanvasSizeInputs();
       draw();
       setStatus(`Config loaded: ${layers.length} layer(s), ${state.assets.length} asset(s) restored.`);
     }
@@ -410,8 +1057,117 @@
       applyCanvasViewport();
     }
 
+    /**
+     * Sync the canvas size number inputs to reflect the current canvas dimensions.
+     */
+    function syncCanvasSizeInputs() {
+      if (canvasWidthInput) canvasWidthInput.value = canvas.width;
+      if (canvasHeightInput) canvasHeightInput.value = canvas.height;
+    }
+
+    /**
+     * Resize the internal canvas to the values in the width/height inputs.
+     * Scales all layer positions proportionally so the composition is preserved.
+     */
+    function resizeCanvasFromInputs() {
+      const newW = Math.max(64, Math.min(8192, Math.round(Number(canvasWidthInput?.value) || canvas.width)));
+      const newH = Math.max(64, Math.min(8192, Math.round(Number(canvasHeightInput?.value) || canvas.height)));
+      if (newW === canvas.width && newH === canvas.height) return;
+
+      const scaleX = newW / Math.max(1, canvas.width);
+      const scaleY = newH / Math.max(1, canvas.height);
+
+      // Scale all layer positions proportionally (skip paint overlay — it
+      // always spans the full canvas and will be synced separately).
+      for (const layer of state.layers) {
+        if (layer.isPaintOverlay) continue;
+        layer.x = layer.x * scaleX;
+        layer.y = layer.y * scaleY;
+        layer.scale = (layer.scale || 1) * Math.min(scaleX, scaleY);
+      }
+
+      // Resize canvas FIRST so syncPaintOverlaySize uses the new dimensions
+      canvas.width = newW;
+      canvas.height = newH;
+
+      // Now sync the paint overlay to the new canvas size
+      const overlay = state.layers.find((x) => x.isPaintOverlay);
+      if (overlay) {
+        syncPaintOverlaySize(overlay);
+      }
+
+      syncCanvasSizeInputs();
+      fitCanvasToParent();
+      renderLayerList();
+      draw();
+      setStatus(`Canvas resized to ${newW}×${newH}.`);
+    }
+
+    // True while any HSV adjust bar is off zero (live preview active).
+    function hasLayerHsvPreview() {
+      return (Number(state.layerHsvHue) || 0) !== 0
+        || (Number(state.layerHsvSat) || 0) !== 0
+        || (Number(state.layerHsvVal) || 0) !== 0;
+    }
+
+    // Build (and cache) a preview copy of the layer with the current HSV
+    // shifts applied. The original layer is never mutated.
+    function computeHsvPreviewCanvas(layer) {
+      if (!layer || !layer.img) return null;
+      const hShift = Number(state.layerHsvHue) || 0;
+      const sShift = Number(state.layerHsvSat) || 0;
+      const vShift = Number(state.layerHsvVal) || 0;
+
+      const cache = state._hsvPreviewCache;
+      if (cache && cache.layerId === layer.id && cache.src === layer.src
+        && cache.hShift === hShift && cache.sShift === sShift && cache.vShift === vShift) {
+        return cache.canvas;
+      }
+
+      // Cap the preview resolution so huge layers stay responsive; drawLayer
+      // upscales the preview canvas back to the layer's display size.
+      const srcW = Math.max(1, layer.img.width);
+      const srcH = Math.max(1, layer.img.height);
+      const maxPreviewDim = 2048;
+      const ratio = Math.min(1, maxPreviewDim / Math.max(srcW, srcH));
+      const w = Math.max(1, Math.round(srcW * ratio));
+      const h = Math.max(1, Math.round(srcH * ratio));
+      const preview = document.createElement("canvas");
+      preview.width = w;
+      preview.height = h;
+      const pctx = preview.getContext("2d");
+      pctx.drawImage(layer.img, 0, 0, w, h);
+
+      const imgData = pctx.getImageData(0, 0, w, h);
+      const d = imgData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] <= 0) continue;
+        const hsv = rgbToHsv(d[i], d[i + 1], d[i + 2]);
+        const nh = (((hsv.h + hShift) % 360) + 360) % 360;
+        const ns = Math.max(0, Math.min(100, hsv.s + sShift));
+        const nv = Math.max(0, Math.min(100, hsv.v + vShift));
+        const rgb = hsvToRgb(nh, ns, nv);
+        d[i] = rgb.r;
+        d[i + 1] = rgb.g;
+        d[i + 2] = rgb.b;
+      }
+      pctx.putImageData(imgData, 0, 0);
+
+      state._hsvPreviewCache = { layerId: layer.id, src: layer.src, hShift, sShift, vShift, canvas: preview };
+      return preview;
+    }
+
+    // Image source used when drawing a layer: the HSV-previewed copy for the
+    // active layer while shifts are non-zero, otherwise the layer image itself.
+    function getLayerDrawImage(layer) {
+      if (layer === getActiveLayer() && hasLayerHsvPreview() && canEditLayer(layer)) {
+        return computeHsvPreviewCanvas(layer) || layer.img;
+      }
+      return layer.img;
+    }
+
     function drawLayer(layer) {
-      const img = layer.img;
+      const img = getLayerDrawImage(layer);
       const { w, h } = getLayerSize(layer);
       const lineWidth = Math.max(1, uiPxToCanvas(2));
       const handleSize = Math.max(8, uiPxToCanvas(12));
@@ -467,20 +1223,38 @@
       ctx.restore();
     }
 
+    // Draw the transient pink dst selection (shift mode) on top of everything.
+    function drawShiftSelectOverlay() {
+      if (!state.shiftSelectCanvas || state.hsvApplyMode !== "shift") return;
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.drawImage(state.shiftSelectCanvas, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+
     function drawLineOverlay(preview) {
       if (!preview || state.active < 0) return;
 
       const layer = state.layers[state.active];
       if (!layer || preview.layerId !== layer.id) return;
 
+      // Convert image-local points to display-local (layer space) then
+      // account for canvas viewport scaling so the preview line width
+      // matches the apparent size on-screen.
       const startDisplay = imageLocalToDisplayLocal(layer, preview.start);
       const endDisplay = imageLocalToDisplayLocal(layer, preview.end);
+
+      // The actual stroke drawing uses a line width in canvas/internal
+      // pixels equal to `state.brushSize / layer.scale`. Use the same value
+      // here so the preview line thickness matches the final stroke.
+      const adjustedWidth = Math.max(1, state.brushSize / Math.max(0.05, layer.scale || 1));
+      // debug logging removed
 
       ctx.save();
       ctx.translate(layer.x, layer.y);
       ctx.rotate(layer.rot);
       ctx.strokeStyle = state.drawColor;
-      ctx.lineWidth = Math.max(1, uiPxToCanvas(state.brushSize));
+      ctx.lineWidth = adjustedWidth;
       ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(startDisplay.x, startDisplay.y);
@@ -504,9 +1278,15 @@
     }
 
     function draw() {
+      // Discard unapplied HSV adjust preview when the active layer changes.
+      if (state._hsvTrackLayer !== state.active) {
+        state._hsvTrackLayer = state.active;
+        resetLayerHsvAdjustUi();
+      }
       renderBaseCanvas();
       drawLineOverlay(state.linePreview);
       drawCropOverlay(state.cropPreview || state.cropSelection);
+      drawShiftSelectOverlay();
     }
 
     function applyColorBackground(hexColor) {
@@ -528,6 +1308,505 @@
       renderLayerList();
       draw();
       setStatus(`Background color set: ${color}`);
+    }
+
+    function hexToRgb(hex) {
+      if (!hex || typeof hex !== 'string') return { r: 0, g: 0, b: 0 };
+      let c = hex.replace(/^#/, '');
+      if (c.length === 3) c = c.split('').map((ch) => ch + ch).join('');
+      if (c.length !== 6) return { r: 0, g: 0, b: 0 };
+      return {
+        r: parseInt(c.slice(0, 2), 16),
+        g: parseInt(c.slice(2, 4), 16),
+        b: parseInt(c.slice(4, 6), 16),
+      };
+    }
+
+    // Convert RGB (0-255) to HSV. Hue is 0-360 (undefined -> 0 for gray),
+    // saturation and value are 0-100.
+    function rgbToHsv(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      let h = 0;
+      if (d !== 0) {
+        if (max === r) h = ((g - b) / d) % 6;
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+      const s = max === 0 ? 0 : d / max;
+      return { h, s: s * 100, v: max * 100 };
+    }
+
+    // Convert HSV (h 0-360, s 0-100, v 0-100) back to RGB (0-255).
+    function hsvToRgb(h, s, v) {
+      s /= 100;
+      v /= 100;
+      const c = v * s;
+      const hp = (((h % 360) + 360) % 360) / 60;
+      const x = c * (1 - Math.abs((hp % 2) - 1));
+      let r = 0, g = 0, b = 0;
+      if (hp < 1) { r = c; g = x; }
+      else if (hp < 2) { r = x; g = c; }
+      else if (hp < 3) { g = c; b = x; }
+      else if (hp < 4) { g = x; b = c; }
+      else if (hp < 5) { r = x; b = c; }
+      else { r = c; b = x; }
+      const m = v - c;
+      return {
+        r: Math.round((r + m) * 255),
+        g: Math.round((g + m) * 255),
+        b: Math.round((b + m) * 255),
+      };
+    }
+
+    // Shortest-path circular lerp between two hue angles (0-360).
+    function lerpHue(a, b, t) {
+      const diff = ((((b - a) % 360) + 540) % 360) - 180;
+      return (((a + diff * t) % 360) + 360) % 360;
+    }
+
+    // Render the full composition (background color + all layers, no selection
+    // chrome) into the given 2D context at canvas size.
+    function renderCompositionToCanvas(targetCtx) {
+      if (!targetCtx) return;
+      if (state.useColorBackground && state.backgroundColor) {
+        targetCtx.fillStyle = state.backgroundColor;
+        targetCtx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      for (const layer of state.layers) {
+        const img = layer.img;
+        if (!img) continue;
+        const { w, h } = getLayerSize(layer);
+        targetCtx.save();
+        targetCtx.translate(layer.x, layer.y);
+        targetCtx.rotate(layer.rot);
+        targetCtx.scale(layer.mirror ? -1 : 1, 1);
+        targetCtx.globalAlpha = layer.opacity;
+        targetCtx.drawImage(img, -w / 2, -h / 2, w, h);
+        targetCtx.restore();
+      }
+    }
+
+    function applyColorReplace() {
+      if (state.layers.length === 0 && !state.useColorBackground) {
+        setStatus("Add an image or background first.");
+        return;
+      }
+
+      const srcColor = hexToRgb(state.drawColor);
+      const srcHsv = rgbToHsv(srcColor.r, srcColor.g, srcColor.b);
+      const toColor = hexToRgb(replaceToColorInput ? (replaceToColorInput.value || "#000000") : "#000000");
+      const hThresh = Math.max(0, Math.min(180, Number(state.replaceHueThreshold) || 0));
+      const sThresh = Math.max(0, Math.min(100, Number(state.replaceSatThreshold) || 0));
+      const vThresh = Math.max(0, Math.min(100, Number(state.replaceValThreshold) || 0));
+
+      // Render the current composition (without selection chrome) offscreen.
+      const compCanvas = document.createElement("canvas");
+      compCanvas.width = Math.max(1, canvas.width);
+      compCanvas.height = Math.max(1, canvas.height);
+      const compCtx = compCanvas.getContext("2d");
+      renderCompositionToCanvas(compCtx);
+
+      const srcData = compCtx.getImageData(0, 0, compCanvas.width, compCanvas.height).data;
+      const out = new ImageData(compCanvas.width, compCanvas.height);
+      const outData = out.data;
+      let matched = 0;
+
+      for (let i = 0; i < srcData.length; i += 4) {
+        const a = srcData[i + 3];
+        if (a <= 0) continue;
+        // Per-channel HSV matching. Hue is circular (wraps at 360); saturation
+        // and value are compared linearly in percent. A pixel matches only when
+        // all three channels fall within their own tolerance.
+        const hsv = rgbToHsv(srcData[i], srcData[i + 1], srcData[i + 2]);
+        const rawHueDist = Math.abs(hsv.h - srcHsv.h);
+        const hueDist = Math.min(rawHueDist, 360 - rawHueDist);
+        if (hueDist <= hThresh && Math.abs(hsv.s - srcHsv.s) <= sThresh && Math.abs(hsv.v - srcHsv.v) <= vThresh) {
+          outData[i] = toColor.r;
+          outData[i + 1] = toColor.g;
+          outData[i + 2] = toColor.b;
+          outData[i + 3] = a;
+          matched += 1;
+        }
+      }
+
+      if (matched === 0) {
+        setStatus(`No pixels within H±${hThresh}° S±${sThresh}% V±${vThresh}% of ${state.drawColor}.`);
+        return;
+      }
+
+      // Build the new full-canvas layer from the matched pixels only.
+      const newCanvas = document.createElement("canvas");
+      newCanvas.width = compCanvas.width;
+      newCanvas.height = compCanvas.height;
+      newCanvas.getContext("2d").putImageData(out, 0, 0);
+
+      const layer = makeLayerFromImage(newCanvas, "Color Replace", false);
+      // Canvas elements have no `.src`, so update the layer image source (sets
+      // both `img` and a data-URL `src`) so the layer survives payload export.
+      updateLayerImageSource(layer, newCanvas);
+      layer.x = compCanvas.width / 2;
+      layer.y = compCanvas.height / 2;
+      layer.scale = 1;
+      layer.rot = 0;
+
+      // Insert above normal layers but below the paint overlay (if any) so the
+      // recolored mask sits over the composition without covering painting.
+      const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+      if (overlayIndex >= 0) {
+        state.layers.splice(overlayIndex, 0, layer);
+        state.active = overlayIndex;
+      } else {
+        state.layers.push(layer);
+        state.active = state.layers.length - 1;
+      }
+
+      renderLayerList();
+      pushLayerAddUndo(layer, null);
+      draw();
+      setStatus(`Color replace: ${matched.toLocaleString()} pixel(s) within H±${hThresh}° S±${sThresh}% V±${vThresh}% of ${state.drawColor} → ${replaceToColorInput ? replaceToColorInput.value : "#000000"}. New layer added.`);
+    }
+
+    // HSV channel replace: match on ONE channel only (H, S or V, per the mode
+    // toggle). Matched pixels keep their other two channels and alpha, while the
+    // active channel is set to the target color's channel value.
+    function applyHsvReplace() {
+      if (state.layers.length === 0 && !state.useColorBackground) {
+        setStatus("Add an image or background first.");
+        return;
+      }
+
+      const mode = state.hsvReplaceMode;
+      const applyMode = state.hsvApplyMode;
+      const srcColor = hexToRgb(hsvSourceColorInput ? (hsvSourceColorInput.value || state.drawColor) : state.drawColor);
+      const srcHsv = rgbToHsv(srcColor.r, srcColor.g, srcColor.b);
+      const toColor = hexToRgb(hsvToColorInput ? (hsvToColorInput.value || "#00ff88") : "#00ff88");
+      const toHsv = rgbToHsv(toColor.r, toColor.g, toColor.b);
+      const chanMax = mode === "h" ? 180 : 100;
+      const clampC = (v) => Math.max(0, Math.min(chanMax, Number(v) || 0));
+      const unit = mode === "h" ? "°" : "%";
+      const modeLabel = mode === "h" ? "H" : mode === "s" ? "S" : "V";
+      const applyLabel = applyMode === "replace" ? "Replace" : applyMode === "lerp" ? "Lerp" : "Alpha";
+      let lo = 0;
+      let hi = clampC(state.hsvReplaceThresholds[mode]);
+      if (applyMode !== "replace") {
+        lo = clampC(state.hsvReplaceMin[mode]);
+        hi = Math.max(lo, clampC(state.hsvReplaceMax[mode]));
+      }
+
+      // Render the current composition (without selection chrome) offscreen.
+      const compCanvas = document.createElement("canvas");
+      compCanvas.width = Math.max(1, canvas.width);
+      compCanvas.height = Math.max(1, canvas.height);
+      const compCtx = compCanvas.getContext("2d");
+      renderCompositionToCanvas(compCtx);
+
+      const srcData = compCtx.getImageData(0, 0, compCanvas.width, compCanvas.height).data;
+      const out = new ImageData(compCanvas.width, compCanvas.height);
+      const outData = out.data;
+      let matched = 0;
+
+      for (let i = 0; i < srcData.length; i += 4) {
+        const a = srcData[i + 3];
+        if (a <= 0) continue;
+        const hsv = rgbToHsv(srcData[i], srcData[i + 1], srcData[i + 2]);
+        // Gray pixels (S == 0) have no defined hue, so they never match in H mode.
+        if (mode === "h" && hsv.s <= 0) continue;
+
+        let dist;
+        if (mode === "h") {
+          const raw = Math.abs(hsv.h - srcHsv.h);
+          dist = Math.min(raw, 360 - raw);
+        } else if (mode === "s") {
+          dist = Math.abs(hsv.s - srcHsv.s);
+        } else {
+          dist = Math.abs(hsv.v - srcHsv.v);
+        }
+
+        // H mode extra filters: constrain matched pixels to the S/V tolerance
+        // bands around the source color's saturation and value.
+        if (mode === "h") {
+          if (Math.abs(hsv.s - srcHsv.s) > state.hsvReplaceSFilt) continue;
+          if (Math.abs(hsv.v - srcHsv.v) > state.hsvReplaceVFilt) continue;
+        }
+
+        let nh = hsv.h, ns = hsv.s, nv = hsv.v;
+        let aOut = a;
+
+        if (applyMode === "replace") {
+          // Single threshold: hard replace the active channel.
+          if (dist > hi) continue;
+          if (mode === "h") nh = toHsv.h;
+          else if (mode === "s") ns = toHsv.s;
+          else nv = toHsv.v;
+        } else if (applyMode === "lerp") {
+          // Below Min: hard replace. Between Min and Max: blend toward the
+          // target channel (circular for hue). Beyond Max: ignore.
+          if (dist >= hi) continue;
+          let t = 1;
+          if (hi > lo && dist >= lo) {
+            t = 1 - (dist - lo) / (hi - lo);
+          }
+          if (mode === "h") nh = lerpHue(hsv.h, toHsv.h, t);
+          else if (mode === "s") ns = hsv.s + (toHsv.s - hsv.s) * t;
+          else nv = hsv.v + (toHsv.v - hsv.v) * t;
+        } else {
+          // Alpha: hard replace below Max, but fade the layer pixel alpha from
+          // full (below Min) to zero (at Max) for a soft-edged mask.
+          if (dist >= hi) continue;
+          if (hi > lo && dist >= lo) {
+            const t = 1 - (dist - lo) / (hi - lo);
+            aOut = Math.round(a * t);
+          }
+          if (mode === "h") nh = toHsv.h;
+          else if (mode === "s") ns = toHsv.s;
+          else nv = toHsv.v;
+        }
+        const rgb = hsvToRgb(nh, ns, nv);
+
+        outData[i] = rgb.r;
+        outData[i + 1] = rgb.g;
+        outData[i + 2] = rgb.b;
+        outData[i + 3] = aOut;
+        matched += 1;
+      }
+
+      if (matched === 0) {
+        const rangeText = applyMode === "replace" ? `${hi}${unit}` : `${lo}${unit}–${hi}${unit}`;
+        setStatus(`No pixels within ${modeLabel} ${rangeText} of ${hsvSourceColorInput ? hsvSourceColorInput.value : state.drawColor} (${applyLabel}).`);
+        return;
+      }
+
+      // Build the new full-canvas layer from the matched pixels only.
+      const newCanvas = document.createElement("canvas");
+      newCanvas.width = compCanvas.width;
+      newCanvas.height = compCanvas.height;
+      newCanvas.getContext("2d").putImageData(out, 0, 0);
+
+      const applyTag = applyMode === "replace" ? "" : `, ${applyMode}`;
+      const layer = makeLayerFromImage(newCanvas, `HSV Replace (${modeLabel}${applyTag})`, false);
+      // Canvas elements have no `.src`, so update the layer image source (sets
+      // both `img` and a data-URL `src`) so the layer survives payload export.
+      updateLayerImageSource(layer, newCanvas);
+      layer.x = compCanvas.width / 2;
+      layer.y = compCanvas.height / 2;
+      layer.scale = 1;
+      layer.rot = 0;
+
+      // Insert above normal layers but below the paint overlay (if any) so the
+      // replaced mask sits over the composition without covering painting.
+      const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+      if (overlayIndex >= 0) {
+        state.layers.splice(overlayIndex, 0, layer);
+        state.active = overlayIndex;
+      } else {
+        state.layers.push(layer);
+        state.active = state.layers.length - 1;
+      }
+
+      renderLayerList();
+      pushLayerAddUndo(layer, null);
+      draw();
+      const rangeText = applyMode === "replace" ? `${hi}${unit}` : `${lo}${unit}–${hi}${unit}`;
+      const filterText = mode === "h" ? `, S±${state.hsvReplaceSFilt}% V±${state.hsvReplaceVFilt}%` : "";
+      setStatus(`HSV replace (${modeLabel} ${applyLabel}): ${matched.toLocaleString()} pixel(s) within ${rangeText}${filterText} of ${hsvSourceColorInput ? hsvSourceColorInput.value : state.drawColor}, ${modeLabel} ${applyMode === "replace" ? "set to" : applyMode === "lerp" ? "blended toward" : "masked toward"} target ${toHsv[mode].toFixed(1)}. New layer added.`);
+    }
+
+    // Mean/variance shift (Reinhard-style color transfer): the pixels matching
+    // the active H/S/V range (src) are rescaled so their per-channel RGB mean
+    // and standard deviation match the painted dst selection.
+    function applyHsvShift() {
+      if (state.layers.length === 0 && !state.useColorBackground) {
+        setStatus("Add an image or background first.");
+        return;
+      }
+      if (!state.shiftSelectCanvas) {
+        setStatus("No dst selection. Turn on Select Dst and paint with the brush first.");
+        return;
+      }
+      const shiftSelectBefore = state.shiftSelectCanvas;
+
+      const mode = state.hsvReplaceMode;
+      const srcColor = hexToRgb(hsvSourceColorInput ? (hsvSourceColorInput.value || state.drawColor) : state.drawColor);
+      const srcHsv = rgbToHsv(srcColor.r, srcColor.g, srcColor.b);
+      const chanMax = mode === "h" ? 180 : 100;
+      const hi = Math.max(0, Math.min(chanMax, Number(state.hsvReplaceThresholds[mode]) || 0));
+      const modeLabel = mode === "h" ? "H" : mode === "s" ? "S" : "V";
+
+      // Render the current composition (transient selection excluded).
+      const compCanvas = document.createElement("canvas");
+      compCanvas.width = Math.max(1, canvas.width);
+      compCanvas.height = Math.max(1, canvas.height);
+      const compCtx = compCanvas.getContext("2d");
+      renderCompositionToCanvas(compCtx);
+
+      const srcData = compCtx.getImageData(0, 0, compCanvas.width, compCanvas.height).data;
+      const selCtx = state.shiftSelectCanvas.getContext("2d");
+      const selData = selCtx.getImageData(0, 0, state.shiftSelectCanvas.width, state.shiftSelectCanvas.height).data;
+
+      const srcSum = [0, 0, 0];
+      const dstSum = [0, 0, 0];
+      const matchFlags = new Uint8Array(srcData.length / 4);
+      let srcN = 0;
+      let dstN = 0;
+
+      for (let i = 0; i < srcData.length; i += 4) {
+        const a = srcData[i + 3];
+        if (a <= 0) continue;
+        const p = i / 4;
+        if (selData[i + 3] > 0) {
+          dstSum[0] += srcData[i];
+          dstSum[1] += srcData[i + 1];
+          dstSum[2] += srcData[i + 2];
+          dstN += 1;
+        }
+        const hsv = rgbToHsv(srcData[i], srcData[i + 1], srcData[i + 2]);
+        if (mode === "h" && hsv.s <= 0) continue;
+        let dist;
+        if (mode === "h") {
+          const raw = Math.abs(hsv.h - srcHsv.h);
+          dist = Math.min(raw, 360 - raw);
+        } else if (mode === "s") {
+          dist = Math.abs(hsv.s - srcHsv.s);
+        } else {
+          dist = Math.abs(hsv.v - srcHsv.v);
+        }
+        if (dist > hi) continue;
+        if (mode === "h") {
+          if (Math.abs(hsv.s - srcHsv.s) > state.hsvReplaceSFilt) continue;
+          if (Math.abs(hsv.v - srcHsv.v) > state.hsvReplaceVFilt) continue;
+        }
+        matchFlags[p] = 1;
+        srcSum[0] += srcData[i];
+        srcSum[1] += srcData[i + 1];
+        srcSum[2] += srcData[i + 2];
+        srcN += 1;
+      }
+
+      if (dstN === 0) {
+        setStatus("Dst selection is empty — paint with the brush while Select Dst is ON.");
+        return;
+      }
+      if (srcN === 0) {
+        setStatus(`No src pixels matched the ${modeLabel} range.`);
+        return;
+      }
+
+      const srcMean = [srcSum[0] / srcN, srcSum[1] / srcN, srcSum[2] / srcN];
+      const dstMean = [dstSum[0] / dstN, dstSum[1] / dstN, dstSum[2] / dstN];
+
+      const srcVarSum = [0, 0, 0];
+      const dstVarSum = [0, 0, 0];
+      for (let i = 0; i < srcData.length; i += 4) {
+        const a = srcData[i + 3];
+        if (a <= 0) continue;
+        const p = i / 4;
+        if (selData[i + 3] > 0) {
+          for (let c = 0; c < 3; c++) {
+            const d = srcData[i + c] - dstMean[c];
+            dstVarSum[c] += d * d;
+          }
+        }
+        if (matchFlags[p]) {
+          for (let c = 0; c < 3; c++) {
+            const d = srcData[i + c] - srcMean[c];
+            srcVarSum[c] += d * d;
+          }
+        }
+      }
+
+      const srcStd = [0, 1, 2].map((c) => Math.sqrt(srcVarSum[c] / Math.max(1, srcN)));
+      const dstStd = [0, 1, 2].map((c) => Math.sqrt(dstVarSum[c] / Math.max(1, dstN)));
+      const ratio = [0, 1, 2].map((c) => (srcStd[c] > 0.5 ? Math.min(4, dstStd[c] / srcStd[c]) : 0));
+
+      const out = new ImageData(compCanvas.width, compCanvas.height);
+      const outData = out.data;
+      for (let i = 0; i < srcData.length; i += 4) {
+        const p = i / 4;
+        if (!matchFlags[p]) continue;
+        outData[i + 3] = srcData[i + 3];
+        for (let c = 0; c < 3; c++) {
+          const v = dstMean[c] + (srcData[i + c] - srcMean[c]) * ratio[c];
+          outData[i + c] = Math.max(0, Math.min(255, Math.round(v)));
+        }
+      }
+
+      // Build the new full-canvas layer from the shifted src pixels only.
+      const newCanvas = document.createElement("canvas");
+      newCanvas.width = compCanvas.width;
+      newCanvas.height = compCanvas.height;
+      newCanvas.getContext("2d").putImageData(out, 0, 0);
+
+      const layer = makeLayerFromImage(newCanvas, `HSV Shift (${modeLabel})`, false);
+      updateLayerImageSource(layer, newCanvas);
+      layer.x = compCanvas.width / 2;
+      layer.y = compCanvas.height / 2;
+      layer.scale = 1;
+      layer.rot = 0;
+
+      const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+      if (overlayIndex >= 0) {
+        state.layers.splice(overlayIndex, 0, layer);
+        state.active = overlayIndex;
+      } else {
+        state.layers.push(layer);
+        state.active = state.layers.length - 1;
+      }
+
+      pushLayerAddUndo(layer, shiftSelectBefore);
+      state.shiftSelectCanvas = null;
+      renderLayerList();
+      draw();
+      setStatus(`HSV shift (${modeLabel}): ${srcN.toLocaleString()} src pixel(s) → ${dstN.toLocaleString()} dst pixel(s), mean/var shifted. New layer added.`);
+    }
+
+    // Apply the current HSV shift sliders (H/S/V, signed) to the selected layer.
+    function applyLayerHsvAdjust() {
+      const layer = getActiveLayer();
+      if (!layer || !layer.img) {
+        setStatus("Select a layer first.");
+        return;
+      }
+      if (!canEditLayer(layer)) {
+        setStatus("Selected layer is not editable (locked or lock mode active).");
+        return;
+      }
+
+      const hShift = Number(state.layerHsvHue) || 0;
+      const sShift = Number(state.layerHsvSat) || 0;
+      const vShift = Number(state.layerHsvVal) || 0;
+      if (hShift === 0 && sShift === 0 && vShift === 0) {
+        setStatus("HSV adjust is zero — drag a bar first, then apply.");
+        return;
+      }
+
+      const editCanvas = ensureEditableLayerCanvas(layer);
+      const editCtx = editCanvas.getContext("2d");
+      const imgData = editCtx.getImageData(0, 0, editCanvas.width, editCanvas.height);
+      const d = imgData.data;
+
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] <= 0) continue;
+        const hsv = rgbToHsv(d[i], d[i + 1], d[i + 2]);
+        const nh = (((hsv.h + hShift) % 360) + 360) % 360;
+        const ns = Math.max(0, Math.min(100, hsv.s + sShift));
+        const nv = Math.max(0, Math.min(100, hsv.v + vShift));
+        const rgb = hsvToRgb(nh, ns, nv);
+        d[i] = rgb.r;
+        d[i + 1] = rgb.g;
+        d[i + 2] = rgb.b;
+      }
+
+      editCtx.putImageData(imgData, 0, 0);
+      updateLayerImageSource(layer, editCanvas);
+      resetLayerHsvAdjustUi();
+      draw();
+      const fmt = (v, unit) => `${v > 0 ? "+" : ""}${v}${unit}`;
+      setStatus(`HSV adjust applied to ${layer.name}: H ${fmt(hShift, "°")}, S ${fmt(sShift, "%")}, V ${fmt(vShift, "%")}.`);
     }
 
     function randomHexColor() {
@@ -615,7 +1894,7 @@
 
     function makeLayerFromImage(img, name, isBackground = false) {
       return {
-        id: crypto.randomUUID(),
+        id: _composerUuid(),
         name,
         src: img.src,
         img,
@@ -684,6 +1963,35 @@
       return state.layers[state.layers.length - 1];
     }
 
+    // Transient pink dst-selection canvas for the Shift apply mode. It lives
+    // outside state.layers so it never leaks into exports or the layer list.
+    function ensureShiftSelectCanvas() {
+      let sel = state.shiftSelectCanvas;
+      if (!sel || sel.width !== canvas.width || sel.height !== canvas.height) {
+        const old = sel;
+        sel = document.createElement("canvas");
+        sel.width = Math.max(1, canvas.width);
+        sel.height = Math.max(1, canvas.height);
+        if (old) sel.getContext("2d").drawImage(old, 0, 0);
+        state.shiftSelectCanvas = sel;
+      }
+      return sel;
+    }
+
+    function strokeOnShiftSelect(selCanvas, start, end) {
+      const sctx = selCanvas.getContext("2d");
+      sctx.save();
+      sctx.strokeStyle = "rgba(255,105,180,0.45)";
+      sctx.lineCap = "round";
+      sctx.lineJoin = "round";
+      sctx.lineWidth = Math.max(1, state.brushSize);
+      sctx.beginPath();
+      sctx.moveTo(start.x, start.y);
+      sctx.lineTo(end.x, end.y);
+      sctx.stroke();
+      sctx.restore();
+    }
+
     function addAssetToLayers(asset) {
       const layer = makeLayerFromImage(asset.img, asset.name, false);
       const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
@@ -707,7 +2015,7 @@
 
       const img = await loadImageFromFile(file);
       state.assets.push({
-        id: crypto.randomUUID(),
+        id: _composerUuid(),
         key,
         name: file.name,
         img,
@@ -797,6 +2105,22 @@
       return null;
     }
 
+    // Eraser target: the selected layer (or the background when Edit BG Only
+    // is active), provided it is editable and the cursor is over it.
+    function getEraserTarget(px, py) {
+      if (state.lockEditBackground) {
+        const bgIndex = getBackgroundIndex();
+        if (bgIndex < 0) return null;
+        const bg = state.layers[bgIndex];
+        if (!canEditLayer(bg) || !getDisplayBoundsHit(bg, px, py)) return null;
+        return bg;
+      }
+      if (state.active < 0) return null;
+      const layer = state.layers[state.active];
+      if (!canEditLayer(layer) || !getDisplayBoundsHit(layer, px, py)) return null;
+      return layer;
+    }
+
     function getPaintOverlayPoint(px, py) {
       const overlay = ensurePaintOverlayLayer();
       return {
@@ -867,7 +2191,7 @@
       editCtx.clip();
     }
 
-    function strokeOnLayer(layer, startLocal, endLocal) {
+    function strokeOnLayer(layer, startLocal, endLocal, erase = false) {
       const editCanvas = ensureEditableLayerCanvas(layer);
       if (!editCanvas) return;
 
@@ -876,6 +2200,10 @@
       const endPx = localToImagePixel(layer, endLocal);
       editCtx.save();
       applyBackgroundClipIfNeeded(editCtx, layer);
+      if (erase) {
+        // Eraser: remove existing pixels instead of painting (color ignored).
+        editCtx.globalCompositeOperation = "destination-out";
+      }
       editCtx.strokeStyle = state.drawColor;
       editCtx.lineCap = "round";
       editCtx.lineJoin = "round";
@@ -1035,8 +2363,40 @@
     }
 
     canvas.addEventListener("pointerdown", (evt) => {
+      // track last pointer position for preview placement
+      state.cursorClientX = evt.clientX;
+      state.cursorClientY = evt.clientY;
       if (evt.button === 2) {
         evt.preventDefault();
+        // ALT + right-drag: resize brush/line horizontally (left shrink, right expand)
+        if (evt.altKey && (state.tool === "brush" || state.tool === "line" || state.tool === "eraser")) {
+          state.dragMode = "alt_resize_brush";
+          state.altResizeStartClientX = evt.clientX;
+          state.altResizeStartBrushSize = state.brushSize;
+          state.altResizeAnchorClientX = evt.clientX;
+          state.altResizeAnchorClientY = evt.clientY;
+          state.altResizeAccumDx = 0;
+          try {
+            canvas.setPointerCapture(evt.pointerId);
+          } catch (e) {
+            // ignore pointer capture failures
+          }
+          // Show size preview while resizing
+          showSizePreview(evt.clientX, evt.clientY);
+          updateToolUi();
+          // Hide the system cursor and keep our preview fixed at the anchor
+          try { canvas.style.cursor = 'none'; } catch (e) {}
+          // Request pointer lock so the physical cursor doesn't move and we
+          // receive relative movement via `movementX` for precise control.
+          try {
+            if (canvas.requestPointerLock) canvas.requestPointerLock();
+          } catch (e) {
+            // ignore pointer lock errors
+          }
+          return;
+        }
+
+        // Default: pan canvas
         state.dragMode = "pan_canvas";
         state.startClientX = evt.clientX;
         state.startClientY = evt.clientY;
@@ -1045,25 +2405,47 @@
         if (canvasWrap) {
           canvasWrap.classList.add("panning");
         }
-        canvas.setPointerCapture(evt.pointerId);
+        try {
+          canvas.setPointerCapture(evt.pointerId);
+        } catch (e) {
+          // ignore pointer capture failures
+        }
+        // Hide any on-cursor previews while the user is panning with right button
+        hideSizePreview();
+        hideColorPreview();
+        // Update cursor to the panning grip immediately
+        updateToolUi();
         return;
       }
 
       const p = getMousePos(evt);
 
       if (state.tool === "picker") {
-        const color = sampleCanvasColor(p.x, p.y);
-        state.drawColor = color;
-        if (drawColorInput) {
-          drawColorInput.value = color;
+        // Start a short-lived picker drag so we pick on pointerup. If the
+        // picker was activated via the 'I' key we will revert to the
+        // previously-active tool after picking.
+        state.dragMode = "picker";
+        try {
+          canvas.setPointerCapture(evt.pointerId);
+        } catch (e) {
+          // ignore pointer capture failures
         }
-        updateToolUi();
-        setStatus(`Picked color ${color}`);
         return;
       }
 
-      if (state.tool === "brush" || state.tool === "line" || state.tool === "crop") {
+      if (state.tool === "brush" || state.tool === "line" || state.tool === "eraser" || state.tool === "crop") {
         if (state.tool === "brush" || state.tool === "line") {
+          if (state.tool === "brush" && state.hsvApplyMode === "shift" && state.hsvSelectMode) {
+            // Shift mode dst selection: the brush paints a transient pink mask
+            // marking dst pixels instead of regular strokes.
+            const selCanvas = ensureShiftSelectCanvas();
+            state.dragMode = "brush_select";
+            state.brushLastPoint = { x: p.x, y: p.y };
+            strokeOnShiftSelect(selCanvas, state.brushLastPoint, state.brushLastPoint);
+            draw();
+            canvas.setPointerCapture(evt.pointerId);
+            return;
+          }
           const paintTarget = getPaintOverlayPoint(p.x, p.y);
           const layer = paintTarget.layer;
           const imageLocal = paintTarget.point;
@@ -1090,6 +2472,28 @@
           return;
         }
 
+        if (state.tool === "eraser") {
+          // Eraser works on any editable layer: the selected layer (or the
+          // background when Edit BG Only is active) under the cursor.
+          const target = getEraserTarget(p.x, p.y);
+          if (!target) {
+            setStatus(state.active < 0
+              ? "Select a layer to erase."
+              : "Eraser: selected layer is not editable or cursor is outside it.");
+            return;
+          }
+          const imageLocal = toImageLocal(target, p.x, p.y);
+          state.active = state.layers.indexOf(target);
+          renderLayerList();
+          pushPaintUndoSnapshot(target);
+          state.dragMode = "brush";
+          state.brushLastPoint = imageLocal;
+          strokeOnLayer(target, imageLocal, imageLocal, true);
+          draw();
+          canvas.setPointerCapture(evt.pointerId);
+          return;
+        }
+
         const layerHit = getTopEditableLayerAt(p.x, p.y);
         if (!layerHit) {
           if (!state.lockToSelected) {
@@ -1105,28 +2509,14 @@
         const layer = layerHit.layer;
         const imageLocal = toImageLocal(layer, p.x, p.y);
 
-        if (state.tool === "brush") {
-          state.dragMode = "brush";
-          state.brushLastPoint = imageLocal;
-          strokeOnLayer(layer, imageLocal, imageLocal);
-          draw();
-        } else if (state.tool === "line") {
-          state.dragMode = "line";
-          state.linePreview = {
-            layerId: layer.id,
-            start: imageLocal,
-            end: imageLocal,
-          };
-          draw();
-        } else if (state.tool === "crop") {
-          state.dragMode = "crop";
-          state.cropPreview = {
-            layerId: layer.id,
-            start: imageLocal,
-            end: imageLocal,
-          };
-          draw();
-        }
+        // Only crop reaches this path — brush/line/eraser return earlier.
+        state.dragMode = "crop";
+        state.cropPreview = {
+          layerId: layer.id,
+          start: imageLocal,
+          end: imageLocal,
+        };
+        draw();
 
         canvas.setPointerCapture(evt.pointerId);
         return;
@@ -1162,6 +2552,9 @@
     });
 
     canvas.addEventListener("pointermove", (evt) => {
+      // update cursor position used by size preview
+      state.cursorClientX = evt.clientX;
+      state.cursorClientY = evt.clientY;
       if (state.dragMode === "pan_canvas") {
         state.viewportX = state.startViewportX + (evt.clientX - state.startClientX);
         state.viewportY = state.startViewportY + (evt.clientY - state.startClientY);
@@ -1169,15 +2562,72 @@
         return;
       }
 
-      if (!state.dragMode || state.active < 0) return;
+      if (state.dragMode === "alt_resize_brush") {
+        // Horizontal movement adjusts brush/line size. When pointer lock is
+        // active we receive relative `movementX` values; otherwise fallback
+        // to absolute clientX delta from the start point.
+        const startSize = state.altResizeStartBrushSize || state.brushSize;
+        let delta = 0;
+        if (document.pointerLockElement === canvas && typeof evt.movementX === 'number') {
+          state.altResizeAccumDx = (state.altResizeAccumDx || 0) + evt.movementX;
+          delta = state.altResizeAccumDx;
+        } else {
+          const startX = state.altResizeStartClientX || evt.clientX;
+          delta = evt.clientX - startX;
+        }
+        // sensitivity: pixels -> brush size, tuned for comfortable control
+        const sensitivity = 0.25;
+        let newSize = Math.round(startSize + delta * sensitivity);
+        newSize = Math.max(1, Math.min(2048, newSize));
+        if (newSize !== state.brushSize) {
+          state.brushSize = newSize;
+          updateToolUi();
+          // Keep preview fixed at the anchor point where ALT+RMB began
+          const anchorX = state.altResizeAnchorClientX || evt.clientX;
+          const anchorY = state.altResizeAnchorClientY || evt.clientY;
+          showSizePreview(anchorX, anchorY);
+          try { setStatus(`${paintToolName()} size: ${state.brushSize} px`); } catch (e) {}
+        }
+        return;
+      }
+
+      // If picker is the active tool or we're in a picker drag, show color preview
+      if (state.tool === "picker" || state.dragMode === "picker") {
+        const c = clientToCanvas(evt.clientX, evt.clientY);
+        if (c) {
+          const color = sampleCurrentCanvasColor(c.x, c.y);
+          showColorPreview(evt.clientX, evt.clientY, color);
+        } else {
+          hideColorPreview();
+        }
+        // If we're only previewing (not actually dragging another tool), don't proceed to other handlers
+        if (state.tool === "picker" && state.dragMode !== "picker") return;
+      }
+
+      // If brush/eraser/line tool is active, show the circular size preview at cursor.
+      if (state.tool === "brush" || state.tool === "line" || state.tool === "eraser") {
+        showSizePreview(evt.clientX, evt.clientY);
+      }
 
       const p = getMousePos(evt);
+
+      if (state.dragMode === "brush_select") {
+        const selCanvas = ensureShiftSelectCanvas();
+        const pt = { x: p.x, y: p.y };
+        strokeOnShiftSelect(selCanvas, state.brushLastPoint || pt, pt);
+        state.brushLastPoint = pt;
+        draw();
+        return;
+      }
+
+      if (!state.dragMode || state.active < 0) return;
+
       const layer = state.layers[state.active];
       if (!layer) return;
 
       if (state.dragMode === "brush") {
         const imageLocal = toImageLocal(layer, p.x, p.y);
-        strokeOnLayer(layer, state.brushLastPoint || imageLocal, imageLocal);
+        strokeOnLayer(layer, state.brushLastPoint || imageLocal, imageLocal, state.tool === "eraser");
         state.brushLastPoint = imageLocal;
       } else if (state.dragMode === "line") {
         state.linePreview = {
@@ -1206,11 +2656,35 @@
       draw();
     });
 
-    canvas.addEventListener("pointerup", () => {
+    canvas.addEventListener("pointerup", (evt) => {
       const layer = getActiveLayer();
       if (state.dragMode === "pan_canvas") {
         if (canvasWrap) {
           canvasWrap.classList.remove("panning");
+        }
+      } else if (state.dragMode === "picker") {
+        // Perform the color pick on pointer release so quick taps feel natural.
+        const p = getMousePos(evt);
+        const color = sampleCanvasColor(p.x, p.y);
+        state.drawColor = color;
+        if (drawColorInput) {
+          drawColorInput.value = color;
+        }
+        if (replaceSourceColorInput) {
+          replaceSourceColorInput.value = color;
+        }
+        if (hsvSourceColorInput) {
+          hsvSourceColorInput.value = color;
+        }
+        updateToolUi();
+        setStatus(`Picked color ${color}`);
+
+        // If the picker was temporarily invoked via the 'I' key, return to
+        // the previous tool now.
+        if (state._picker_prev_tool) {
+          const prev = state._picker_prev_tool;
+          state._picker_prev_tool = null;
+          setTool(prev);
         }
       } else if (state.dragMode === "line" && layer && state.linePreview && state.linePreview.layerId === layer.id) {
         pushPaintUndoSnapshot(layer);
@@ -1222,8 +2696,59 @@
         setStatus("Crop selection ready. Click Apply Crop to commit.");
       }
 
+      else if (state.dragMode === "alt_resize_brush") {
+        try { setStatus(`${paintToolName()} size: ${state.brushSize} px`); } catch (e) {}
+        try { if (document.pointerLockElement === canvas) document.exitPointerLock(); } catch (e) {}
+        // Synthesize a pointer/mouse move at the anchor so the page behaves
+        // as if the cursor is at the original start position. Note: browsers
+        // do not allow moving the real OS cursor for security reasons, so
+        // this only dispatches events within the page.
+        const anchorX = state.altResizeAnchorClientX;
+        const anchorY = state.altResizeAnchorClientY;
+        if (typeof anchorX === 'number' && typeof anchorY === 'number') {
+          setTimeout(() => {
+            try {
+              // PointerEvent if available
+              let moved = false;
+              try {
+                const pe = new PointerEvent('pointermove', { bubbles: true, clientX: anchorX, clientY: anchorY });
+                canvas.dispatchEvent(pe);
+                moved = true;
+              } catch (e) {
+                // fall back to MouseEvent
+              }
+              if (!moved) {
+                const me = new MouseEvent('mousemove', { bubbles: true, clientX: anchorX, clientY: anchorY });
+                canvas.dispatchEvent(me);
+              }
+            } catch (e) {
+              // ignore synthetic event failures
+            }
+          }, 0);
+        }
+      }
+
       state.dragMode = null;
       state.brushLastPoint = null;
+      state.altResizeStartClientX = null;
+      state.altResizeStartBrushSize = null;
+      state.altResizeAnchorClientX = null;
+      state.altResizeAnchorClientY = null;
+      state.altResizeAccumDx = 0;
+
+      // Restore cursor and previews after finishing a pan. If the active
+      // tool is brush/line, show the size preview again at release point.
+      try {
+        updateToolUi();
+        if (state.tool === "brush" || state.tool === "line" || state.tool === "eraser") {
+          showSizePreview(evt.clientX, evt.clientY, state.drawColor);
+        } else {
+          hideSizePreview();
+        }
+      } catch (e) {
+        // ignore preview restore failures
+      }
+
       draw();
     });
 
@@ -1231,10 +2756,25 @@
       if (canvasWrap) {
         canvasWrap.classList.remove("panning");
       }
+      // If a temporary picker was active but pointer was cancelled, restore
+      // the previous tool so the UI doesn't get stuck in picker mode.
+      if (state._picker_prev_tool) {
+        const prev = state._picker_prev_tool;
+        state._picker_prev_tool = null;
+        setTool(prev);
+      }
+      // If pointer lock is active (entered for ALT-resize), exit it now.
+      try { if (document.pointerLockElement === canvas) document.exitPointerLock(); } catch (e) {}
       state.dragMode = null;
       state.brushLastPoint = null;
+      state.altResizeStartClientX = null;
+      state.altResizeStartBrushSize = null;
+      state.altResizeAccumDx = 0;
       state.linePreview = null;
       state.cropPreview = null;
+      hideColorPreview();
+      hideSizePreview();
+      try { updateToolUi(); } catch (e) {}
       draw();
     });
 
@@ -1242,34 +2782,87 @@
       evt.preventDefault();
     });
 
+    canvas.addEventListener("pointerleave", () => {
+      hideColorPreview();
+      hideSizePreview();
+    });
+
 
     canvas.addEventListener("wheel", (evt) => {
-      // Ctrl + wheel: resize brush size if brush tool is active
-      if ((evt.ctrlKey || evt.metaKey) && state.tool === "brush") {
+      // Shift + wheel: adjust brush/line size when brush/line tool active
+      if (evt.shiftKey && (state.tool === "brush" || state.tool === "line" || state.tool === "eraser")) {
         evt.preventDefault();
-        const step = evt.deltaY < 0 ? 2 : -2;
-        state.brushSize = Math.max(1, Math.min(512, state.brushSize + step));
+        const step = evt.deltaY < 0 ? 1 : -1;
+        state.brushSize = Math.max(1, Math.min(2048, state.brushSize + step));
         updateToolUi();
-        setStatus(`Brush size: ${state.brushSize} px`);
+        setStatus(`${paintToolName()} size: ${state.brushSize} px`);
+        showSizePreview(evt.clientX, evt.clientY);
         return;
       }
 
-      // Default: canvas zoom
+      // Note: legacy Ctrl/Meta wheel behavior was removed so Left Ctrl is
+      // reserved for canvas zoom. Use Shift+wheel to resize brush/line.
+
+      // Default: canvas zoom. If `requireLeftCtrlForZoom` is true, only
+      // perform zoom when Left Ctrl is held. Otherwise, always allow zoom.
+      if (state.requireLeftCtrlForZoom && !state.leftCtrlDown) return;
+      // Compute anchor in canvas-internal pixels and
+      // convert state.viewportX/Y (CSS pixels) to canvas pixels so math is
+      // correct even after the canvas has been translated.
       evt.preventDefault();
       const zoomStep = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const nextScale = Math.min(6, Math.max(0.25, state.viewportScale * zoomStep));
+
+      // Measure pointer position against an untransformed container so
+      // CSS transforms on the canvas don't change the measurement used
+      // for interaction math (this prevents drift during repeated zooms).
+      const measureRect = (canvasWrap && canvasWrap.getBoundingClientRect)
+        ? canvasWrap.getBoundingClientRect()
+        : canvas.getBoundingClientRect();
+
+      // pointer position in CSS pixels relative to the (untransformed) container
+      const pointerCssX = evt.clientX - measureRect.left;
+      const pointerCssY = evt.clientY - measureRect.top;
+
+      // Use the layout (client) size to convert CSS px -> canvas internal pixels.
+      // clientWidth/clientHeight are not affected by CSS transforms.
+      const clientWidth = canvas.clientWidth || measureRect.width || 1;
+      const clientHeight = canvas.clientHeight || measureRect.height || 1;
+      const cssToCanvasX = canvas.width / clientWidth;
+      const cssToCanvasY = canvas.height / clientHeight;
+
+      // Compute adaptive max scale so that one canvas internal pixel maps to at
+      // most `state.maxCanvasPixelScreen` CSS pixels on-screen.
+      const maxScaleAdaptive = (state.maxCanvasPixelScreen * canvas.width) / clientWidth;
+      const minScale = typeof state.viewportScaleMin === 'number' ? state.viewportScaleMin : 0.25;
+      const maxScale = Math.max(0.0001, maxScaleAdaptive);
+      const nextScale = Math.min(maxScale, Math.max(minScale, state.viewportScale * zoomStep));
       if (Math.abs(nextScale - state.viewportScale) < 0.0001) return;
 
-      const rect = canvas.getBoundingClientRect();
-      const anchorX = evt.clientX - rect.left;
-      const anchorY = evt.clientY - rect.top;
-      const worldX = (anchorX - state.viewportX) / state.viewportScale;
-      const worldY = (anchorY - state.viewportY) / state.viewportScale;
+      // debug logging removed
 
+      // pointer position in canvas internal pixels
+      const canvasPointerX = pointerCssX * cssToCanvasX;
+      const canvasPointerY = pointerCssY * cssToCanvasY;
+
+      // convert viewport CSS px to canvas internal pixels
+      const viewportX_canvas = state.viewportX * cssToCanvasX;
+      const viewportY_canvas = state.viewportY * cssToCanvasY;
+
+      // world coordinates in canvas internal pixels (before zoom)
+      const worldX_canvas = (canvasPointerX - viewportX_canvas) / state.viewportScale;
+      const worldY_canvas = (canvasPointerY - viewportY_canvas) / state.viewportScale;
+
+      // compute new viewport (in canvas pixels) so the world point remains under cursor
+      const newViewportX_canvas = canvasPointerX - worldX_canvas * nextScale;
+      const newViewportY_canvas = canvasPointerY - worldY_canvas * nextScale;
+
+      // convert back to CSS px for storage in state
+      state.viewportX = newViewportX_canvas / cssToCanvasX;
+      state.viewportY = newViewportY_canvas / cssToCanvasY;
       state.viewportScale = nextScale;
-      state.viewportX = anchorX - worldX * nextScale;
-      state.viewportY = anchorY - worldY * nextScale;
+
       applyCanvasViewport();
+
       setStatus(`Canvas zoom: ${Math.round(state.viewportScale * 100)}%`);
     }, { passive: false });
 
@@ -1284,35 +2877,62 @@
 
       // --- Tool hotkeys ---
       if (!evt.ctrlKey && !evt.metaKey && !evt.altKey) {
-        if (key === "b") {
+        // Tool hotkeys: Q/W/E/R/T or numeric row 1-5 as alternates
+        if (key === "q" || key === "1") {
+          setTool("move");
+          evt.preventDefault();
+          return;
+        } else if (key === "w" || key === "b" || key === "2") {
           setTool("brush");
           evt.preventDefault();
           return;
-        } else if (key === "l") {
+        } else if (key === "e" || key === "3") {
           setTool("line");
           evt.preventDefault();
           return;
-        } else if (key === "i") {
+        } else if (key === "x" || key === "6") {
+          setTool("eraser");
+          evt.preventDefault();
+          return;
+        } else if (key === "r" || key === "4") {
           setTool("picker");
           evt.preventDefault();
           return;
-        } else if (key === "c") {
+        } else if (key === "i") {
+          // Temporary picker: remember previous tool so we can return to it
+          if (state.tool !== "picker") {
+            state._picker_prev_tool = state.tool;
+          } else {
+            state._picker_prev_tool = null;
+          }
+          setTool("picker");
+          evt.preventDefault();
+          return;
+        } else if (key === "t" || key === "5") {
           setTool("crop");
           evt.preventDefault();
           return;
         } else if (key === "a") {
-          // Brush size smaller
-          if (state.tool === "brush") {
+          // Brush/eraser size smaller
+          if (state.tool === "brush" || state.tool === "eraser") {
             state.brushSize = Math.max(1, state.brushSize - 1);
             updateToolUi();
+            const rect = canvas.getBoundingClientRect();
+            const cx = state.cursorClientX || (rect.left + rect.width / 2);
+            const cy = state.cursorClientY || (rect.top + rect.height / 2);
+            showSizePreview(cx, cy);
             evt.preventDefault();
             return;
           }
         } else if (key === "d") {
-          // Brush size bigger
-          if (state.tool === "brush") {
+          // Brush/eraser size bigger
+          if (state.tool === "brush" || state.tool === "eraser") {
             state.brushSize = Math.min(512, state.brushSize + 1);
             updateToolUi();
+            const rect = canvas.getBoundingClientRect();
+            const cx = state.cursorClientX || (rect.left + rect.width / 2);
+            const cy = state.cursorClientY || (rect.top + rect.height / 2);
+            showSizePreview(cx, cy);
             evt.preventDefault();
             return;
           }
@@ -1372,15 +2992,29 @@
       }
     });
 
+    // Hide preview immediately when Shift is released
+    window.addEventListener('keyup', (evt) => {
+      if (evt.key === 'Shift') {
+        hideSizePreview();
+      }
+    });
+
     function bindBgInput() {
+      _composerLog('bindBgInput() bgUploadWrap=' + !!bgUploadWrap);
       if (!bgUploadWrap) return;
       const fileInput = bgUploadWrap.querySelector('input[type="file"]');
+      _composerLog('  fileInput=' + !!fileInput);
       if (!fileInput || fileInput.dataset.composerBound === "1") return;
 
       const loadBackgroundFromFile = async (file) => {
-        if (!file || !String(file.type || "").startsWith("image/")) return;
+        _composerLog('loadBackgroundFromFile() file=' + (file ? file.name : 'null') + ' type=' + (file ? file.type : 'N/A') + ' size=' + (file ? file.size : 'N/A'));
+        if (!file || !String(file.type || "").startsWith("image/")) {
+          _composerLog('  SKIP: not an image file');
+          return;
+        }
 
         const img = await loadImageFromFile(file);
+        _composerLog('  image loaded: ' + img.width + 'x' + img.height + ', setting canvas size');
         canvas.width = img.width;
         canvas.height = img.height;
         state.useColorBackground = false;
@@ -1401,6 +3035,7 @@
         }
 
         fitCanvasToParent();
+        syncCanvasSizeInputs();
         renderLayerList();
         draw();
         setStatus(`Background loaded: ${file.name} (${canvas.width}x${canvas.height})`);
@@ -1437,8 +3072,10 @@
     }
 
     function bindCharsInput() {
+      _composerLog('bindCharsInput() charsUploadWrap=' + !!charsUploadWrap);
       if (!charsUploadWrap) return;
       const fileInput = charsUploadWrap.querySelector('input[type="file"]');
+      _composerLog('  fileInput=' + !!fileInput);
       if (!fileInput || fileInput.dataset.composerBound === "1") return;
 
       fileInput.dataset.composerBound = "1";
@@ -1455,6 +3092,7 @@
     }
 
     function bindUploadInputs() {
+      _composerLog('bindUploadInputs() called');
       bindBgInput();
       bindCharsInput();
     }
@@ -1489,6 +3127,22 @@
       });
     }
 
+    if (useLctrlZoomBtn) {
+      useLctrlZoomBtn.addEventListener('click', () => {
+        state.requireLeftCtrlForZoom = !state.requireLeftCtrlForZoom;
+        useLctrlZoomBtn.classList.toggle('active', state.requireLeftCtrlForZoom);
+        useLctrlZoomBtn.textContent = state.requireLeftCtrlForZoom ? 'Use LCtrl To Zoom: ON' : 'Use LCtrl To Zoom: OFF';
+      });
+      // initialize display based on default state
+      if (state.requireLeftCtrlForZoom) {
+        useLctrlZoomBtn.classList.add('active');
+        useLctrlZoomBtn.textContent = 'Use LCtrl To Zoom: ON';
+      } else {
+        useLctrlZoomBtn.classList.remove('active');
+        useLctrlZoomBtn.textContent = 'Use LCtrl To Zoom: OFF';
+      }
+    }
+
     if (restoreBgBtn) {
       restoreBgBtn.addEventListener("click", () => {
         restoreBackgroundTransform();
@@ -1511,6 +3165,43 @@
     if (drawColorInput) {
       drawColorInput.addEventListener("input", () => {
         state.drawColor = drawColorInput.value || "#ff3366";
+        if (replaceSourceColorInput) {
+          replaceSourceColorInput.value = state.drawColor;
+        }
+        if (hsvSourceColorInput) {
+          hsvSourceColorInput.value = state.drawColor;
+        }
+        if (state.tool === "brush" || state.tool === "line") {
+          try {
+            canvas.style.cursor = ensureBrushCursor(state.drawColor);
+          } catch (e) {
+            // ignore
+          }
+        }
+      });
+    }
+
+    if (flattenPaintBtn) {
+      flattenPaintBtn.addEventListener("click", () => {
+        const overlayIndex = state.layers.findIndex((x) => x.isPaintOverlay);
+        if (overlayIndex < 0) {
+          setStatus("No paint overlay present.");
+          return;
+        }
+
+        const overlay = state.layers[overlayIndex];
+        // Ensure the layer image is an editable canvas element (preserve pixels)
+        ensureEditableLayerCanvas(overlay);
+
+        // Turn it into a normal layer that can be moved, cropped and reordered.
+        overlay.isPaintOverlay = false;
+        overlay.name = overlay.name || "Paint Layer";
+
+        // Make the converted layer the active selection so the user can act on it immediately.
+        state.active = state.layers.indexOf(overlay);
+        renderLayerList();
+        draw();
+        setStatus("Paint overlay converted to a normal layer.");
       });
     }
 
@@ -1518,6 +3209,11 @@
       brushSizeInput.addEventListener("input", () => {
         state.brushSize = Math.max(1, Number(brushSizeInput.value) || 18);
         updateToolUi();
+        // show preview at last known cursor or canvas center
+        const rect = canvas.getBoundingClientRect();
+        const cx = state.cursorClientX || (rect.left + rect.width / 2);
+        const cy = state.cursorClientY || (rect.top + rect.height / 2);
+        showSizePreview(cx, cy);
       });
     }
 
@@ -1533,6 +3229,308 @@
         state.cropPreview = null;
         draw();
         setStatus("Crop selection cleared.");
+      });
+    }
+
+    if (replaceSourceColorInput) {
+      // Keep the source color in sync with the picked/draw color.
+      replaceSourceColorInput.value = state.drawColor;
+      replaceSourceColorInput.addEventListener("input", () => {
+        state.drawColor = replaceSourceColorInput.value || "#ff3366";
+        if (drawColorInput) {
+          drawColorInput.value = state.drawColor;
+        }
+        if (hsvSourceColorInput) {
+          hsvSourceColorInput.value = state.drawColor;
+        }
+        if (state.tool === "brush" || state.tool === "line") {
+          try {
+            canvas.style.cursor = ensureBrushCursor(state.drawColor);
+          } catch (e) {
+            // ignore
+          }
+        }
+      });
+    }
+
+    if (replaceHueThresholdInput && replaceHueThresholdValue) {
+      replaceHueThresholdInput.value = String(state.replaceHueThreshold);
+      replaceHueThresholdValue.textContent = `${state.replaceHueThreshold}°`;
+      replaceHueThresholdInput.addEventListener("input", () => {
+        state.replaceHueThreshold = Math.max(0, Math.min(180, Number(replaceHueThresholdInput.value) || 0));
+        replaceHueThresholdValue.textContent = `${state.replaceHueThreshold}°`;
+      });
+    }
+
+    if (replaceSatThresholdInput && replaceSatThresholdValue) {
+      replaceSatThresholdInput.value = String(state.replaceSatThreshold);
+      replaceSatThresholdValue.textContent = `${state.replaceSatThreshold}%`;
+      replaceSatThresholdInput.addEventListener("input", () => {
+        state.replaceSatThreshold = Math.max(0, Math.min(100, Number(replaceSatThresholdInput.value) || 0));
+        replaceSatThresholdValue.textContent = `${state.replaceSatThreshold}%`;
+      });
+    }
+
+    if (replaceValThresholdInput && replaceValThresholdValue) {
+      replaceValThresholdInput.value = String(state.replaceValThreshold);
+      replaceValThresholdValue.textContent = `${state.replaceValThreshold}%`;
+      replaceValThresholdInput.addEventListener("input", () => {
+        state.replaceValThreshold = Math.max(0, Math.min(100, Number(replaceValThresholdInput.value) || 0));
+        replaceValThresholdValue.textContent = `${state.replaceValThreshold}%`;
+      });
+    }
+
+    if (replaceApplyBtn) {
+      replaceApplyBtn.addEventListener("click", () => {
+        applyColorReplace();
+      });
+    }
+
+    // ── HSV Replace controls ─────────────────────
+    const hsvModeButtons = {
+      h: hsvModeHBtn,
+      s: hsvModeSBtn,
+      v: hsvModeVBtn,
+    };
+    const hsvApplyButtons = {
+      replace: hsvApplyReplaceBtn,
+      lerp: hsvApplyLerpBtn,
+      alpha: hsvApplyAlphaBtn,
+      shift: hsvApplyShiftBtn,
+    };
+
+    function updateHsvModeUi() {
+      const mode = state.hsvReplaceMode;
+      const applyMode = state.hsvApplyMode;
+      const unit = mode === "h" ? "°" : "%";
+      const chanMax = mode === "h" ? 180 : 100;
+
+      Object.entries(hsvModeButtons).forEach(([key, btn]) => {
+        if (btn) {
+          btn.classList.toggle("active", key === mode);
+        }
+      });
+      Object.entries(hsvApplyButtons).forEach(([key, btn]) => {
+        if (btn) {
+          btn.classList.toggle("active", key === applyMode);
+        }
+      });
+      if (hsvThresholdLabel) {
+        hsvThresholdLabel.textContent = mode === "h" ? "Hue" : mode === "s" ? "Sat" : "Val";
+      }
+      if (hsvThresholdInput) {
+        hsvThresholdInput.max = String(chanMax);
+        hsvThresholdInput.value = String(state.hsvReplaceThresholds[mode]);
+      }
+      if (hsvThresholdValue) {
+        hsvThresholdValue.textContent = `${state.hsvReplaceThresholds[mode]}${unit}`;
+      }
+      if (hsvMinThresholdInput) {
+        hsvMinThresholdInput.max = String(chanMax);
+        hsvMinThresholdInput.value = String(state.hsvReplaceMin[mode]);
+      }
+      if (hsvMinThresholdValue) {
+        hsvMinThresholdValue.textContent = `${state.hsvReplaceMin[mode]}${unit}`;
+      }
+      if (hsvMaxThresholdInput) {
+        hsvMaxThresholdInput.max = String(chanMax);
+        hsvMaxThresholdInput.value = String(state.hsvReplaceMax[mode]);
+      }
+      if (hsvMaxThresholdValue) {
+        hsvMaxThresholdValue.textContent = `${state.hsvReplaceMax[mode]}${unit}`;
+      }
+      // H-mode-only S/V range filters.
+      if (hsvSFilterRow) {
+        hsvSFilterRow.style.display = mode === "h" ? "" : "none";
+      }
+      if (hsvVFilterRow) {
+        hsvVFilterRow.style.display = mode === "h" ? "" : "none";
+      }
+      // Replace/Shift use the single threshold slider; Lerp/Alpha use Min+Max.
+      const usesBand = applyMode === "lerp" || applyMode === "alpha";
+      if (hsvThresholdRow) {
+        hsvThresholdRow.style.display = usesBand ? "none" : "";
+      }
+      if (hsvMinRow) {
+        hsvMinRow.style.display = usesBand ? "" : "none";
+      }
+      if (hsvMaxRow) {
+        hsvMaxRow.style.display = usesBand ? "" : "none";
+      }
+      // Shift mode shows the dst selection toggle.
+      if (hsvSelectRow) {
+        hsvSelectRow.style.display = applyMode === "shift" ? "" : "none";
+      }
+    }
+
+    if (hsvSourceColorInput) {
+      // Keep the HSV source color in sync with the picked/draw color.
+      hsvSourceColorInput.value = state.drawColor;
+      hsvSourceColorInput.addEventListener("input", () => {
+        state.drawColor = hsvSourceColorInput.value || "#ff3366";
+        if (drawColorInput) {
+          drawColorInput.value = state.drawColor;
+        }
+        if (replaceSourceColorInput) {
+          replaceSourceColorInput.value = state.drawColor;
+        }
+        if (state.tool === "brush" || state.tool === "line") {
+          try {
+            canvas.style.cursor = ensureBrushCursor(state.drawColor);
+          } catch (e) {
+            // ignore
+          }
+        }
+      });
+    }
+
+    Object.entries(hsvModeButtons).forEach(([mode, btn]) => {
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        state.hsvReplaceMode = mode;
+        updateHsvModeUi();
+        setStatus(`HSV replace mode: ${mode.toUpperCase()}.`);
+      });
+    });
+
+    if (hsvThresholdInput && hsvThresholdValue) {
+      hsvThresholdInput.value = String(state.hsvReplaceThresholds[state.hsvReplaceMode]);
+      hsvThresholdValue.textContent = `${state.hsvReplaceThresholds[state.hsvReplaceMode]}°`;
+      hsvThresholdInput.addEventListener("input", () => {
+        const mode = state.hsvReplaceMode;
+        const max = mode === "h" ? 180 : 100;
+        state.hsvReplaceThresholds[mode] = Math.max(0, Math.min(max, Number(hsvThresholdInput.value) || 0));
+        hsvThresholdValue.textContent = `${state.hsvReplaceThresholds[mode]}${mode === "h" ? "°" : "%"}`;
+      });
+    }
+
+    if (hsvApplyBtn) {
+      hsvApplyBtn.addEventListener("click", () => {
+        if (state.hsvApplyMode === "shift") {
+          applyHsvShift();
+        } else {
+          applyHsvReplace();
+        }
+      });
+    }
+
+    Object.entries(hsvApplyButtons).forEach(([applyMode, btn]) => {
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        state.hsvApplyMode = applyMode;
+        if (applyMode !== "shift") {
+          state.shiftSelectCanvas = null;
+        }
+        updateHsvModeUi();
+        setStatus(`HSV replace apply mode: ${applyMode}.`);
+      });
+    });
+
+    if (hsvMinThresholdInput && hsvMinThresholdValue) {
+      hsvMinThresholdInput.value = String(state.hsvReplaceMin[state.hsvReplaceMode]);
+      hsvMinThresholdValue.textContent = `${state.hsvReplaceMin[state.hsvReplaceMode]}°`;
+      hsvMinThresholdInput.addEventListener("input", () => {
+        const mode = state.hsvReplaceMode;
+        const max = mode === "h" ? 180 : 100;
+        state.hsvReplaceMin[mode] = Math.max(0, Math.min(max, Number(hsvMinThresholdInput.value) || 0));
+        hsvMinThresholdValue.textContent = `${state.hsvReplaceMin[mode]}${mode === "h" ? "°" : "%"}`;
+      });
+    }
+
+    if (hsvMaxThresholdInput && hsvMaxThresholdValue) {
+      hsvMaxThresholdInput.value = String(state.hsvReplaceMax[state.hsvReplaceMode]);
+      hsvMaxThresholdValue.textContent = `${state.hsvReplaceMax[state.hsvReplaceMode]}°`;
+      hsvMaxThresholdInput.addEventListener("input", () => {
+        const mode = state.hsvReplaceMode;
+        const max = mode === "h" ? 180 : 100;
+        state.hsvReplaceMax[mode] = Math.max(0, Math.min(max, Number(hsvMaxThresholdInput.value) || 0));
+        hsvMaxThresholdValue.textContent = `${state.hsvReplaceMax[mode]}${mode === "h" ? "°" : "%"}`;
+      });
+    }
+
+    if (hsvSFilterInput && hsvSFilterValue) {
+      hsvSFilterInput.value = String(state.hsvReplaceSFilt);
+      hsvSFilterValue.textContent = `${state.hsvReplaceSFilt}%`;
+      hsvSFilterInput.addEventListener("input", () => {
+        state.hsvReplaceSFilt = Math.max(0, Math.min(100, Number(hsvSFilterInput.value) || 0));
+        hsvSFilterValue.textContent = `${state.hsvReplaceSFilt}%`;
+      });
+    }
+
+    if (hsvVFilterInput && hsvVFilterValue) {
+      hsvVFilterInput.value = String(state.hsvReplaceVFilt);
+      hsvVFilterValue.textContent = `${state.hsvReplaceVFilt}%`;
+      hsvVFilterInput.addEventListener("input", () => {
+        state.hsvReplaceVFilt = Math.max(0, Math.min(100, Number(hsvVFilterInput.value) || 0));
+        hsvVFilterValue.textContent = `${state.hsvReplaceVFilt}%`;
+      });
+    }
+
+    function updateHsvSelectUi() {
+      if (!hsvSelectBtn) return;
+      hsvSelectBtn.textContent = state.hsvSelectMode ? "Select Dst: ON" : "Select Dst: OFF";
+      hsvSelectBtn.classList.toggle("active", state.hsvSelectMode);
+    }
+
+    if (hsvSelectBtn) {
+      hsvSelectBtn.addEventListener("click", () => {
+        state.hsvSelectMode = !state.hsvSelectMode;
+        updateHsvSelectUi();
+        setStatus(`Select Dst: ${state.hsvSelectMode ? "ON — brush paints the pink dst selection." : "OFF."}`);
+      });
+    }
+
+    updateHsvModeUi();
+    updateHsvSelectUi();
+
+    function resetLayerHsvAdjustUi() {
+      state.layerHsvHue = 0;
+      state.layerHsvSat = 0;
+      state.layerHsvVal = 0;
+      state._hsvPreviewCache = null;
+      if (layerHsvHueInput) layerHsvHueInput.value = "0";
+      if (layerHsvHueValue) layerHsvHueValue.textContent = "0°";
+      if (layerHsvSatInput) layerHsvSatInput.value = "0";
+      if (layerHsvSatValue) layerHsvSatValue.textContent = "0%";
+      if (layerHsvValInput) layerHsvValInput.value = "0";
+      if (layerHsvValValue) layerHsvValValue.textContent = "0%";
+    }
+
+    function requestHsvPreviewDraw() {
+      if (state._hsvPreviewRaf) return;
+      state._hsvPreviewRaf = requestAnimationFrame(() => {
+        state._hsvPreviewRaf = null;
+        draw();
+      });
+    }
+
+    if (layerHsvHueInput && layerHsvHueValue) {
+      layerHsvHueInput.addEventListener("input", () => {
+        state.layerHsvHue = Math.max(-180, Math.min(180, Number(layerHsvHueInput.value) || 0));
+        layerHsvHueValue.textContent = `${state.layerHsvHue > 0 ? "+" : ""}${state.layerHsvHue}°`;
+        requestHsvPreviewDraw();
+      });
+    }
+
+    if (layerHsvSatInput && layerHsvSatValue) {
+      layerHsvSatInput.addEventListener("input", () => {
+        state.layerHsvSat = Math.max(-100, Math.min(100, Number(layerHsvSatInput.value) || 0));
+        layerHsvSatValue.textContent = `${state.layerHsvSat > 0 ? "+" : ""}${state.layerHsvSat}%`;
+        requestHsvPreviewDraw();
+      });
+    }
+
+    if (layerHsvValInput && layerHsvValValue) {
+      layerHsvValInput.addEventListener("input", () => {
+        state.layerHsvVal = Math.max(-100, Math.min(100, Number(layerHsvValInput.value) || 0));
+        layerHsvValValue.textContent = `${state.layerHsvVal > 0 ? "+" : ""}${state.layerHsvVal}%`;
+        requestHsvPreviewDraw();
+      });
+    }
+
+    if (layerHsvApplyBtn) {
+      layerHsvApplyBtn.addEventListener("click", () => {
+        applyLayerHsvAdjust();
       });
     }
 
@@ -1590,6 +3588,44 @@
     renderAssetList();
     state.bindUploadInputs = bindUploadInputs;
 
+    // Pointer lock change: handle unexpected pointer lock release (e.g. ESC)
+    document.addEventListener('pointerlockchange', () => {
+      try {
+        if (document.pointerLockElement === canvas) {
+          // locked to canvas - nothing to do
+        } else {
+          // pointer lock released; if we were resizing, cancel and restore UI
+          if (state.dragMode === 'alt_resize_brush') {
+            state.dragMode = null;
+            state.altResizeStartClientX = null;
+            state.altResizeStartBrushSize = null;
+            state.altResizeAnchorClientX = null;
+            state.altResizeAnchorClientY = null;
+            state.altResizeAccumDx = 0;
+            try { updateToolUi(); } catch (e) {}
+            hideSizePreview();
+            draw();
+            try { setStatus('Brush size adjust canceled'); } catch (e) {}
+          }
+        }
+      } catch (e) {
+        // ignore pointer lock handler errors
+      }
+    });
+
+    // Track left-CTRL key state (we need left-specific detection via location)
+    window.addEventListener('keydown', (e) => {
+      try {
+        if (e.key === 'Control' && e.location === 1) state.leftCtrlDown = true;
+      } catch (err) {}
+    });
+    window.addEventListener('keyup', (e) => {
+      try {
+        if (e.key === 'Control' && e.location === 1) state.leftCtrlDown = false;
+      } catch (err) {}
+    });
+    window.addEventListener('blur', () => { state.leftCtrlDown = false; });
+
     // Load Config button: open hidden file input
     const loadConfigBtn = document.getElementById("composer_load_config_btn");
     const configFileInput = document.getElementById("composer_config_file_input");
@@ -1610,20 +3646,129 @@
       });
     }
 
+    // Move the Gradio upload widgets into a dedicated "Upload" tool panel so
+    // they live with the other panels instead of floating above the tab.
+    function moveUploadsIntoPanel() {
+      const row = document.getElementById("composer_upload_row");
+      const left = document.getElementById("composer_left");
+      if (!row || !left || row.closest("#composer_left")) return;
+      const box = document.createElement("div");
+      box.className = "composer-box";
+      const header = document.createElement("div");
+      header.className = "cmp-box-header";
+      header.textContent = "Upload";
+      const body = document.createElement("div");
+      body.className = "cmp-box-body";
+      body.appendChild(row);
+      box.appendChild(header);
+      box.appendChild(body);
+      left.insertBefore(box, left.firstChild);
+    }
+    moveUploadsIntoPanel();
+
+    // ── Foldable panels: click a box header to collapse/expand (persisted). ─
+    // Left tool panels (incl. Upload) default folded; right action boxes stay
+    // open unless the user folded them before.
+    root.querySelectorAll(".composer-box > .cmp-box-header").forEach((header) => {
+      const box = header.parentElement;
+      if (!box) return;
+      const key = `composer_panel_${(header.textContent || "panel").trim()}`;
+      const isRight = !!header.closest("#composer_right");
+      try {
+        const saved = localStorage.getItem(key);
+        const shouldCollapse = isRight ? saved === "1" : (saved === null || saved === "1");
+        if (shouldCollapse) box.classList.add("collapsed");
+      } catch (e) {
+        if (!isRight) box.classList.add("collapsed");
+      }
+      header.addEventListener("click", () => {
+        box.classList.toggle("collapsed");
+        try {
+          localStorage.setItem(key, box.classList.contains("collapsed") ? "1" : "0");
+        } catch (e) {
+          // ignore storage errors
+        }
+      });
+    });
+
+    // ── Right panel actions forward clicks to the hidden Gradio buttons. ─
+    const rightPanelForward = [
+      ["#composer_right_compose", "composer_compose"],
+      ["#composer_right_save", "composer_save"],
+      ["#composer_right_save_config", "composer_save_config"],
+      ["#composer_right_load_config", "composer_load_config_btn"],
+      ["#composer_right_caption", "composer_caption_btn"],
+      ["#composer_right_send_img2img", "composer_send_to_img2img"],
+      ["#composer_right_send_inpaint", "composer_send_to_inpaint"],
+      ["#composer_right_send_extras", "composer_send_to_extras"],
+    ];
+    rightPanelForward.forEach(([srcId, tgtId]) => {
+      const src = root.querySelector(srcId);
+      if (!src) return;
+      src.addEventListener("click", () => {
+        // Look the target up lazily so late-rendered Gradio components work.
+        const tgt = document.getElementById(tgtId);
+        if (!tgt) return;
+        try {
+          tgt.click();
+        } catch (e) {
+          // ignore click forwarding failures
+        }
+      });
+    });
+
     root.__composer_state = state;
+    _composerLog('  root.__composer_state set, layers=' + state.layers.length + ' assets=' + state.assets.length);
     fitCanvasToParent();
+    syncCanvasSizeInputs();
     draw();
+    _composerLog('makeComposerController() DONE');
+
+    // ── Canvas Size controls ──────────────────────────
+    if (canvasSizeApplyBtn) {
+      canvasSizeApplyBtn.addEventListener("click", () => {
+        resizeCanvasFromInputs();
+      });
+    }
+
+    // Canvas size preset chips
+    const presetChips = root.querySelectorAll(".cmp-preset-chip");
+    presetChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const w = parseInt(chip.dataset.w, 10);
+        const h = parseInt(chip.dataset.h, 10);
+        if (!w || !h) return;
+        if (canvasWidthInput) canvasWidthInput.value = w;
+        if (canvasHeightInput) canvasHeightInput.value = h;
+        resizeCanvasFromInputs();
+      });
+    });
+
+    // Allow Enter key on the size inputs to trigger apply
+    [canvasWidthInput, canvasHeightInput].forEach((inp) => {
+      if (!inp) return;
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          resizeCanvasFromInputs();
+        }
+      });
+    });
 
     return state;
   }
 
   window.composer_ensure_init = function () {
+    _composerLog('composer_ensure_init() called');
     const root = document.getElementById("composer_root");
-    if (!root) return;
+    if (!root) { _composerLog('  ERROR: composer_root NOT in DOM'); return; }
 
     if (!root.__composer_initialized) {
+      _composerLog('  first init, calling makeComposerController');
       root.__composer_initialized = true;
       makeComposerController(root);
+    } else {
+      _composerLog('  already inited, skipping');
     }
   };
 
@@ -1651,6 +3796,7 @@
         mirror: l.mirror,
         opacity: l.opacity,
         is_background: !!l.isBackground,
+        is_paint_overlay: !!l.isPaintOverlay,
       })),
     };
 
@@ -1665,11 +3811,16 @@
    *                            or empty string if none exists.
    */
   window.composer_load_from_gallery = async function (imagePath, configPath) {
+    _composerLog('composer_load_from_gallery() imagePath=' + (imagePath ? imagePath.split(/[\\\\/]/).pop() : '(none)') + ' configPath=' + (configPath ? 'yes' : 'no'));
     window.composer_ensure_init();
     const root = document.getElementById("composer_root");
-    if (!root || !root.__composer_state) return;
+    if (!root || !root.__composer_state) {
+      _composerLog('  ERROR: root=' + !!root + ' __composer_state=' + (root ? !!root.__composer_state : 'N/A') + ' — aborting');
+      return;
+    }
     const state = root.__composer_state;
     const canvas = root.querySelector("#composer_canvas");
+    _composerLog('  state OK, canvas=' + (canvas ? canvas.width + 'x' + canvas.height : 'null'));
 
     function toFileUrl(absPath) {
       return `/file=${encodeURIComponent(String(absPath).replace(/\\/g, "/"))}`;
@@ -1798,6 +3949,11 @@
     const root = document.getElementById("composer_root");
     if (root && root.__composer_state && typeof root.__composer_state.bindUploadInputs === "function") {
       root.__composer_state.bindUploadInputs();
+    }
+    // Throttled: only log at most once per 500ms to avoid flooding console
+    if (!observer._lastLog || Date.now() - observer._lastLog > 500) {
+      observer._lastLog = Date.now();
+      _composerLog('MutationObserver fired, composer_root=' + !!root + ' state=' + !!(root && root.__composer_state));
     }
   });
 

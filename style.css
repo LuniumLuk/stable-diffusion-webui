@@ -4885,15 +4885,17 @@ body.resizing .resize-handle {
     color: #e0f2fe;
 }
 
-.gv2-btn-danger {
-    border-color: rgba(239, 68, 68, 0.55);
-    background: rgba(127, 29, 29, 0.25);
+/* Scoped: bare .gv2-btn-danger (0,1,0) loses to .gv2-root .gv2-btn (0,2,0). */
+.gv2-root .gv2-btn-danger {
+    border-color: rgba(239, 68, 68, 0.7);
+    background: rgba(153, 27, 27, 0.4);
     color: #fca5a5;
+    font-weight: 600;
 }
 
-.gv2-btn-danger:hover {
+.gv2-root .gv2-btn-danger:hover {
     border-color: #ef4444;
-    background: rgba(153, 27, 27, 0.45);
+    background: rgba(185, 28, 28, 0.55);
     color: #fecaca;
 }
 
@@ -5691,6 +5693,7 @@ body.resizing .resize-handle {
     object-fit: contain;
     background: #0b1220;
     border-radius: 10px;
+    cursor: zoom-in;
 }
 
 .gv2-detail-body {
@@ -5869,6 +5872,44 @@ body.resizing .resize-handle {
     margin: 6px 0 0;
 }
 
+.gv2-detail-send {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.gv2-ctx {
+    position: fixed;
+    z-index: 1250;
+    min-width: 170px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 9px;
+    border: 1px solid #334155;
+    background: rgba(15, 23, 42, 0.98);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.gv2-ctx button {
+    display: block;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #e2e8f0;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.gv2-ctx button:hover {
+    background: rgba(56, 189, 248, 0.2);
+    color: #e0f2fe;
+}
+
 .gv2-detail-tagadd {
     display: flex;
     gap: 6px;
@@ -5902,6 +5943,41 @@ body.resizing .resize-handle {
 .gv2-toast-error {
     border-color: #ef4444;
     color: #fca5a5;
+}
+
+.gv2-root .gv2-top {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    z-index: 1150;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 1px solid rgba(56, 189, 248, 0.5);
+    background: rgba(15, 23, 42, 0.92);
+    color: #7dd3fc;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    visibility: visible;
+    transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+}
+
+.gv2-root .gv2-top:hover {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: var(--gv2-accent);
+    color: #e0f2fe;
+}
+
+.gv2-root .gv2-top-hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(8px);
 }
 
 .gv2-toast-hidden {

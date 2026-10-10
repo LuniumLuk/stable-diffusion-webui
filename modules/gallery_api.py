@@ -275,16 +275,21 @@ def register_routes(app):
     @app.post("/gallery/api/maintenance")
     def gallery_maintenance(payload: dict = Body(default={})):
         op = str(payload.get("op") or "")
-        from modules import gallery_db, gallery_lifecycle
+        dry_run = bool(payload.get("dry_run"))
+        from modules import gallery_db, gallery_lifecycle, gallery_query
         if op == "sweep":
             return gallery_lifecycle.sweep()
         if op == "empty_trash":
+            if dry_run:
+                return {"ok": True, "dry_run": True, "count": _maintenance_count({"states": ["trashed"]})}
             count = gallery_lifecycle.empty_trash()
             _legacy_empty_trash()
             return {"ok": True, "removed": count}
         if op in ("trash_disliked", "trash_archived"):
-            from modules import endorsement_db, gallery_query
+            from modules import endorsement_db
             filters = {"rating": "disliked"} if op == "trash_disliked" else {"states": ["archived"]}
+            if dry_run:
+                return {"ok": True, "dry_run": True, "count": _maintenance_count(filters)}
             trashed = 0
             failed = []
             for _pass in range(500):
@@ -307,6 +312,37 @@ def register_routes(app):
                 if len(rows) < 200 or trashed == before:
                     break
             return {"ok": True, "removed": trashed, "failed": failed[:20]}
+        if op in ("archive_unrated", "archive_filtered"):
+            from modules import endorsement_db
+            filters = _archive_filterset(op, payload)
+            if not filters.get("states"):
+                if dry_run:
+                    return {"ok": True, "dry_run": True, "count": 0}
+                return {"ok": True, "archived": 0, "failed": []}
+            if dry_run:
+                return {"ok": True, "dry_run": True, "count": _maintenance_count(filters)}
+            archived = 0
+            failed = []
+            for _pass in range(500):
+                page = gallery_query.query(dict(filters), "time_desc", 200, 0,
+                                           with_tags=False, with_meta=False)
+                rows = page.get("rows") or []
+                if not rows:
+                    break
+                before = archived
+                for item in rows:
+                    try:
+                        outcome = endorsement_db.archive_item(_item_legacy_key(item))
+                    except Exception as exc:
+                        outcome = {"error": str(exc)}
+                    if isinstance(outcome, dict) and outcome.get("error"):
+                        failed.append({"key": item.get("uid") or "", "error": outcome["error"]})
+                    else:
+                        archived += 1
+                # archived items drop out of the active/staged set; stop when nothing moved
+                if len(rows) < 200 or archived == before:
+                    break
+            return {"ok": True, "archived": archived, "failed": failed[:20]}
         if op == "enforce_trash_media":
             return gallery_lifecycle.enforce_trash_media()
         if op == "blob_sweep":
@@ -444,6 +480,28 @@ def _legacy_empty_trash():
             conn.commit()
     except Exception:
         pass
+
+
+def _maintenance_count(fs: dict) -> int:
+    """Item count for a maintenance dry-run preview (raw filters dict)."""
+    from modules import gallery_query
+    return int(gallery_query.query(dict(fs), "time_desc", 1, 0, with_tags=False, with_meta=False)["total"])
+
+
+def _archive_filterset(op: str, payload: dict) -> dict:
+    """FilterSet for bulk archive. Only active/staged items can be archived; an empty
+    state intersection means nothing matches (never fall back to all states)."""
+    from modules import gallery_query
+    if op == "archive_unrated":
+        fs = gallery_query.parse_filters({"rating": "none"})
+        # global maintenance: album membership never excludes items (matches the legacy
+        # desktop + mobile "Archive Unrated" which have no album concept)
+        fs["show_albumed"] = True
+    else:
+        fs = gallery_query.parse_filters(payload.get("filters") or payload)
+    states = fs.get("states") or []
+    fs["states"] = [s for s in states if s in ("active", "staged")] if states else ["active", "staged"]
+    return fs
 
 
 def _handle_action(payload: dict) -> dict:

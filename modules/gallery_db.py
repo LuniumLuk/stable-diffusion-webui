@@ -47,7 +47,8 @@ DEFAULT_SOURCES = (
     ("krea2", "Krea 2", "sidecar_txt", '{"root": "outputs/krea2"}'),
     ("removebg", "RemoveBG", "none", '{"root": "outputs/removebg", "variant_of": "parent"}'),
     ("nano_banana", "Nano Banana", "sidecar_txt", '{"root": "outputs/nano-banana"}'),
-    ("comic_maker", "Comic Maker", "a1111", '{"root": "outputs/comic_maker"}'),
+    ("comic_maker", "Comic Maker", "comic_prompts", '{"root": "outputs/comic_maker"}'),
+    ("lora_data_maker", "LoRA Data", "sidecar_txt", '{"root": "outputs/lora_data_maker"}'),
     ("sana", "SANA", "a1111", '{"root": "outputs/sana"}'),
 )
 
@@ -215,6 +216,10 @@ def init_db() -> None:
         album_cols = {row[1] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
         if "cover_uid" not in album_cols:
             conn.execute("ALTER TABLE albums ADD COLUMN cover_uid TEXT")
+        # comic_maker prompts live in the run's comic_prompts.txt, not in the PNG
+        conn.execute(
+            "UPDATE sources SET parser='comic_prompts' WHERE id='comic_maker' AND parser='a1111'"
+        )
         _backfill_engine_keys(conn)
         _seed(conn)
         conn.commit()

@@ -14,12 +14,27 @@ _STARTUP_NAME = "gallery_v2_startup"
 def on_ui_tabs():
     import gradio as gr
 
+    from modules import infotext_utils
+
     with gr.Blocks(analytics_enabled=False) as tab:
         gr.HTML(
             value='<div id="gallery-v2-root" class="gv2-root">'
                   '<div class="gv2-loading">Loading Gallery v2\u2026</div>'
                   "</div>"
         )
+        # Hidden bridge for the card right-click menu and the preview drawer
+        # "Send to" actions: paste an item's infotext into txt2img / img2img.
+        infotext_apply = gr.Textbox(value="", visible=False, elem_id="gv2_infotext_apply")
+        apply_txt2img_btn = gr.Button("", visible=False, elem_id="gv2_apply_txt2img_btn")
+        apply_img2img_btn = gr.Button("", visible=False, elem_id="gv2_apply_img2img_btn")
+        for btn, tabname in ((apply_txt2img_btn, "txt2img"), (apply_img2img_btn, "img2img")):
+            infotext_utils.register_paste_params_button(
+                infotext_utils.ParamBinding(
+                    paste_button=btn,
+                    tabname=tabname,
+                    source_text_component=infotext_apply,
+                )
+            )
     return [(tab, "Gallery v2", "gallery_v2_tab")]
 
 

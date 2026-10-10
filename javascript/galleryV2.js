@@ -114,6 +114,207 @@
       p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
+  // ---------------------------------------------------------------- send to
+
+  var SEND_ACTIONS = [
+    ['txt2img', '\u270E  txt2img', 'Apply the prompt + parameters to txt2img'],
+    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send the image + parameters to img2img'],
+    ['inpaint', '\u{1F3A8}  Inpaint', 'Send the image + parameters to inpaint'],
+    ['composer', '\u{1F9E9}  Composer', 'Open the image in the Composer tab'],
+    ['censor', '\u{1F58A}\uFE0F  Censor', 'Open the image in the Censor panel']
+  ];
+
+  function setGradioTextbox(elemId, value) {
+    var host = gradioApp().querySelector('#' + elemId);
+    var el = host ? host.querySelector('textarea') : null;
+    if (!el) return false;
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+
+  function clickGradioBtn(elemId, delay) {
+    setTimeout(function () {
+      var btn = gradioApp().querySelector('#' + elemId);
+      if (btn) btn.click();
+    }, delay == null ? 80 : delay);
+  }
+
+  function fileServeUrl(absPath) {
+    return '/file=' + encodeURIComponent(String(absPath || '').replace(/\\/g, '/'));
+  }
+
+  function switchToTabByName(name) {
+    var tabHost = gradioApp().querySelector('#tabs div');
+    if (!tabHost) return;
+    var target = (name || '').trim().toLowerCase();
+    tabHost.querySelectorAll('button').forEach(function (btn) {
+      if (btn.textContent.trim().toLowerCase().includes(target)) btn.click();
+    });
+  }
+
+  function applyInfotext(text, target) {
+    if (!text) return true;
+    if (!setGradioTextbox('gv2_infotext_apply', text)) {
+      toast('Send bridge missing \u2014 restart the webui to enable it', true);
+      return false;
+    }
+    clickGradioBtn(target === 'img2img' ? 'gv2_apply_img2img_btn' : 'gv2_apply_txt2img_btn');
+    return true;
+  }
+
+  function fetchItemImageBlob(item) {
+    // Prefer the original file on disk, fall back to the stored preview blob.
+    var path = item.path || item.alias_path || '';
+    var urls = [];
+    if (path) urls.push(fileServeUrl(path));
+    if (item.state !== 'trashed') urls.push(blobUrl(item, 'preview'));
+    var attempt = function (idx) {
+      if (idx >= urls.length) return Promise.reject(new Error('no media'));
+      return fetch(urls[idx]).then(function (res) {
+        if (!res.ok) throw new Error('fetch ' + res.status);
+        return res.blob();
+      }).catch(function () { return attempt(idx + 1); });
+    };
+    return attempt(0);
+  }
+
+  function injectImageToImg2Img(item) {
+    return fetchItemImageBlob(item).then(function (blob) {
+      var fileInput = gradioApp().querySelector('#img2img_image input[type="file"]');
+      if (!fileInput) { toast('img2img image input not found', true); return; }
+      var name = ((item.path || '').split(/[\\/]/).pop()) || 'gallery-image.png';
+      var file = new File([blob], name, { type: blob.type || 'image/png' });
+      var data = new DataTransfer();
+      data.items.add(file);
+      fileInput.files = data.files;
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }).catch(function () { toast('No image media available for this item', true); });
+  }
+
+  function sendableText(item) {
+    // A1111-style infotext (prompt + Steps: parameters) is the ideal payload;
+    // for other sources (comic manifests, caption txt, ...) prefer the prompt.
+    var infotext = item.infotext || '';
+    var prompt = item.prompt || '';
+    if (infotext && /(^|\n)Steps:\s*\d+/.test(infotext)) return infotext;
+    if (prompt) return prompt;
+    return infotext;
+  }
+
+  function sendItemTo(item, action) {
+    var path = item.path || item.alias_path || '';
+    var text = sendableText(item);
+    if (action === 'txt2img') {
+      if (!text) { toast('No prompt / parameters to send', true); return; }
+      if (!applyInfotext(text, 'txt2img')) return;
+      setTimeout(function () { switchToTabByName('txt2img'); }, 200);
+      toast('To txt2img');
+    } else if (action === 'img2img') {
+      if (text && !applyInfotext(text, 'img2img')) return;
+      setTimeout(function () { switchToTabByName('img2img'); }, 200);
+      setTimeout(function () { injectImageToImg2Img(item); }, 320);
+      toast('To img2img');
+    } else if (action === 'inpaint') {
+      if (text && !applyInfotext(text, 'img2img')) return;
+      setTimeout(function () { switchToTabByName('img2img'); }, 200);
+      setTimeout(function () {
+        if (typeof window.switch_to_inpaint === 'function') window.switch_to_inpaint();
+        injectImageToImg2Img(item);
+      }, 340);
+      toast('To inpaint');
+    } else if (action === 'composer') {
+      if (!path) { toast('No file path on this item', true); return; }
+      switchToTabByName('composer');
+      setTimeout(function () {
+        if (typeof window.composer_load_from_gallery !== 'function') {
+          toast('Composer not available', true);
+          return;
+        }
+        window.composer_load_from_gallery(path, '')
+          .then(function () { toast('To Composer'); })
+          .catch(function (err) { toast('Composer load failed: ' + ((err && err.message) || err), true); });
+      }, 450);
+    } else if (action === 'censor') {
+      var url = path ? fileServeUrl(path) : (item.state !== 'trashed' ? blobUrl(item, 'preview') : '');
+      if (!url) { toast('No media for this item', true); return; }
+      switchToTabByName('censor');
+      setTimeout(function () {
+        if (window.censorPanel && window.censorPanel.openUrl) window.censorPanel.openUrl(url);
+      }, 150);
+      toast('To Censor');
+    }
+  }
+
+  function sendItemByKey(key, action) {
+    api('/gallery/api/item?id=' + encodeURIComponent(key)).then(function (item) {
+      sendItemTo(item, action);
+    }).catch(function (err) { toast('Item lookup failed: ' + err.message, true); });
+  }
+
+  var _ctxMenuEl = null;
+
+  function ctxMenuOutside(ev) {
+    if (_ctxMenuEl && !_ctxMenuEl.contains(ev.target)) closeCtxMenu();
+  }
+
+  function ctxMenuKey(ev) {
+    if (ev.key === 'Escape') closeCtxMenu();
+  }
+
+  function closeCtxMenu() {
+    if (!_ctxMenuEl) return;
+    _ctxMenuEl.remove();
+    _ctxMenuEl = null;
+    document.removeEventListener('mousedown', ctxMenuOutside, true);
+    document.removeEventListener('keydown', ctxMenuKey, true);
+  }
+
+  function openCtxMenu(ev, key) {
+    closeCtxMenu();
+    var menu = document.createElement('div');
+    menu.className = 'gv2-ctx';
+    SEND_ACTIONS.forEach(function (def) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-send', def[0]);
+      btn.textContent = def[1];
+      btn.title = def[2];
+      menu.appendChild(btn);
+    });
+    document.body.appendChild(menu);
+    var w = menu.offsetWidth;
+    var h = menu.offsetHeight;
+    menu.style.left = Math.max(4, Math.min(ev.clientX, window.innerWidth - w - 6)) + 'px';
+    menu.style.top = Math.max(4, Math.min(ev.clientY, window.innerHeight - h - 6)) + 'px';
+    menu.addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('[data-send]') : null;
+      if (!btn) return;
+      closeCtxMenu();
+      sendItemByKey(key, btn.getAttribute('data-send'));
+    });
+    _ctxMenuEl = menu;
+    document.addEventListener('mousedown', ctxMenuOutside, true);
+    document.addEventListener('keydown', ctxMenuKey, true);
+  }
+
+  function wireCtxMenu() {
+    var grid = el('gv2-grid');
+    if (!grid || grid.dataset.gv2Ctx === '1') return;
+    grid.dataset.gv2Ctx = '1';
+    grid.addEventListener('contextmenu', function (ev) {
+      var card = ev.target.closest ? ev.target.closest('.gv2-card') : null;
+      if (!card) return;
+      var key = card.getAttribute('data-key');
+      if (!key) return;
+      ev.preventDefault();
+      openCtxMenu(ev, key);
+    });
+    window.addEventListener('scroll', closeCtxMenu, { passive: true, capture: true });
+    window.addEventListener('resize', closeCtxMenu);
+  }
+
   function fmtSize(bytes) {
     if (!bytes) return '';
     if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
@@ -195,6 +396,8 @@
           '<button id="gv2-empty-trash" class="gv2-btn gv2-btn-danger" title="Permanently delete all trashed metadata rows">Empty Trash</button>' +
           '<button id="gv2-trash-disliked" class="gv2-btn gv2-btn-danger" title="Move every disliked item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Disliked</button>' +
           '<button id="gv2-trash-archived" class="gv2-btn gv2-btn-danger" title="Move every archived item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Archived</button>' +
+          '<button id="gv2-archive-unrated" class="gv2-btn gv2-btn-danger" title="Archive every unrated item, including albumed ones (leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Unrated</button>' +
+          '<button id="gv2-archive-current" class="gv2-btn gv2-btn-danger" title="Archive all items matching the current filter (leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Current</button>' +
         '</div>' +
         '<div class="gv2-row gv2-row-adv">' +
           '<span class="gv2-row-label">Options</span>' +
@@ -253,7 +456,8 @@
         '<button class="gv2-btn gv2-btn-quiet" data-batch="clear">Clear</button>' +
       '</div>' +
       '<div id="gv2-detail" class="gv2-detail gv2-detail-hidden"></div>' +
-      '<div id="gv2-toast" class="gv2-toast gv2-toast-hidden"></div>';
+      '<div id="gv2-toast" class="gv2-toast gv2-toast-hidden"></div>' +
+      '<button id="gv2-top" class="gv2-top gv2-top-hidden" title="Back to top">\u2191</button>';
 
     el('gv2-q').addEventListener('input', debounce(function () {
       state.filters.q = el('gv2-q').value.trim();
@@ -282,19 +486,40 @@
     });
     el('gv2-refresh').addEventListener('click', function () { refreshFacets(); resetAndRefresh(); });
     el('gv2-select').addEventListener('click', function () { setSelectMode(!state.selectMode); });
+    el('gv2-top').addEventListener('click', function () {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
     el('gv2-more').addEventListener('click', function () { loadPage(true); });
     el('gv2-sync').addEventListener('click', function () { runMaintenance('reindex', 'Sync'); });
     el('gv2-empty-trash').addEventListener('click', function () {
-      if (!window.confirm('Permanently remove all trashed items (metadata too)?')) return;
-      runMaintenance('empty_trash', 'Empty trash');
+      confirmMaintenance('empty_trash', 'Empty trash', function (n) {
+        return 'Permanently delete ' + n + ' trashed item(s)?\n\n' +
+          'Their metadata rows are removed for good \u2014 this cannot be undone.';
+      });
     });
     el('gv2-trash-disliked').addEventListener('click', function () {
-      if (!window.confirm('Trash ALL disliked items? Original files and media will be deleted (metadata kept).')) return;
-      runMaintenance('trash_disliked', 'Trash disliked');
+      confirmMaintenance('trash_disliked', 'Trash disliked', function (n) {
+        return 'Move ' + n + ' disliked item(s) to trash?\n\n' +
+          'Original files and cached media will be DELETED (metadata kept).';
+      });
     });
     el('gv2-trash-archived').addEventListener('click', function () {
-      if (!window.confirm('Trash ALL archived items? Original files and media will be deleted (metadata kept).')) return;
-      runMaintenance('trash_archived', 'Trash archived');
+      confirmMaintenance('trash_archived', 'Trash archived', function (n) {
+        return 'Move ' + n + ' archived item(s) to trash?\n\n' +
+          'Original files and cached media will be DELETED (metadata kept).';
+      });
+    });
+    el('gv2-archive-unrated').addEventListener('click', function () {
+      confirmMaintenance('archive_unrated', 'Archive unrated', function (n) {
+        return 'Archive ' + n + ' unrated item(s) (all sources, albumed included)?\n\n' +
+          'Archived items leave the active view; the sweeper auto-trashes them after 24 h unless endorsed.';
+      });
+    });
+    el('gv2-archive-current').addEventListener('click', function () {
+      confirmMaintenance('archive_filtered', 'Archive current', function (n) {
+        return 'Archive ALL ' + n + ' item(s) matching the current filter?\n\n' +
+          'Archived items leave the active view; the sweeper auto-trashes them after 24 h unless endorsed.';
+      }, function () { return { filters: state.filters }; });
     });
     el('gv2-page-mode').value = state.pageMode;
     el('gv2-page-size').value = String(state.pageSize);
@@ -1259,19 +1484,39 @@
       .catch(function (err) { toast('Action failed: ' + err.message, true); });
   }
 
-  function runMaintenance(op, label) {
+  function runMaintenance(op, label, extra) {
+    var payload = { op: op };
+    if (extra) Object.keys(extra).forEach(function (k) { payload[k] = extra[k]; });
     toast(label + ' running\u2026');
-    return api('/gallery/api/maintenance', { op: op })
+    return api('/gallery/api/maintenance', payload)
       .then(function (data) {
         if (op === 'reindex') {
           var stats = (data && data.stats) || {};
           toast(label + ': scanned ' + (stats.scanned || 0) + ', added ' + (stats.added || 0) + ', updated ' + (stats.updated || 0));
         } else {
-          toast(label + ' done' + (data && data.removed !== undefined ? ' (' + data.removed + ' removed)' : ''));
+          var n = data && (data.removed !== undefined ? data.removed : data.archived);
+          toast(label + ' done' + (n !== undefined && n !== null ? ' \u2014 ' + n + ' item(s)' : ''));
         }
         refreshFacets(); resetAndRefresh();
       })
       .catch(function (err) { toast(label + ' failed: ' + err.message, true); });
+  }
+
+  // Destructive maintenance: ask the server how many items are involved first,
+  // show that count in the warning, then run the op on confirmation.
+  function confirmMaintenance(op, label, buildMessage, extraBuilder) {
+    var extra = extraBuilder ? extraBuilder() : null;
+    var payload = { op: op, dry_run: true };
+    if (extra) Object.keys(extra).forEach(function (k) { payload[k] = extra[k]; });
+    toast(label + ': counting\u2026');
+    api('/gallery/api/maintenance', payload)
+      .then(function (data) {
+        var count = (data && data.count) || 0;
+        if (!count) { toast(label + ': nothing to do (0 items)'); return; }
+        if (!window.confirm(buildMessage(count))) return;
+        runMaintenance(op, label, extra);
+      })
+      .catch(function (err) { toast(label + ' count failed: ' + err.message, true); });
   }
 
   // ---------------------------------------------------------------- detail
@@ -1295,6 +1540,57 @@
     if (!uid) return Promise.resolve();
     return api('/gallery/api/item?id=' + encodeURIComponent(uid)).then(function (item) {
       if (state.detailKey === uid) renderDetail(item);
+    }).catch(function () {});
+  }
+
+  // Fullscreen viewer: reuse the app-wide lightbox (#lightboxModal) that already
+  // provides wheel zoom + drag panning. Prefer the original file on disk; fall
+  // back to the stored preview blob when the original is gone (bundled/trashed).
+  function itemFileUrl(item) {
+    var p = (item && (item.path || item.alias_path)) || '';
+    if (!p) return '';
+    return '/file=' + encodeURIComponent(String(p).replace(/\\/g, '/'));
+  }
+
+  function detailViewerSrc(item, previewSrc, cb) {
+    var url = item.state === 'trashed' ? '' : itemFileUrl(item);
+    if (!url) { cb(previewSrc); return; }
+    var probe = new Image();
+    probe.onload = function () { cb(url); };
+    probe.onerror = function () { cb(previewSrc); };
+    probe.src = url;
+  }
+
+  function openDetailViewer(item) {
+    if (typeof window.openLightbox !== 'function') { toast('Image viewer unavailable', true); return; }
+    var box = el('gv2-detail');
+    var detailImg = box ? box.querySelector('.gv2-detail-img') : null;
+    if (!detailImg) return;
+    var previewSrc = detailImg.src;
+    window.gv2LightboxNav = { nav: function (offset) { navDetailViewer(offset); } };
+    detailViewerSrc(item, previewSrc, function (src) {
+      if (window.gv2LightboxNav) window.openLightbox(src);
+    });
+  }
+
+  function navDetailViewer(offset) {
+    var uid = state.detailKey;
+    if (!uid) return;
+    var idx = -1;
+    for (var i = 0; i < state.rows.length; i++) {
+      if (state.rows[i].uid === uid) { idx = i; break; }
+    }
+    var next = idx + offset;
+    if (idx < 0 || next < 0 || next >= state.rows.length) return;
+    var row = state.rows[next];
+    state.detailKey = row.uid;
+    markDetailCard(false);
+    api('/gallery/api/item?id=' + encodeURIComponent(row.uid)).then(function (item) {
+      if (!window.gv2LightboxNav) return; // viewer was closed while loading
+      renderDetail(item);
+      detailViewerSrc(item, blobUrl(row, 'preview'), function (src) {
+        if (window.gv2LightboxNav) window.openLightbox(src);
+      });
     }).catch(function () {});
   }
 
@@ -1411,7 +1707,8 @@
     }
     var img = item.state === 'trashed'
       ? '<div class="gv2-thumb gv2-thumb-empty">no media (trash)</div>'
-      : '<img class="gv2-detail-img" src="' + blobUrl(item, 'preview') + '" alt="">';
+      : '<img class="gv2-detail-img" src="' + blobUrl(item, 'preview') + '" alt="" ' +
+        'title="Click to open the fullscreen viewer (wheel = zoom, drag = pan)">';
     var tagPills = (item.tags || []).filter(function (t) { return t.category === 'workflow'; })
       .map(function (t) {
         return '<span class="gv2-tag">' + esc(t.name) +
@@ -1440,6 +1737,13 @@
             '<span><kbd>A</kbd> archive</span>' +
             '<span><kbd>Esc</kbd> close</span>' +
           '</div>' +
+          '<div class="gv2-detail-section"><div class="gv2-detail-label">Send to</div>' +
+            '<div class="gv2-detail-send">' +
+              SEND_ACTIONS.map(function (def) {
+                return '<button class="gv2-btn gv2-btn-quiet" data-send-act="' + def[0] + '" title="' + esc(def[2]) + '">' + def[1] + '</button>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
           '<div class="gv2-detail-section"><div class="gv2-detail-label">Album</div>' +
             albumSectionHtml(item) +
           '</div>' +
@@ -1464,6 +1768,15 @@
     box.classList.remove('gv2-detail-hidden');
 
     el('gv2-detail-close').addEventListener('click', closeDetail);
+    var detailImg = box.querySelector('.gv2-detail-img');
+    if (detailImg) {
+      detailImg.addEventListener('click', function () { openDetailViewer(item); });
+    }
+    box.querySelectorAll('[data-send-act]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        sendItemTo(item, btn.getAttribute('data-send-act'));
+      });
+    });
     box.querySelectorAll('[data-detail-act]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var current = detailRow();
@@ -1678,6 +1991,10 @@
       }
     });
     document.addEventListener('keydown', function (ev) {
+      // The fullscreen viewer owns the keyboard while a Gallery v2 image is open.
+      // `_lightboxHandled` covers the same-tick race: the viewer's own Escape
+      // handler clears gv2LightboxNav before this listener runs.
+      if (window.gv2LightboxNav || ev._lightboxHandled) return;
       var box = el('gv2-detail');
       var drawerOpen = box && !box.classList.contains('gv2-detail-hidden');
       if (ev.key === 'Escape') {
@@ -1738,6 +2055,13 @@
     if (rect.top <= vh + 600) loadPage(true);
   }
 
+  function updateTopButton() {
+    var btn = el('gv2-top');
+    if (!btn) return;
+    var y = window.scrollY || document.documentElement.scrollTop || 0;
+    btn.classList.toggle('gv2-top-hidden', y <= 600);
+  }
+
   function hookAutoScroll() {
     if (_autoScrollHooked) return;
     _autoScrollHooked = true;
@@ -1746,10 +2070,12 @@
       _autoScrollScheduled = true;
       requestAnimationFrame(function () {
         _autoScrollScheduled = false;
+        updateTopButton();
         autoLoadCheck();
       });
     }, { passive: true });
-    window.addEventListener('resize', function () { autoLoadCheck(); });
+    window.addEventListener('resize', function () { updateTopButton(); autoLoadCheck(); });
+    updateTopButton();
   }
 
   function init() {
@@ -1761,6 +2087,7 @@
     applyThumbSize();
     wireChips(root);
     wireGrid(root);
+    wireCtxMenu();
     refreshViews();
     refreshFacets().then(function () { loadPage(false); });
     // infinite scroll

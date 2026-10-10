@@ -332,6 +332,144 @@ def cli_main() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Multi-tool page helpers (Image Maker / Comic Maker / LoRA Data Maker)
+# ---------------------------------------------------------------------------
+WORKFLOW_SCRIPTS = {
+    "image_maker": os.path.join(WORKFLOW_DIR, "image_maker.py"),
+    "comic_maker": os.path.join(WORKFLOW_DIR, "comic_maker.py"),
+    "lora_data_maker": os.path.join(WORKFLOW_DIR, "lora_data_maker.py"),
+}
+
+# outputs/<dir> -> gallery source id (source rows live in modules/gallery_db.py)
+_GALLERY_DIR_SOURCES = (
+    ("nano-banana", "nano_banana"),
+    ("image_maker", "image_maker"),
+    ("comic_maker", "comic_maker"),
+    ("lora_data_maker", "lora_data_maker"),
+)
+
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+def _run_workflow(script_key, args, api_key="", timeout=3600):
+    """Run a gemini_workflow CLI in its own venv; return (result_json, log_tail)."""
+    python = ensure_workflow_venv(verbose=False)
+    env = dict(os.environ)
+    key = get_api_key(api_key)
+    if key:
+        env["GEMINI_API_KEY"] = key
+    cmd = [python, WORKFLOW_SCRIPTS[script_key]] + [str(a) for a in args]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          env=env, timeout=timeout)
+    result = None
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        try:
+            result = json.loads(line)
+            break
+        except ValueError:
+            continue
+    if result is None:
+        result = {"ok": False,
+                  "error": (proc.stderr or "").strip() or "no JSON result on stdout"}
+    log = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    return result, log[-3000:]
+
+
+def _prompt_to_file(text, prefix):
+    """Persist a textarea prompt as a UTF-8 .txt for the workflow CLIs."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    folder = os.path.join(_ROOT_DIR, "tmp", "gemini_tab_prompts")
+    os.makedirs(folder, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = os.path.join(folder, "%s_%s.txt" % (prefix, stamp))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    return path
+
+
+def _iter_images(paths):
+    """Expand dirs/files into a sorted list of image paths."""
+    found = []
+    for p in paths or []:
+        if not p:
+            continue
+        if os.path.isdir(p):
+            for root_dir, _dirs, files in os.walk(p):
+                for fn in files:
+                    if fn.lower().endswith(IMAGE_EXTS):
+                        found.append(os.path.join(root_dir, fn))
+        elif os.path.isfile(p) and p.lower().endswith(IMAGE_EXTS):
+            found.append(p)
+    return sorted(found)
+
+
+def register_run_outputs(paths):
+    """Index freshly generated files into gallery.db so Gallery v2 sees them.
+
+    Returns (indexed_count, error_message). No-op outside the webui process.
+    """
+    try:
+        from modules import gallery_db, gallery_sources
+    except Exception as exc:  # standalone CLI mode
+        return 0, "gallery modules unavailable (%s)" % exc
+    images = _iter_images(paths)
+    if not images:
+        return 0, ""
+    try:
+        by_id = {s["id"]: s for s in gallery_db.get_sources()}
+        indexed = 0
+        for p in images:
+            rel = os.path.relpath(os.path.abspath(p), _ROOT_DIR).replace("\\", "/")
+            source_id = ""
+            for prefix, sid in _GALLERY_DIR_SOURCES:
+                if rel.startswith(prefix + "/"):
+                    source_id = sid
+                    break
+            if not source_id:
+                continue
+            parser = (by_id.get(source_id) or {}).get("parser") or "a1111"
+            if gallery_sources.index_item(p, source_id, parser):
+                indexed += 1
+        return indexed, ""
+    except Exception as exc:  # noqa: BLE001 - never fail a generation over indexing
+        return 0, "indexing failed (%s)" % exc
+
+
+def _fail_message(result, log):
+    err = result.get("error")
+    if err is None:
+        fails = result.get("failures") or []
+        if fails and isinstance(fails[0], dict):
+            err = fails[0].get("example")
+    if not err:
+        err = (log or "")[-500:]
+    return "\u274C %s" % str(err)[:700]
+
+
+def _done_message(result, images, indexed, extra="", idx_err=""):
+    rel = ""
+    out_dir = result.get("output_dir") or result.get("training_dir") or ""
+    if out_dir:
+        try:
+            rel = os.path.relpath(out_dir, _ROOT_DIR).replace("\\", "/")
+        except ValueError:
+            rel = out_dir
+    msg = "\u2705 Done \u2014 %d image(s)" % len(images)
+    if rel:
+        msg += " \u00B7 `%s`" % rel
+    if extra:
+        msg += " \u00B7 %s" % extra
+    if indexed:
+        msg += " \u00B7 %d indexed into the Gallery (hit Refresh there)" % indexed
+    if idx_err:
+        msg += " \u00B7 \u26A0\uFE0F %s" % idx_err
+    return msg
+
+
+
+# ---------------------------------------------------------------------------
 # Gradio tab
 # ---------------------------------------------------------------------------
 def on_ui_tabs():
@@ -341,74 +479,296 @@ def on_ui_tabs():
 
     with gr.Blocks() as tab:
         gr.Markdown(
-            "## 🍌 Nano Banana — Google Gemini image generation\n"
-            "Generates **one image per call** via the official Gemini API. "
-            "Set your API key once (from [Google AI Studio](https://aistudio.google.com/apikey)).\n"
-            "Optionally add **reference image(s)** to edit them with the prompt "
-            "(e.g. \"change the background to a neon city\"), or load the prompt "
-            "from a **.txt file** (overrides the box)."
+            "## \U0001F34C Nano Banana \u2014 Gemini image workflows\n"
+            "One page for the whole Gemini pipeline: **single image**, "
+            "**Image Maker** (character sheets \u2192 LoRA training set), "
+            "**Comic Maker** (story \u2192 multi-page comic) and "
+            "**LoRA Data Maker** (built-in randomized sheets). "
+            "Results land in `outputs/` and are indexed into the Gallery automatically."
         )
         with gr.Row():
-            with gr.Column(scale=2):
-                prompt = gr.Textbox(
-                    lines=4, label="Prompt",
-                    placeholder="e.g. a cyberpunk cat with a neon sign, cinematic lighting",
-                )
-                prompt_file = gr.File(
-                    label="Prompt file (.txt, optional — overrides the box)",
-                    file_types=[".txt"],
-                )
-                with gr.Row():
-                    model = gr.Dropdown(
-                        choices=MODEL_CHOICES, value=DEFAULT_MODEL,
-                        label="Model", info="Nano Banana = gemini-2.5-flash-image",
-                    )
-                    aspect = gr.Dropdown(
-                        choices=["Auto"] + ASPECT_RATIOS, value="Auto",
-                        label="Aspect ratio",
-                    )
-                    size = gr.Dropdown(
-                        choices=["Auto"] + IMAGE_SIZES, value="Auto",
-                        label="Image size",
-                    )
-                ref_files = gr.Files(
-                    label="Reference image(s) (optional)", file_types=["image"],
-                )
-                with gr.Row():
-                    api_key_box = gr.Textbox(
-                        value=default_key, type="password", label="Gemini API Key",
-                        placeholder="GEMINI_API_KEY",
-                    )
-                    save_key_btn = gr.Button("💾 Save Key", variant="secondary")
-                gen_btn = gr.Button("✨ Generate (1 image)", variant="primary")
-                status = gr.Markdown("_Ready._")
-            with gr.Column():
-                out_img = gr.Image(label="Result", type="pil")
-
-        def _generate(prompt_text, model_id, aspect_val, size_val, key_val, ref_paths, prompt_file_path):
-            try:
-                img = generate_image(
-                    prompt=prompt_text, model=model_id, api_key=key_val or "",
-                    prompt_file=prompt_file_path or "",
-                    aspect_ratio="" if aspect_val == "Auto" else aspect_val,
-                    image_size="" if size_val == "Auto" else size_val,
-                    reference_images=list(ref_paths) if ref_paths else None,
-                )
-                return img, "✅ Generated. Saved to `outputs/nano-banana/`."
-            except Exception as exc:  # noqa: BLE001 - surface error to the UI
-                return None, f"❌ {exc}"
+            api_key_box = gr.Textbox(
+                value=default_key, type="password", label="Gemini API Key",
+                placeholder="GEMINI_API_KEY",
+            )
+            save_key_btn = gr.Button("\U0001F4BE Save Key", variant="secondary")
+        key_status = gr.Markdown("")
 
         def _save_key(key_val):
             if not key_val or not key_val.strip():
-                return "⚠️ Key is empty — nothing saved."
+                return "\u26A0\uFE0F Key is empty \u2014 nothing saved."
             save_api_key(key_val)
-            return "✅ API key saved to `config_states/gemini_nano_banana.txt`."
+            return "\u2705 API key saved to `config_states/gemini_nano_banana.txt`."
 
-        gen_btn.click(_generate, [prompt, model, aspect, size, api_key_box, ref_files, prompt_file],
-                      [out_img, status])
-        save_key_btn.click(_save_key, [api_key_box], [status])
+        save_key_btn.click(_save_key, [api_key_box], [key_status])
 
-    return [(tab, "🍌 Nano Banana", "nano_banana")]
+        with gr.Tabs():
+            # ------------------------------------------------------------ single
+            with gr.Tab("\u2728 Single image"):
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        prompt = gr.Textbox(
+                            lines=4, label="Prompt",
+                            placeholder="e.g. a cyberpunk cat with a neon sign, cinematic lighting",
+                        )
+                        prompt_file = gr.File(
+                            label="Prompt file (.txt, optional \u2014 overrides the box)",
+                            file_types=[".txt"],
+                        )
+                        with gr.Row():
+                            model = gr.Dropdown(
+                                choices=MODEL_CHOICES, value=DEFAULT_MODEL,
+                                label="Model", info="Nano Banana = gemini-2.5-flash-image",
+                            )
+                            aspect = gr.Dropdown(
+                                choices=["Auto"] + ASPECT_RATIOS, value="Auto",
+                                label="Aspect ratio",
+                            )
+                            size = gr.Dropdown(
+                                choices=["Auto"] + IMAGE_SIZES, value="Auto",
+                                label="Image size",
+                            )
+                        ref_files = gr.Files(
+                            label="Reference image(s) (optional)", file_types=["image"],
+                        )
+                        gen_btn = gr.Button("\u2728 Generate (1 image)", variant="primary")
+                        status = gr.Markdown("_Ready._")
+                    with gr.Column():
+                        out_img = gr.Image(label="Result", type="pil")
+
+                def _generate(prompt_text, model_id, aspect_val, size_val, key_val, ref_paths, prompt_file_path):
+                    try:
+                        img = generate_image(
+                            prompt=prompt_text, model=model_id, api_key=key_val or "",
+                            prompt_file=prompt_file_path or "",
+                            aspect_ratio="" if aspect_val == "Auto" else aspect_val,
+                            image_size="" if size_val == "Auto" else size_val,
+                            reference_images=list(ref_paths) if ref_paths else None,
+                        )
+                        indexed, _err = register_run_outputs([_LAST_OUTPUT_PATH])
+                        msg = "\u2705 Generated. Saved to `outputs/nano-banana/`."
+                        if indexed:
+                            msg += " Indexed into the Gallery (hit Refresh there)."
+                        return img, msg
+                    except Exception as exc:  # noqa: BLE001 - surface error to the UI
+                        return None, "\u274C %s" % exc
+
+                gen_btn.click(_generate, [prompt, model, aspect, size, api_key_box, ref_files, prompt_file],
+                              [out_img, status])
+
+            # -------------------------------------------------------- image maker
+            with gr.Tab("\U0001F5BC Image Maker"):
+                gr.Markdown(
+                    "Character-sheet pipeline: **single** mode runs a verbatim prompt "
+                    "(optional grid split); sheet modes (**face / upper / fullbody / all**) "
+                    "take avatar + reference images \u2014 sheets are split, captioned and "
+                    "collected into `training_data/lora_<trigger>[_<outfit>]`."
+                )
+                with gr.Row():
+                    im_prompt = gr.Textbox(lines=3, label="Prompt (used in single mode)")
+                    im_prompt_file = gr.File(label="Prompt file (.txt, optional)", file_types=[".txt"])
+                with gr.Row():
+                    im_mode = gr.Radio(choices=["single", "face", "upper", "fullbody", "all"],
+                                       value="single", label="Mode")
+                    im_model = gr.Dropdown(choices=MODEL_CHOICES, value=DEFAULT_MODEL, label="Image model")
+                    im_variations = gr.Slider(1, 8, value=1, step=1, label="Variations")
+                with gr.Row():
+                    im_avatar = gr.Files(label="Avatar image(s) \u2014 sheet modes", file_types=["image"])
+                    im_refs = gr.Files(label="Reference image(s)", file_types=["image"])
+                with gr.Row():
+                    im_outfit = gr.Textbox(label="Outfit name (opt.)", placeholder="e.g. casual")
+                    im_outfit_desc = gr.Textbox(label="Outfit description (opt.)",
+                                                placeholder="e.g. blue sailor uniform, white thighhighs")
+                    im_trigger = gr.Textbox(label="Trigger word (opt.)", placeholder="e.g. rana")
+                with gr.Row():
+                    im_grid_c = gr.Number(value=0, precision=0, label="Grid cols (single, 0=off)")
+                    im_grid_r = gr.Number(value=0, precision=0, label="Grid rows")
+                    im_grid_p = gr.Number(value=8, precision=0, label="Grid padding px")
+                    im_aspect = gr.Dropdown(choices=["Auto"] + ASPECT_RATIOS, value="Auto", label="Aspect ratio")
+                    im_size = gr.Dropdown(choices=["Auto"] + IMAGE_SIZES, value="Auto", label="Image size")
+                im_run = gr.Button("\U0001F680 Run Image Maker", variant="primary")
+                im_status = gr.Markdown("_Ready._")
+                im_preview = gr.Gallery(label="This run", columns=6, height=280)
+
+                def _run_image_maker(prompt_text, prompt_file_path, mode, avatar, refs,
+                                     outfit, outfit_desc, trigger, variations,
+                                     grid_c, grid_r, grid_p, aspect_val, size_val, model_id, key_val):
+                    try:
+                        args = []
+                        mode_val = (mode or "single").strip()
+                        if mode_val != "single":
+                            avatar = list(avatar or [])
+                            if not avatar:
+                                return [], "\u274C sheet mode needs at least one avatar image"
+                            args += ["--mode", mode_val]
+                            for a in avatar:
+                                args += ["--avatar", a]
+                            if outfit and outfit.strip():
+                                args += ["--outfit", outfit.strip()]
+                            if outfit_desc and outfit_desc.strip():
+                                args += ["--outfit-desc", outfit_desc.strip()]
+                            if trigger and trigger.strip():
+                                args += ["--trigger", trigger.strip()]
+                        else:
+                            pf = prompt_file_path or _prompt_to_file(prompt_text, "image_maker")
+                            if not pf:
+                                return [], "\u274C provide a prompt (box or .txt), or pick a sheet mode"
+                            args += ["--prompt-file", pf]
+                            gc = int(grid_c or 0)
+                            rc = int(grid_r or 0)
+                            if gc > 0 and rc > 0:
+                                args += ["--grid", gc, rc, "--grid-padding", int(grid_p or 0)]
+                        if refs:
+                            args += ["--ref-images"] + list(refs)
+                        args += ["--variations", int(variations or 1), "--image-model", model_id]
+                        if aspect_val and aspect_val != "Auto":
+                            args += ["--aspect-ratio", aspect_val]
+                        if size_val and size_val != "Auto":
+                            args += ["--image-size", size_val]
+                        result, log = _run_workflow("image_maker", args, key_val)
+                        if not result.get("ok"):
+                            return [], _fail_message(result, log)
+                        out_dir = result.get("output_dir") or ""
+                        images = _iter_images([out_dir])[:30]
+                        indexed, idx_err = register_run_outputs([out_dir])
+                        summary = result.get("summary") or {}
+                        extra = "%s/%s panels" % (summary.get("succeeded", "?"),
+                                                  summary.get("expected", "?"))
+                        return images, _done_message(result, images, indexed, extra, idx_err)
+                    except Exception as exc:  # noqa: BLE001
+                        return [], "\u274C %s" % exc
+
+                im_run.click(_run_image_maker,
+                             [im_prompt, im_prompt_file, im_mode, im_avatar, im_refs,
+                              im_outfit, im_outfit_desc, im_trigger, im_variations,
+                              im_grid_c, im_grid_r, im_grid_p, im_aspect, im_size, im_model, api_key_box],
+                             [im_preview, im_status])
+
+            # -------------------------------------------------------- comic maker
+            with gr.Tab("\U0001F4D6 Comic Maker"):
+                gr.Markdown(
+                    "Story \u2192 multi-page comic: the root prompt is expanded into N page "
+                    "prompts by the text model, then each page is rendered with the image model."
+                )
+                with gr.Row():
+                    cm_prompt = gr.Textbox(lines=4, label="Story / root prompt")
+                    cm_prompt_file = gr.File(label="Root prompt file (.txt, optional)", file_types=[".txt"])
+                with gr.Row():
+                    cm_pages = gr.Slider(1, 12, value=4, step=1, label="Pages")
+                    cm_variations = gr.Slider(1, 4, value=1, step=1, label="Variations / page")
+                    cm_model = gr.Dropdown(choices=MODEL_CHOICES, value=DEFAULT_MODEL, label="Image model")
+                    cm_aspect = gr.Dropdown(choices=["Auto"] + ASPECT_RATIOS, value="3:4", label="Aspect ratio")
+                cm_refs = gr.Files(label="Reference image(s) for all pages (optional)", file_types=["image"])
+                cm_dry = gr.Checkbox(value=False, label="Dry run (text expansion only \u2014 no image calls)")
+                cm_run = gr.Button("\U0001F680 Run Comic Maker", variant="primary")
+                cm_status = gr.Markdown("_Ready._")
+                cm_preview = gr.Gallery(label="This run", columns=6, height=280)
+
+                def _run_comic(prompt_text, prompt_file_path, pages, variations, aspect_val,
+                               refs, dry, model_id, key_val):
+                    try:
+                        pf = prompt_file_path or _prompt_to_file(prompt_text, "comic_maker")
+                        if not pf:
+                            return [], "\u274C provide the story prompt (box or .txt)"
+                        args = ["--root-prompt-file", pf, "--pages", int(pages),
+                                "--variations", int(variations), "--image-model", model_id]
+                        if aspect_val and aspect_val != "Auto":
+                            args += ["--aspect-ratio", aspect_val]
+                        if refs:
+                            args += ["--ref-images"] + list(refs)
+                        if dry:
+                            args += ["--dry-run"]
+                        result, log = _run_workflow("comic_maker", args, key_val)
+                        if not result.get("ok"):
+                            return [], _fail_message(result, log)
+                        if dry:
+                            return [], "\u2705 Dry run ok \u2014 page prompts expanded (no image calls)."
+                        out_dir = result.get("output_dir") or ""
+                        images = _iter_images([out_dir])[:30]
+                        indexed, idx_err = register_run_outputs([out_dir])
+                        msg = _done_message(result, images, indexed, "", idx_err)
+                        errs = result.get("errors") or {}
+                        if errs:
+                            msg += " \u00B7 \u26A0\uFE0F some page(s) had failures"
+                        return images, msg
+                    except Exception as exc:  # noqa: BLE001
+                        return [], "\u274C %s" % exc
+
+                cm_run.click(_run_comic,
+                             [cm_prompt, cm_prompt_file, cm_pages, cm_variations, cm_aspect,
+                              cm_refs, cm_dry, cm_model, api_key_box],
+                             [cm_preview, cm_status])
+
+            # ---------------------------------------------------- lora data maker
+            with gr.Tab("\U0001F3A8 LoRA Data Maker"):
+                gr.Markdown(
+                    "Built-in randomized prompt pools (no prompt files): avatar \u2192 face "
+                    "sheets, avatar + outfit pictures \u2192 upper/fullbody sheets; panels + "
+                    "optional captions are collected into `training_data/lora_<trigger>`."
+                )
+                with gr.Row():
+                    ld_avatar = gr.Files(label="Avatar image(s) \u2014 required", file_types=["image"])
+                    ld_fullbody = gr.Files(label="Outfit / fullbody image(s)", file_types=["image"])
+                with gr.Row():
+                    ld_trigger = gr.Textbox(label="Trigger word (opt.)", placeholder="e.g. rana")
+                    ld_style = gr.Textbox(label="Pin one style tag (opt.)",
+                                          placeholder="e.g. monochrome grayscale")
+                    ld_variations = gr.Slider(1, 3, value=1, step=1, label="Variations")
+                    ld_seed = gr.Number(value=0, precision=0, label="Seed (0 = random)")
+                with gr.Row():
+                    ld_captions = gr.Checkbox(value=True, label="Write kohya .txt captions")
+                    ld_dry = gr.Checkbox(value=False, label="Dry run (plan only \u2014 no API calls)")
+                    ld_model = gr.Dropdown(choices=MODEL_CHOICES, value=DEFAULT_MODEL, label="Image model")
+                ld_run = gr.Button("\U0001F680 Run LoRA Data Maker", variant="primary")
+                ld_status = gr.Markdown("_Ready._")
+                ld_preview = gr.Gallery(label="Raw sheets of this run", columns=6, height=280)
+
+                def _run_lora(avatar, fullbody, trigger, style, variations, seed,
+                              captions, dry, model_id, key_val):
+                    try:
+                        avatar = list(avatar or [])
+                        if not avatar:
+                            return [], "\u274C at least one avatar image is required"
+                        args = ["--avatar"] + avatar
+                        if fullbody:
+                            args += ["--fullbody"] + list(fullbody)
+                        if trigger and trigger.strip():
+                            args += ["--trigger", trigger.strip()]
+                        if style and style.strip():
+                            args += ["--style", style.strip()]
+                        args += ["--variations", int(variations or 1)]
+                        if seed and int(seed or 0) > 0:
+                            args += ["--seed", int(seed)]
+                        if captions:
+                            args += ["--captions"]
+                        args += ["--image-model", model_id]
+                        if dry:
+                            args += ["--dry-run"]
+                        result, log = _run_workflow("lora_data_maker", args, key_val)
+                        if not result.get("ok"):
+                            return [], _fail_message(result, log)
+                        if dry:
+                            return [], "\u2705 Dry run ok \u2014 plan built (no API calls)."
+                        out_dir = result.get("output_dir") or ""
+                        images = _iter_images([out_dir])[:30]
+                        indexed, idx_err = register_run_outputs([out_dir])
+                        summary = result.get("summary") or {}
+                        extra = "%s panels \u2192 training_data" % summary.get("succeeded", "?")
+                        msg = _done_message(result, images, indexed, extra, idx_err)
+                        errs = result.get("failures") or []
+                        if errs:
+                            msg += " \u00B7 \u26A0\uFE0F some sheets failed"
+                        return images, msg
+                    except Exception as exc:  # noqa: BLE001
+                        return [], "\u274C %s" % exc
+
+                ld_run.click(_run_lora,
+                             [ld_avatar, ld_fullbody, ld_trigger, ld_style, ld_variations, ld_seed,
+                              ld_captions, ld_dry, ld_model, api_key_box],
+                             [ld_preview, ld_status])
+
+    return [(tab, "\U0001F34C Nano Banana", "nano_banana")]
+
 
 
 def _register_webui_tab():
