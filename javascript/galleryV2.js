@@ -23,16 +23,16 @@
   ];
   var STATES = [
     ['', 'All'],
-    ['active', 'Active'],
-    ['staged', 'Staged'],
-    ['archived', 'Archived'],
-    ['trashed', 'Trash']
+    ['active', '\u2728 Active'],
+    ['staged', '\u{1F4CC} Staged'],
+    ['archived', '\u{1F4E6} Archived'],
+    ['trashed', '\u{1F5D1} Trash']
   ];
   var RATINGS = [
     ['', 'Any rating'],
-    ['endorsed', 'Endorsed'],
-    ['disliked', 'Disliked'],
-    ['none', 'Unrated']
+    ['endorsed', '\u2B50 Endorsed'],
+    ['disliked', '\u{1F44E} Disliked'],
+    ['none', '\u2B1C Unrated']
   ];
   var RESOLUTIONS = [
     ['', 'Any size'],
@@ -43,11 +43,26 @@
     ['square', 'Square']
   ];
 
+  var GROUP_EMOJI = {
+    sdxl: '\u{1F5BC}',
+    nonesdxl: '\u{1F6AB}',
+    composed: '\u{1F3A8}',
+    imagemaker: '\u{1F4F7}',
+    otherengines: '\u2728',
+    endorsed: '\u2B50',
+    disliked: '\u{1F44E}',
+    unrated: '\u2B1C'
+  };
+
   var state = {
     filters: { q: '', preset: 'all', states: [], sources: [], albums: [], show_albumed: false, rating: '', tags: {} },
     sort: 'time_desc',
     limit: PAGE,
     offset: 0,
+    pageMode: 'scroll',
+    pageSize: PAGE,
+    thumbSize: 'm',
+    page: 1,
     total: 0,
     rows: [],
     selected: new Set(),
@@ -56,6 +71,7 @@
     albums: [],
     selectMode: false,
     lastIndex: -1,
+    detailKey: null,
     busy: false,
     loadedOnce: false
   };
@@ -88,6 +104,14 @@
     if (!mtime) return '';
     var d = new Date(mtime * 1000);
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function fmtCardTime(mtime) {
+    if (!mtime) return '';
+    var d = new Date(mtime * 1000);
+    var p = function (v) { return (v < 10 ? '0' : '') + v; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+      p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
   function fmtSize(bytes) {
@@ -137,6 +161,8 @@
     Object.keys(tags).forEach(function (k) { n += (tags[k] || []).length; });
     if (f.min_width) n++;
     if (f.aspect) n++;
+    if (f.since) n++;
+    if (f.until) n++;
     return n;
   }
 
@@ -167,20 +193,49 @@
           '</select>' +
           '<button id="gv2-sync" class="gv2-btn" title="Re-index output folders into the gallery store">Sync</button>' +
           '<button id="gv2-empty-trash" class="gv2-btn gv2-btn-danger" title="Permanently delete all trashed metadata rows">Empty Trash</button>' +
+          '<button id="gv2-trash-disliked" class="gv2-btn gv2-btn-danger" title="Move every disliked item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Disliked</button>' +
+          '<button id="gv2-trash-archived" class="gv2-btn gv2-btn-danger" title="Move every archived item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Archived</button>' +
+        '</div>' +
+        '<div class="gv2-row gv2-row-adv">' +
+          '<span class="gv2-row-label">Options</span>' +
+          '<select id="gv2-page-mode" class="gv2-select" title="How results load">' +
+            '<option value="scroll">\u221E Infinite scroll</option>' +
+            '<option value="pages">\u{1F4C4} Paged</option>' +
+          '</select>' +
+          '<select id="gv2-page-size" class="gv2-select" title="Items per page / per scroll batch">' +
+            [24, 48, 60, 96, 120].map(function (v) { return '<option value="' + v + '">' + v + ' / page</option>'; }).join('') +
+          '</select>' +
+          '<select id="gv2-thumb-size" class="gv2-select" title="Thumbnail size">' +
+            '<option value="xs">Thumb: Mini</option>' +
+            '<option value="s">Thumb: Small</option>' +
+            '<option value="m">Thumb: Medium</option>' +
+            '<option value="l">Thumb: Large</option>' +
+          '</select>' +
+          '<span class="gv2-adv-sep"></span>' +
+          '<span class="gv2-row-label">Date</span>' +
+          '<input type="date" id="gv2-date-from" class="gv2-date" title="From date (inclusive)">' +
+          '<span class="gv2-adv-dash">\u2013</span>' +
+          '<input type="date" id="gv2-date-to" class="gv2-date" title="To date (inclusive)">' +
+          '<button id="gv2-date-clear" class="gv2-btn gv2-btn-quiet" title="Clear the custom date range">\u2715 Clear dates</button>' +
         '</div>' +
         '<div class="gv2-row" id="gv2-states"></div>' +
         '<div class="gv2-row" id="gv2-groups"></div>' +
-        '<div class="gv2-row" id="gv2-albums"></div>' +
+        '<div class="gv2-row gv2-albums" id="gv2-albums"></div>' +
         '<div class="gv2-row" id="gv2-sources"></div>' +
         '<div class="gv2-row" id="gv2-tags"></div>' +
         '<div class="gv2-row" id="gv2-views"></div>' +
         '<div class="gv2-row gv2-row-status">' +
           '<span id="gv2-count" class="gv2-count"></span>' +
           '<button id="gv2-select" class="gv2-btn gv2-btn-quiet" ' +
-            'title="Select multiple items for batch operations (click cards, shift-click for a range)">Select</button>' +
+            'title="Select multiple items for batch operations (click cards or drag a selection box; shift-drag deselects, shift-click range)">Select</button>' +
           '<button id="gv2-clear" class="gv2-btn gv2-btn-quiet">Clear filters</button>' +
           '<button id="gv2-refresh" class="gv2-btn gv2-btn-quiet">Refresh</button>' +
         '</div>' +
+      '</div>' +
+      '<div class="gv2-row gv2-row-pager gv2-pager-hidden" id="gv2-pager">' +
+        '<button id="gv2-prev" class="gv2-btn">\u2190 Prev</button>' +
+        '<span id="gv2-page-info" class="gv2-page-info"></span>' +
+        '<button id="gv2-next" class="gv2-btn">Next \u2192</button>' +
       '</div>' +
       '<div id="gv2-grid" class="gv2-grid"></div>' +
       '<div id="gv2-more-wrap" class="gv2-more-wrap"><button id="gv2-more" class="gv2-btn gv2-more">Load more</button></div>' +
@@ -233,6 +288,44 @@
       if (!window.confirm('Permanently remove all trashed items (metadata too)?')) return;
       runMaintenance('empty_trash', 'Empty trash');
     });
+    el('gv2-trash-disliked').addEventListener('click', function () {
+      if (!window.confirm('Trash ALL disliked items? Original files and media will be deleted (metadata kept).')) return;
+      runMaintenance('trash_disliked', 'Trash disliked');
+    });
+    el('gv2-trash-archived').addEventListener('click', function () {
+      if (!window.confirm('Trash ALL archived items? Original files and media will be deleted (metadata kept).')) return;
+      runMaintenance('trash_archived', 'Trash archived');
+    });
+    el('gv2-page-mode').value = state.pageMode;
+    el('gv2-page-size').value = String(state.pageSize);
+    el('gv2-thumb-size').value = state.thumbSize;
+    el('gv2-page-mode').addEventListener('change', function () {
+      state.pageMode = el('gv2-page-mode').value === 'pages' ? 'pages' : 'scroll';
+      savePrefs();
+      resetAndRefresh();
+    });
+    el('gv2-page-size').addEventListener('change', function () {
+      var size = parseInt(el('gv2-page-size').value, 10);
+      state.pageSize = size >= 12 ? size : PAGE;
+      savePrefs();
+      resetAndRefresh();
+    });
+    el('gv2-thumb-size').addEventListener('change', function () {
+      state.thumbSize = el('gv2-thumb-size').value || 'm';
+      savePrefs();
+      applyThumbSize();
+    });
+    el('gv2-date-from').addEventListener('change', applyDateRange);
+    el('gv2-date-to').addEventListener('change', applyDateRange);
+    el('gv2-date-clear').addEventListener('click', function () {
+      el('gv2-date-from').value = '';
+      el('gv2-date-to').value = '';
+      delete state.filters.since;
+      delete state.filters.until;
+      resetAndRefresh();
+    });
+    el('gv2-prev').addEventListener('click', function () { goPage(-1); });
+    el('gv2-next').addEventListener('click', function () { goPage(1); });
     el('gv2-batch').addEventListener('click', function (ev) {
       var action = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-batch') : null;
       if (!action) return;
@@ -245,7 +338,9 @@
       }
       var keys = Array.from(state.selected);
       if (action === 'trash' && !window.confirm('Trash ' + keys.length + ' item(s)? The original files and media will be deleted (metadata kept).')) return;
-      runAction(action, keys);
+      runAction(action, keys).then(function (data) {
+        if (data && (data.changed || []).length) setSelection([]);
+      });
     });
   }
 
@@ -301,16 +396,7 @@
     if (!box) return;
     var list = state.albums || [];
     var activeIds = (state.filters.albums || []).filter(function (v) { return typeof v === 'number'; });
-    var html = '<span class="gv2-row-label">Albums</span>';
-    list.forEach(function (album) {
-      var active = activeIds.indexOf(album.id) >= 0;
-      var label = album.name + (album.bundled ? ' \u{1F4E6}' : '');
-      var title = album.bundled
-        ? 'bundled album \u00b7 originals in archive \u00b7 ' + fmtSize(album.bundle_size)
-        : 'album \u00b7 click to filter';
-      html += countChip(label, album.count, active,
-        'data-album="' + album.id + '" title="' + esc(title) + '"');
-    });
+    var html = '<div class="gv2-albums-head"><span class="gv2-row-label">Albums</span>';
     var noneActive = (state.filters.albums || []).indexOf('none') >= 0;
     html += countChip('No album', null, noneActive, 'data-album="none" title="items not in any album"');
     html += countChip('Show albumed', null, !!state.filters.show_albumed,
@@ -338,6 +424,24 @@
       '<button class="gv2-btn" id="gv2-album-apply">Add selected</button>' +
       '<button class="gv2-btn gv2-btn-quiet" id="gv2-album-remove" title="Remove selected items from the picked album">Remove selected</button>' +
       '<button class="gv2-btn gv2-btn-quiet" id="gv2-album-cancel">Cancel</button></span>';
+    html += '</div>';
+    var cards = '';
+    list.forEach(function (album) {
+      var active = activeIds.indexOf(album.id) >= 0;
+      var title = album.bundled
+        ? 'bundled album \u00b7 originals in archive \u00b7 ' + fmtSize(album.bundle_size)
+        : 'album \u00b7 click to filter';
+      var media = album.cover
+        ? '<img class="gv2-album-cover" loading="lazy" src="' + blobUrl({ uid: album.cover }, 'thumb') + '" alt="">'
+        : '<span class="gv2-album-card-empty">\u{1F4C1}</span>';
+      cards += '<button class="gv2-album-card' + (active ? ' gv2-album-card-on' : '') + '" data-album="' + album.id + '" title="' + esc(title) + '">' +
+        '<span class="gv2-album-card-media">' + media + '</span>' +
+        '<span class="gv2-album-card-info">' +
+          '<span class="gv2-album-card-name">' + esc(album.name) + (album.bundled ? ' \u{1F4E6}' : '') + '</span>' +
+          '<span class="gv2-album-card-n">' + (album.count || 0) + '</span>' +
+        '</span></button>';
+    });
+    html += '<div class="gv2-album-grid">' + cards + '</div>';
     box.innerHTML = html;
 
     var pick = el('gv2-album-pick');
@@ -425,6 +529,7 @@
       if (data.errors && data.errors.length) msg += ' \u00b7 ' + data.errors.length + ' failed';
       toast(msg);
       hideAlbumForm();
+      if (!(data.errors && data.errors.length)) setSelection([]);
       resetAndRefresh();
     }).catch(function (err) { toast('Album add failed: ' + err.message, true); });
   }
@@ -440,6 +545,7 @@
         renderAlbums();
         toast('removed ' + (data.removed || 0) + ' from album');
         hideAlbumForm();
+        setSelection([]);
         resetAndRefresh();
       })
       .catch(function (err) { toast('Remove failed: ' + err.message, true); });
@@ -559,8 +665,9 @@
     if (!box || !state.facets) return;
     var html = '<span class="gv2-row-label">Quick filters</span>';
     (state.facets.groups || []).forEach(function (group) {
-      html += countChip(group.label, group.count, groupActive(group), 'data-group="' + esc(group.id) + '" title="' +
-        esc(groupFilterText(group)) + '"');
+      var emoji = GROUP_EMOJI[group.id];
+      html += countChip((emoji ? emoji + ' ' : '') + group.label, group.count, groupActive(group),
+        'data-group="' + esc(group.id) + '" title="' + esc(groupFilterText(group)) + '"');
     });
     box.innerHTML = html;
   }
@@ -624,6 +731,10 @@
       else if (f.min_width === 2048) value = 'min2048';
       res.value = value;
     }
+    var from = el('gv2-date-from');
+    if (from) from.value = dateInputValue(f.since);
+    var to = el('gv2-date-to');
+    if (to) to.value = dateInputValue(f.until);
     renderStateChips();
     renderGroupChips();
     renderAlbums();
@@ -647,7 +758,9 @@
       rating: f.rating || '',
       tags: tags,
       min_width: f.min_width || 0,
-      aspect: f.aspect || ''
+      aspect: f.aspect || '',
+      since: f.since || null,
+      until: f.until || null
     });
   }
 
@@ -734,6 +847,8 @@
     };
     if (filters.min_width !== undefined) state.filters.min_width = filters.min_width;
     if (filters.aspect !== undefined) state.filters.aspect = filters.aspect;
+    if (filters.since) state.filters.since = filters.since;
+    if (filters.until) state.filters.until = filters.until;
     state.sort = view.sort || 'time_desc';
     var sortSelect = el('gv2-sort');
     if (sortSelect) sortSelect.value = state.sort;
@@ -759,7 +874,7 @@
       if (albumAct) { albumAction(albumAct.getAttribute('data-album-act')); return; }
       var delBtn = ev.target.closest ? ev.target.closest('[data-view-del]') : null;
       if (delBtn) { deleteView(delBtn.getAttribute('data-view-del')); return; }
-      var target = ev.target.closest ? ev.target.closest('.gv2-chip') : null;
+      var target = ev.target.closest ? ev.target.closest('.gv2-chip, .gv2-album-card') : null;
       if (!target) return;
       var view = target.getAttribute('data-view');
       if (view !== null) { applyView(view); return; }
@@ -802,11 +917,92 @@
     if (idx >= 0) obj[key].splice(idx, 1); else obj[key].push(value);
   }
 
+  // ---------------------------------------------------------------- prefs
+
+  var PREFS_KEY = 'gv2.prefs.v1';
+
+  function loadPrefs() {
+    try {
+      var raw = window.localStorage && window.localStorage.getItem(PREFS_KEY);
+      if (!raw) return;
+      var prefs = JSON.parse(raw) || {};
+      if (prefs.pageMode === 'pages' || prefs.pageMode === 'scroll') state.pageMode = prefs.pageMode;
+      var size = parseInt(prefs.pageSize, 10);
+      if (size >= 12 && size <= 500) state.pageSize = size;
+      if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
+    } catch (err) { /* ignore bad prefs */ }
+  }
+
+  function savePrefs() {
+    try {
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify({
+        pageMode: state.pageMode,
+        pageSize: state.pageSize,
+        thumbSize: state.thumbSize
+      }));
+    } catch (err) { /* ignore */ }
+  }
+
+  function applyThumbSize() {
+    var root = el(ROOT_ID);
+    if (!root) return;
+    ['xs', 's', 'm', 'l'].forEach(function (k) { root.classList.remove('gv2-thumb-' + k); });
+    root.classList.add('gv2-thumb-' + (state.thumbSize || 'm'));
+  }
+
+  function dateInputValue(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000);
+    var m = ('0' + (d.getMonth() + 1)).slice(-2);
+    var day = ('0' + d.getDate()).slice(-2);
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+
+  function parseDateInput(value, endOfDay) {
+    if (!value) return null;
+    var ts = Date.parse(value + (endOfDay ? 'T23:59:59' : 'T00:00:00'));
+    return isNaN(ts) ? null : Math.floor(ts / 1000);
+  }
+
+  function applyDateRange() {
+    var from = parseDateInput(el('gv2-date-from').value, false);
+    var to = parseDateInput(el('gv2-date-to').value, true);
+    if (from) state.filters.since = from; else delete state.filters.since;
+    if (to) state.filters.until = to; else delete state.filters.until;
+    resetAndRefresh();
+  }
+
+  function updatePager() {
+    var row = el('gv2-pager');
+    if (!row) return;
+    var paged = state.pageMode === 'pages';
+    row.classList.toggle('gv2-pager-hidden', !paged);
+    if (!paged) return;
+    var pages = Math.max(1, Math.ceil(state.total / (state.pageSize || PAGE)));
+    var info = el('gv2-page-info');
+    if (info) info.textContent = state.total + ' item(s) \u00b7 page ' + state.page + ' / ' + pages;
+    var prev = el('gv2-prev');
+    var next = el('gv2-next');
+    if (prev) prev.disabled = state.page <= 1;
+    if (next) next.disabled = state.page >= pages;
+  }
+
+  function goPage(delta) {
+    var pages = Math.max(1, Math.ceil(state.total / (state.pageSize || PAGE)));
+    var target = Math.min(Math.max(1, state.page + delta), pages);
+    if (target === state.page) return;
+    state.page = target;
+    loadPage(false).then(function () {
+      var grid = el('gv2-grid');
+      if (grid && grid.scrollIntoView) grid.scrollIntoView({ block: 'start' });
+    });
+  }
+
   // ---------------------------------------------------------------- query
 
   function resetAndRefresh() {
+    state.page = 1;
     state.offset = 0;
-    state.limit = PAGE;
     state.rows = [];
     renderViews();
     loadPage(false);
@@ -815,10 +1011,15 @@
   function loadPage(append) {
     if (state.busy) return Promise.resolve();
     state.busy = true;
+    var limit = state.pageSize || PAGE;
+    var offset;
+    if (append) offset = state.rows.length;
+    else if (state.pageMode === 'pages') offset = Math.max(0, (state.page - 1) * limit);
+    else offset = 0;
     var payload = state.filters;
-    payload.limit = state.limit;
-    payload.offset = state.offset;
-    return api('/gallery/api/query', { filters: payload, sort: state.sort, limit: state.limit, offset: state.offset })
+    payload.limit = limit;
+    payload.offset = offset;
+    return api('/gallery/api/query', { filters: payload, sort: state.sort, limit: limit, offset: offset })
       .then(function (data) {
         state.total = data.total;
         state.stateTotals = data.state_totals || {};
@@ -833,15 +1034,20 @@
         renderRows(data.rows, append);
         updateCountLine();
         renderStateChips();
+        updatePager();
         var more = el('gv2-more-wrap');
         if (more) {
-          if (state.rows.length >= state.total) more.classList.add('gv2-more-hidden');
+          var done = state.rows.length >= state.total || state.pageMode !== 'scroll';
+          if (done) more.classList.add('gv2-more-hidden');
           else more.classList.remove('gv2-more-hidden');
         }
         state.loadedOnce = true;
       })
       .catch(function (err) { toast('Query failed: ' + err.message, true); })
-      .finally(function () { state.busy = false; });
+      .finally(function () {
+        state.busy = false;
+        setTimeout(autoLoadCheck, 60);
+      });
   }
 
   function updateCountLine() {
@@ -882,22 +1088,21 @@
       return '<span class="gv2-tag">' + esc(t) + '</span>';
     }).join('');
 
-    var meta = [];
-    if (row.width && row.height) meta.push(row.width + '\u00d7' + row.height);
-    if (row.file_size) meta.push(fmtSize(row.file_size));
-    meta.push(row.source);
-    meta.push(fmtTime(row.mtime));
+    var caps = [];
+    if (row.width && row.height) caps.push('<span class="gv2-capsule">' + row.width + '\u00d7' + row.height + '</span>');
+    if (row.file_size) caps.push('<span class="gv2-capsule">' + fmtSize(row.file_size) + '</span>');
+    if (row.source) caps.push('<span class="gv2-capsule">' + esc(row.source) + '</span>');
+    var stamp = fmtCardTime(row.mtime);
+    if (stamp) caps.push('<span class="gv2-capsule">' + stamp + '</span>');
 
     var selected = state.selected.has(row.uid) ? ' gv2-card-selected' : '';
     return '<div class="gv2-card' + selected + '" data-key="' + esc(row.uid) + '">' +
       thumb +
+      '<div class="gv2-veil"></div>' +
       '<div class="gv2-card-badges">' + badges + '</div>' +
       '<input type="checkbox" class="gv2-check"' + (selected ? ' checked' : '') + ' title="Select">' +
       '<div class="gv2-card-actions">' + actionButtons(row) + '</div>' +
-      '<div class="gv2-card-info">' +
-        '<div class="gv2-card-meta">' + esc(meta.join(' \u00b7 ')) + '</div>' +
-        '<div class="gv2-card-tags">' + tags + '</div>' +
-      '</div>' +
+      '<div class="gv2-card-caps">' + caps.join('') + tags + '</div>' +
     '</div>';
   }
 
@@ -978,7 +1183,7 @@
     if (root) root.classList.toggle('gv2-selecting', state.selectMode);
     if (state.selectMode) {
       updateBatchBar();
-      toast('Select mode: click cards to select \u00b7 shift-click selects a range');
+      toast('Select mode: click cards or drag a box to select \u00b7 shift-drag deselects \u00b7 shift-click selects a range');
     } else {
       setSelection([]);
     }
@@ -1049,6 +1254,7 @@
           updateBatchBar();
           updateCountLine();
         }
+        return data;
       })
       .catch(function (err) { toast('Action failed: ' + err.message, true); });
   }
@@ -1070,12 +1276,108 @@
 
   // ---------------------------------------------------------------- detail
 
-  function openDetail(uid) {
+  function openDetail(uid, opts) {
     var row = state.rows.filter(function (r) { return r.uid === uid; })[0];
     if (!row) return;
+    state.detailKey = uid;
+    markDetailCard(opts && opts.scroll);
     api('/gallery/api/item?id=' + encodeURIComponent(uid)).then(function (item) {
-      renderDetail(item);
+      if (state.detailKey === uid) renderDetail(item);
     }).catch(function (err) { toast('Detail failed: ' + err.message, true); });
+  }
+
+  function detailRow() {
+    return state.rows.filter(function (r) { return r.uid === state.detailKey; })[0] || null;
+  }
+
+  function refreshDetail() {
+    var uid = state.detailKey;
+    if (!uid) return Promise.resolve();
+    return api('/gallery/api/item?id=' + encodeURIComponent(uid)).then(function (item) {
+      if (state.detailKey === uid) renderDetail(item);
+    }).catch(function () {});
+  }
+
+  function detailNavigate(dir) {
+    if (!state.rows.length) return;
+    var idx = -1;
+    for (var i = 0; i < state.rows.length; i++) {
+      if (state.rows[i].uid === state.detailKey) { idx = i; break; }
+    }
+    var next = idx < 0 ? (dir > 0 ? 0 : state.rows.length - 1) : idx + dir;
+    if (next < 0) { toast('start of list'); return; }
+    if (next >= state.rows.length) { toast('end of list'); return; }
+    openDetail(state.rows[next].uid, { scroll: true });
+  }
+
+  function detailApply(act) {
+    var row = detailRow();
+    if (!row) return Promise.resolve();
+    if (row.state === 'trashed') { toast('use restore / purge for trashed items', true); return Promise.resolve(); }
+    return runAction(actionFor(row, act), [row.uid], {}).then(function () {
+      markDetailCard(false);
+      return refreshDetail();
+    });
+  }
+
+  function detailTrash() {
+    var row = detailRow();
+    if (!row || row.state === 'trashed') return;
+    if (!window.confirm('Trash now? The original file and media will be deleted (metadata kept).')) return;
+    var idx = state.rows.indexOf(row);
+    runAction('trash', [row.uid], {}).then(function () {
+      if (!state.rows.length) { closeDetail(); return; }
+      openDetail(state.rows[Math.min(Math.max(idx, 0), state.rows.length - 1)].uid, { scroll: true });
+    });
+  }
+
+  function markDetailCard(scroll) {
+    document.querySelectorAll('.gv2-card.gv2-card-current').forEach(function (card) {
+      card.classList.remove('gv2-card-current');
+    });
+    if (!state.detailKey) return;
+    var card = document.querySelector('.gv2-card[data-key="' + cssEscape(state.detailKey) + '"]');
+    if (!card) return;
+    card.classList.add('gv2-card-current');
+    if (scroll && card.scrollIntoView) card.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function detailActionButtons(item) {
+    if (item.state === 'trashed') {
+      return '<button class="gv2-btn" data-detail-act="restore">Restore metadata</button>' +
+        '<button class="gv2-btn gv2-btn-danger" data-detail-act="purge">Purge</button>';
+    }
+    var rating = ratingOf(item);
+    var html = '';
+    html += '<button class="gv2-btn" data-detail-act="endorse">' + (rating === 'endorsed' ? 'Un-endorse' : 'Endorse') + '</button>';
+    html += '<button class="gv2-btn" data-detail-act="dislike">' + (rating === 'disliked' ? 'Undislike' : 'Dislike') + '</button>';
+    html += '<button class="gv2-btn" data-detail-act="archive">' + (item.state === 'archived' ? 'Unarchive' : 'Archive') + '</button>';
+    if (item.state !== 'archived') {
+      html += '<button class="gv2-btn" data-detail-act="stage">' + (item.state === 'staged' ? 'Unstage' : 'Stage') + '</button>';
+    }
+    html += '<button class="gv2-btn gv2-btn-danger" data-detail-act="trash">Trash</button>';
+    return html;
+  }
+
+  function albumSectionHtml(item) {
+    var list = state.albums || [];
+    if (!list.length) {
+      return '<div class="gv2-row-hint">no albums yet \u2014 create one in the Albums row above</div>';
+    }
+    var options = '<option value="">\u2014 pick an album \u2014</option>';
+    list.forEach(function (album) {
+      options += '<option value="' + album.id + '"' + (item.album_id === album.id ? ' selected' : '') + '>' + esc(album.name) + '</option>';
+    });
+    var current = '<div class="gv2-row-hint">not in an album</div>';
+    if (item.album_id) {
+      var album = albumById(item.album_id);
+      if (album) current = '<div class="gv2-row-hint">currently in <b>' + esc(album.name) + '</b></div>';
+    }
+    return '<div class="gv2-detail-album">' +
+      '<select id="gv2-detail-album-pick" class="gv2-select">' + options + '</select>' +
+      '<button class="gv2-btn" id="gv2-detail-album-set">Set</button>' +
+      '<button class="gv2-btn gv2-btn-quiet" id="gv2-detail-album-remove">Remove</button>' +
+      '</div>' + current;
   }
 
   function renderDetail(item) {
@@ -1119,16 +1421,17 @@
             (expiry ? badge(expiry, 'gv2-badge-archived') : '') +
             (item.has_composer ? badge('composer state', 'gv2-badge-variant') : '') +
           '</div>' +
-          '<div class="gv2-detail-actions">' +
-            '<button class="gv2-btn" data-detail-act="endorse">Endorse</button>' +
-            '<button class="gv2-btn" data-detail-act="dislike">Dislike</button>' +
-            '<button class="gv2-btn" data-detail-act="archive">Archive</button>' +
-            '<button class="gv2-btn" data-detail-act="stage">Stage</button>' +
-            '<button class="gv2-btn gv2-btn-danger" data-detail-act="trash">Trash</button>' +
-            (item.state === 'trashed'
-              ? '<button class="gv2-btn" data-detail-act="restore">Restore metadata</button>' +
-                '<button class="gv2-btn gv2-btn-danger" data-detail-act="purge">Purge</button>'
-              : '') +
+          '<div class="gv2-detail-actions">' + detailActionButtons(item) + '</div>' +
+          '<div class="gv2-detail-keys">' +
+            '<span><kbd>\u2190</kbd><kbd>\u2192</kbd> prev / next</span>' +
+            '<span><kbd>\u2191</kbd> endorse</span>' +
+            '<span><kbd>\u2193</kbd> dislike</span>' +
+            '<span><kbd>Del</kbd> trash</span>' +
+            '<span><kbd>A</kbd> archive</span>' +
+            '<span><kbd>Esc</kbd> close</span>' +
+          '</div>' +
+          '<div class="gv2-detail-section"><div class="gv2-detail-label">Album</div>' +
+            albumSectionHtml(item) +
           '</div>' +
           '<div class="gv2-detail-section"><div class="gv2-detail-label">Workflow tags</div>' +
             '<div class="gv2-detail-tags">' + (tagPills || '<span class="gv2-row-hint">none</span>') + '</div>' +
@@ -1151,14 +1454,13 @@
     box.classList.remove('gv2-detail-hidden');
 
     el('gv2-detail-close').addEventListener('click', closeDetail);
-    box.addEventListener('click', function (ev) {
-      if (ev.target === box) closeDetail();
-    });
     box.querySelectorAll('[data-detail-act]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var act = btn.getAttribute('data-detail-act');
+        var current = detailRow();
+        var act = current ? actionFor(current, btn.getAttribute('data-detail-act')) : btn.getAttribute('data-detail-act');
         runAction(act, [item.uid], {}).then(function () {
-          api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(renderDetail).catch(function () {});
+          markDetailCard(false);
+          return api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(renderDetail).catch(function () {});
         });
       });
     });
@@ -1189,11 +1491,44 @@
         toast('Prompt copied');
       });
     }
+    var albumSetBtn = el('gv2-detail-album-set');
+    if (albumSetBtn) {
+      albumSetBtn.addEventListener('click', function () {
+        var pick = el('gv2-detail-album-pick');
+        if (!pick || !pick.value) { toast('Pick an album first', true); return; }
+        api('/gallery/api/albums/items', { album: parseInt(pick.value, 10), add: [item.uid], remove: [] })
+          .then(function (data) {
+            state.albums = (data && data.albums) || [];
+            renderAlbums();
+            toast('added to album');
+            return refreshDetail();
+          })
+          .then(function () { resetAndRefresh(); })
+          .catch(function (err) { toast('Album add failed: ' + err.message, true); });
+      });
+    }
+    var albumRemoveBtn = el('gv2-detail-album-remove');
+    if (albumRemoveBtn) {
+      albumRemoveBtn.addEventListener('click', function () {
+        if (!item.album_id) { toast('not in an album', true); return; }
+        api('/gallery/api/albums/items', { album: item.album_id, add: [], remove: [item.uid] })
+          .then(function (data) {
+            state.albums = (data && data.albums) || [];
+            renderAlbums();
+            toast('removed from album');
+            return refreshDetail();
+          })
+          .then(function () { resetAndRefresh(); })
+          .catch(function (err) { toast('Album remove failed: ' + err.message, true); });
+      });
+    }
   }
 
   function closeDetail() {
     var box = el('gv2-detail');
     if (box) box.classList.add('gv2-detail-hidden');
+    state.detailKey = null;
+    markDetailCard(false);
   }
 
   // ---------------------------------------------------------------- misc
@@ -1210,6 +1545,46 @@
   }
 
   function wireGrid(root) {
+    var dragState = null;
+    var suppressClickOnce = false;
+    var marqueeEl = null;
+
+    function getMarquee() {
+      if (!marqueeEl) {
+        marqueeEl = document.createElement('div');
+        marqueeEl.id = 'gv2-marquee';
+        marqueeEl.className = 'gv2-marquee gv2-marquee-hidden';
+        document.body.appendChild(marqueeEl);
+      }
+      return marqueeEl;
+    }
+
+    function endDrag() {
+      if (!dragState) return;
+      if (dragState.active) {
+        suppressClickOnce = true;
+        root.classList.remove('gv2-dragging');
+        if (marqueeEl) marqueeEl.classList.add('gv2-marquee-hidden');
+      }
+      dragState = null;
+    }
+
+    function applyMarquee(x0, y0, x1, y1) {
+      var left = Math.min(x0, x1);
+      var right = Math.max(x0, x1);
+      var top = Math.min(y0, y1);
+      var bottom = Math.max(y0, y1);
+      var next = new Set(dragState.base);
+      document.querySelectorAll('.gv2-card').forEach(function (card) {
+        var r = card.getBoundingClientRect();
+        if (r.right < left || r.left > right || r.bottom < top || r.top > bottom) return;
+        var key = card.getAttribute('data-key');
+        if (dragState.deselect) next.delete(key);
+        else next.add(key);
+      });
+      setSelection(Array.from(next));
+    }
+
     root.addEventListener('change', function (ev) {
       var check = ev.target;
       if (!check.classList || !check.classList.contains('gv2-check')) return;
@@ -1219,7 +1594,45 @@
       if (check.checked) state.selected.add(key); else state.selected.delete(key);
       setSelection(Array.from(state.selected));
     });
+    root.addEventListener('pointerdown', function (ev) {
+      suppressClickOnce = false;
+      if (!state.selectMode || ev.button !== 0) return;
+      if (!ev.target.closest) return;
+      if (ev.target.closest('.gv2-card-actions') || ev.target.closest('.gv2-check')) return;
+      var grid = el('gv2-grid');
+      if (!grid || !grid.contains(ev.target)) return;
+      dragState = {
+        startX: ev.clientX,
+        startY: ev.clientY,
+        deselect: !!ev.shiftKey,
+        active: false,
+        base: null
+      };
+    });
+    document.addEventListener('pointermove', function (ev) {
+      if (!dragState) return;
+      if (ev.buttons === 0) { endDrag(); return; }
+      if (!dragState.active) {
+        if (Math.abs(ev.clientX - dragState.startX) < 6 && Math.abs(ev.clientY - dragState.startY) < 6) return;
+        dragState.active = true;
+        dragState.base = new Set(state.selected);
+        root.classList.add('gv2-dragging');
+      }
+      var m = getMarquee();
+      m.classList.remove('gv2-marquee-hidden');
+      m.style.left = Math.min(dragState.startX, ev.clientX) + 'px';
+      m.style.top = Math.min(dragState.startY, ev.clientY) + 'px';
+      m.style.width = Math.abs(ev.clientX - dragState.startX) + 'px';
+      m.style.height = Math.abs(ev.clientY - dragState.startY) + 'px';
+      applyMarquee(dragState.startX, dragState.startY, ev.clientX, ev.clientY);
+    });
+    document.addEventListener('pointerup', endDrag);
+    document.addEventListener('pointercancel', endDrag);
+    root.addEventListener('dragstart', function (ev) {
+      if (state.selectMode && ev.target && ev.target.tagName === 'IMG') ev.preventDefault();
+    });
     root.addEventListener('click', function (ev) {
+      if (suppressClickOnce) { suppressClickOnce = false; return; }
       if (ev.target.closest && ev.target.closest('.gv2-check')) return;
       var btn = ev.target.closest ? ev.target.closest('.gv2-card-actions button') : null;
       if (btn) {
@@ -1241,11 +1654,34 @@
       }
     });
     document.addEventListener('keydown', function (ev) {
-      if (ev.key !== 'Escape') return;
       var box = el('gv2-detail');
-      if (box && !box.classList.contains('gv2-detail-hidden')) { closeDetail(); return; }
-      if (state.selectMode) setSelectMode(false);
+      var drawerOpen = box && !box.classList.contains('gv2-detail-hidden');
+      if (ev.key === 'Escape') {
+        if (drawerOpen) { closeDetail(); return; }
+        if (state.selectMode) setSelectMode(false);
+        return;
+      }
+      if (!drawerOpen || isTypingTarget(ev.target)) return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      if (ev.key === 'ArrowLeft') { ev.preventDefault(); detailNavigate(-1); }
+      else if (ev.key === 'ArrowRight') { ev.preventDefault(); detailNavigate(1); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); detailApply('endorse'); }
+      else if (ev.key === 'ArrowDown') { ev.preventDefault(); detailApply('dislike'); }
+      else if (ev.key === 'Delete') { ev.preventDefault(); detailTrash(); }
+      else if (ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); detailApply('archive'); }
     });
+    var detailBox = el('gv2-detail');
+    if (detailBox) {
+      detailBox.addEventListener('click', function (ev) {
+        if (ev.target === detailBox) closeDetail();
+      });
+    }
+  }
+
+  function isTypingTarget(node) {
+    if (!node || !node.tagName) return false;
+    var tag = node.tagName.toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || node.isContentEditable === true;
   }
 
   // ---------------------------------------------------------------- init
@@ -1260,11 +1696,45 @@
     }, 250);
   }
 
+  // Infinite scroll: the IntersectionObserver only fires on intersection
+  // *changes*, so a batch that stays inside the margin never re-triggers
+  // (visible in Mini thumb mode, where each batch is short). Re-check on
+  // scroll and after every load instead.
+  var _autoScrollHooked = false;
+  var _autoScrollScheduled = false;
+
+  function autoLoadCheck() {
+    if (state.pageMode !== 'scroll' || !state.loadedOnce || state.busy) return;
+    if (state.rows.length >= state.total) return;
+    var wrap = el('gv2-more-wrap');
+    if (!wrap || wrap.classList.contains('gv2-more-hidden')) return;
+    var rect = wrap.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (rect.top <= vh + 600) loadPage(true);
+  }
+
+  function hookAutoScroll() {
+    if (_autoScrollHooked) return;
+    _autoScrollHooked = true;
+    window.addEventListener('scroll', function () {
+      if (_autoScrollScheduled) return;
+      _autoScrollScheduled = true;
+      requestAnimationFrame(function () {
+        _autoScrollScheduled = false;
+        autoLoadCheck();
+      });
+    }, { passive: true });
+    window.addEventListener('resize', function () { autoLoadCheck(); });
+  }
+
   function init() {
     var root = el(ROOT_ID);
     if (!root || root.dataset.gv2Init === '1') return;
     root.dataset.gv2Init = '1';
+    loadPrefs();
     buildChrome(root);
+    applyThumbSize();
     wireChips(root);
     wireGrid(root);
     refreshViews();
@@ -1273,13 +1743,15 @@
     if (window.IntersectionObserver) {
       var observer = new IntersectionObserver(function (entries) {
         entries.forEach(function (entry) {
-          if (entry.isIntersecting && state.loadedOnce && state.rows.length < state.total && !state.busy) {
+          if (entry.isIntersecting && state.loadedOnce && state.rows.length < state.total && !state.busy &&
+              state.pageMode === 'scroll') {
             loadPage(true);
           }
         });
       }, { rootMargin: '600px' });
       observer.observe(el('gv2-more-wrap'));
     }
+    hookAutoScroll();
   }
 
   document.addEventListener('DOMContentLoaded', function () {

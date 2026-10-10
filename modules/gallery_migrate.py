@@ -39,6 +39,21 @@ def _log(msg: str) -> None:
     print(f"[gallery-migrate] {msg}")
 
 
+def _real_dims(paths, legacy_w, legacy_h):
+    """Prefer actual file dimensions over legacy metadata values.
+
+    Legacy width/height come from generation params: for inpaint that is the
+    mask-area size and for hires fix only the first-pass size, so they can
+    differ from the real file.
+    """
+    for p in paths:
+        if p and os.path.isfile(p):
+            w, h = gallery_sources.image_size(p)
+            if w and h:
+                return w, h
+    return int(legacy_w or 0), int(legacy_h or 0)
+
+
 def _meta_get(key: str, default: str = "") -> str:
     with gallery_db.get_conn() as conn:
         row = conn.execute("SELECT value FROM gallery_meta WHERE key=?", (key,)).fetchone()
@@ -224,13 +239,14 @@ def m2_rows() -> dict:
             alias = img_path if (img_path and os.path.normcase(img_path) != os.path.normcase(canon)) else None
             source = _source_for(canon or img_path)
             rel = _rel_of(canon or img_path)
+            real_w, real_h = _real_dims((canon, img_path), _row_get(row, "width"), _row_get(row, "height"))
             fields = dict(
                 path=canon, rel_path=rel,
                 prompt=_row_get(row, "prompt") or "",
                 negative_prompt=_row_get(row, "negative_prompt") or "",
                 infotext=_row_get(row, "infotext") or "",
-                width=int(_row_get(row, "width") or 0),
-                height=int(_row_get(row, "height") or 0),
+                width=real_w,
+                height=real_h,
                 meta=_meta_from_row(row),
             )
             if alias:
@@ -260,13 +276,14 @@ def m2_rows() -> dict:
             path = _row_get(row, "image_path") or ""
             source = _source_for(path)
             rel = _rel_of(path)
+            real_w, real_h = _real_dims((path,), _row_get(row, "width"), _row_get(row, "height"))
             fields = dict(
                 path=path, rel_path=rel,
                 prompt=_row_get(row, "prompt") or "",
                 negative_prompt=_row_get(row, "negative_prompt") or "",
                 infotext=_row_get(row, "infotext") or "",
-                width=int(_row_get(row, "width") or 0),
-                height=int(_row_get(row, "height") or 0),
+                width=real_w,
+                height=real_h,
                 meta=_meta_from_row(row),
             )
             if path and os.path.isfile(path):
@@ -293,13 +310,14 @@ def m2_rows() -> dict:
             item_key = _row_get(row, "item_key") or _stem(path)
             source = _source_for(path)
             rel = _rel_of(path)
+            real_w, real_h = _real_dims((path,), _row_get(row, "width"), _row_get(row, "height"))
             fields = dict(
                 path=path, rel_path=rel,
                 prompt=_row_get(row, "prompt") or "",
                 negative_prompt=_row_get(row, "negative_prompt") or "",
                 infotext=_row_get(row, "infotext") or "",
-                width=int(_row_get(row, "width") or 0),
-                height=int(_row_get(row, "height") or 0),
+                width=real_w,
+                height=real_h,
                 mtime=float(_row_get(row, "file_mtime") or 0) or None,
                 meta=_meta_from_row(row),
             )
@@ -371,13 +389,14 @@ def m2_rows() -> dict:
                 stats["conflicts"] += 1
                 _timing["rows"] += 1
                 continue
+            real_w, real_h = _real_dims((path,), _row_get(row, "width"), _row_get(row, "height"))
             fields = dict(
                 path=path or None, rel_path=rel or None,
                 prompt=_row_get(row, "prompt") or "",
                 negative_prompt=_row_get(row, "negative_prompt") or "",
                 infotext=_row_get(row, "infotext") or "",
-                width=int(_row_get(row, "width") or 0),
-                height=int(_row_get(row, "height") or 0),
+                width=real_w,
+                height=real_h,
                 mtime=float(_row_get(row, "file_mtime") or 0) or None,
                 meta=_meta_from_row(row),
             )

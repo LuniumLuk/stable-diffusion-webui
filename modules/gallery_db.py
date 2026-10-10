@@ -480,6 +480,8 @@ def delete_item(item_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM item_tags WHERE item_id=?", (int(item_id),))
         conn.execute("DELETE FROM legacy_keys WHERE item_id=?", (int(item_id),))
+        conn.execute("DELETE FROM state_events WHERE item_id=?", (int(item_id),))
+        conn.execute("DELETE FROM composer_states WHERE item_id=?", (int(item_id),))
         conn.execute("DELETE FROM items_fts WHERE rowid=?", (int(item_id),))
         conn.execute("DELETE FROM items WHERE id=?", (int(item_id),))
         conn.commit()

@@ -109,6 +109,11 @@ def _ensure_item(key: str | None, path: str | None, fields: dict | None = None) 
             payload["file_size"] = stat.st_size
         except OSError:
             pass
+        from modules import gallery_sources
+        real_w, real_h = gallery_sources.image_size(path)
+        if real_w and real_h:
+            payload["width"] = real_w
+            payload["height"] = real_h
     item_id = gallery_db.upsert_item(uid=gallery_db.make_uid(source, rel), source=source, **payload)
     if key:
         gallery_db.map_legacy_key(key, item_id)
@@ -161,6 +166,13 @@ def on_index_image(path, file_mtime, prompt, negative_prompt, seed, steps, sampl
                 fields["file_size"] = os.path.getsize(path)
             except OSError:
                 pass
+            # legacy width/height come from generation params (inpaint: mask size;
+            # hires fix: first-pass size) - prefer the real file dimensions
+            from modules import gallery_sources
+            real_w, real_h = gallery_sources.image_size(path)
+            if real_w and real_h:
+                fields["width"] = real_w
+                fields["height"] = real_h
         item_id = gallery_db.upsert_item(uid=uid, source=source, **fields)
         legacy = os.path.splitext(os.path.basename(path))[0].strip().lower()
         if legacy:

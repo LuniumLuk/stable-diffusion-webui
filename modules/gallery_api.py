@@ -266,6 +266,31 @@ def register_routes(app):
             count = gallery_lifecycle.empty_trash()
             _legacy_empty_trash()
             return {"ok": True, "removed": count}
+        if op in ("trash_disliked", "trash_archived"):
+            from modules import endorsement_db, gallery_query
+            filters = {"rating": "disliked"} if op == "trash_disliked" else {"states": ["archived"]}
+            trashed = 0
+            failed = []
+            for _pass in range(500):
+                page = gallery_query.query(dict(filters), "time_desc", 200, 0,
+                                           with_tags=False, with_meta=False)
+                rows = page.get("rows") or []
+                if not rows:
+                    break
+                before = trashed
+                for item in rows:
+                    try:
+                        outcome = endorsement_db.trash_item_by_key(_item_legacy_key(item))
+                    except Exception as exc:
+                        outcome = {"error": str(exc)}
+                    if outcome.get("error"):
+                        failed.append({"key": item.get("uid") or "", "error": outcome["error"]})
+                    else:
+                        trashed += 1
+                # trashed items drop out of the result set; stop when nothing moved
+                if len(rows) < 200 or trashed == before:
+                    break
+            return {"ok": True, "removed": trashed, "failed": failed[:20]}
         if op == "enforce_trash_media":
             return gallery_lifecycle.enforce_trash_media()
         if op == "blob_sweep":
@@ -306,12 +331,30 @@ def _serialize_views(rows: list) -> list:
     return out
 
 
+def _album_cover_uid(album_id: int) -> str:
+    """Uid of the newest non-trashed item in an album (used as its chip cover)."""
+    from modules import gallery_db
+    if not album_id:
+        return ""
+    try:
+        with gallery_db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT uid FROM items WHERE album_id=? AND state!='trashed' "
+                "ORDER BY mtime DESC, id DESC LIMIT 1",
+                (int(album_id),),
+            ).fetchone()
+        return str(row[0]) if row else ""
+    except Exception:
+        return ""
+
+
 def _serialize_albums(rows: list) -> list:
-    """Normalise album rows into API shapes (bundled flag + sizes)."""
+    """Normalise album rows into API shapes (bundled flag + sizes + cover)."""
     out = []
     for row in rows or []:
+        album_id = int(row.get("id") or 0)
         out.append({
-            "id": int(row.get("id") or 0),
+            "id": album_id,
             "name": row.get("name") or "",
             "count": int(row.get("count") or 0),
             "bundled": bool(row.get("bundled_at")),
@@ -319,6 +362,7 @@ def _serialize_albums(rows: list) -> list:
             "bundle_size": int(row.get("bundle_size") or 0),
             "bundle_count": int(row.get("bundle_count") or 0),
             "created_at": row.get("created_at") or "",
+            "cover": _album_cover_uid(album_id),
         })
     return out
 
@@ -343,8 +387,15 @@ def _album_from_payload(payload: dict, create_name=None):
     return album
 
 
+# Sources whose files are indexed by the legacy DB, where the filename stem IS
+# the historic item_key. Every other source has no legacy rows, and its stems
+# repeat across runs (image_maker's image_v01.png, comic_maker's page_01.png,
+# engine folders named 000.png, ...), so the canonical uid is the only safe key.
+LEGACY_STEM_SOURCES = ("txt2img", "img2img", "inpaint")
+
+
 def _item_legacy_key(item) -> str:
-    """The legacy compatibility key for an item (filename stem or engine key)."""
+    """Key used for legacy-facade action round-trips (stem or canonical handle)."""
     source = item.get("source") or ""
     rel = (item.get("rel_path") or "").replace("\\", "/")
     if source in ("qwen", "krea2"):
@@ -354,6 +405,10 @@ def _item_legacy_key(item) -> str:
         if len(parts) >= 3:
             parts[-1] = os.path.splitext(parts[-1])[0]
             return source + "-" + "-".join(p.lower() for p in parts)
+    if source and source not in LEGACY_STEM_SOURCES:
+        uid = str(item.get("uid") or "").strip()
+        if uid:
+            return uid
     path = item.get("path") or item.get("alias_path") or ""
     return os.path.splitext(os.path.basename(path))[0].strip().lower()
 
