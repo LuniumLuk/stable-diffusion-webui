@@ -145,6 +145,22 @@ def register_routes(app):
         result["albums"] = _serialize_albums(gallery_db.list_albums())
         return result
 
+    @app.post("/gallery/api/albums/cover")
+    def gallery_albums_cover(payload: dict = Body(default={})):
+        from modules import gallery_db
+        album = _album_from_payload(payload)
+        if not album:
+            raise HTTPException(status_code=404, detail="album not found")
+        key = str(payload.get("key") or "")
+        item_id = gallery_db.resolve_item_id(key) if key else None
+        item = gallery_db.get_item(item_id) if item_id else None
+        if not item:
+            raise HTTPException(status_code=404, detail="item not found")
+        if item.get("album_id") != int(album["id"]):
+            raise HTTPException(status_code=400, detail="item is not in this album")
+        gallery_db.set_album_cover(int(album["id"]), item["uid"])
+        return {"ok": True, "albums": _serialize_albums(gallery_db.list_albums())}
+
     @app.post("/gallery/api/albums/bundle")
     def gallery_albums_bundle(payload: dict = Body(default={})):
         from modules import gallery_albums, gallery_db
@@ -331,13 +347,20 @@ def _serialize_views(rows: list) -> list:
     return out
 
 
-def _album_cover_uid(album_id: int) -> str:
-    """Uid of the newest non-trashed item in an album (used as its chip cover)."""
+def _album_cover_uid(album_id: int, preferred: str = "") -> str:
+    """Album cover uid: the pinned cover when it still exists, else the newest non-trashed member."""
     from modules import gallery_db
     if not album_id:
         return ""
     try:
         with gallery_db.get_conn() as conn:
+            if preferred:
+                row = conn.execute(
+                    "SELECT uid FROM items WHERE uid=? AND state!='trashed' AND album_id=?",
+                    (str(preferred), int(album_id)),
+                ).fetchone()
+                if row:
+                    return str(row[0])
             row = conn.execute(
                 "SELECT uid FROM items WHERE album_id=? AND state!='trashed' "
                 "ORDER BY mtime DESC, id DESC LIMIT 1",
@@ -362,7 +385,7 @@ def _serialize_albums(rows: list) -> list:
             "bundle_size": int(row.get("bundle_size") or 0),
             "bundle_count": int(row.get("bundle_count") or 0),
             "created_at": row.get("created_at") or "",
-            "cover": _album_cover_uid(album_id),
+            "cover": _album_cover_uid(album_id, row.get("cover_uid") or ""),
         })
     return out
 

@@ -196,7 +196,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS albums(
               id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
               created_at TEXT, bundled_at TEXT, bundle_path TEXT,
-              bundle_size INTEGER, bundle_count INTEGER, bundle_sha256 TEXT);
+              bundle_size INTEGER, bundle_count INTEGER, bundle_sha256 TEXT,
+              cover_uid TEXT);
 
             CREATE TABLE IF NOT EXISTS legacy_keys(
               legacy_key TEXT PRIMARY KEY, item_id INTEGER);
@@ -211,6 +212,9 @@ def init_db() -> None:
         if "album_id" not in item_cols:
             conn.execute("ALTER TABLE items ADD COLUMN album_id INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_items_album ON items(album_id)")
+        album_cols = {row[1] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
+        if "cover_uid" not in album_cols:
+            conn.execute("ALTER TABLE albums ADD COLUMN cover_uid TEXT")
         _backfill_engine_keys(conn)
         _seed(conn)
         conn.commit()
@@ -904,6 +908,13 @@ def rename_album(album_id: int, name: str) -> None:
         if dup:
             raise ValueError("album name already exists")
         conn.execute("UPDATE albums SET name=? WHERE id=?", (name[:80], int(album_id)))
+        conn.commit()
+
+
+def set_album_cover(album_id: int, uid: str) -> None:
+    """Pin an item as the album cover (empty uid clears back to auto = newest member)."""
+    with get_conn() as conn:
+        conn.execute("UPDATE albums SET cover_uid=? WHERE id=?", (str(uid or ""), int(album_id)))
         conn.commit()
 
 

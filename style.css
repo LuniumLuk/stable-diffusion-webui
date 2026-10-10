@@ -5225,6 +5225,7 @@ body.resizing .resize-handle {
 }
 
 .gv2-thumb-s .gv2-card-actions {
+    bottom: 8px;
     gap: 2px;
     padding: 0 4px;
 }
@@ -5245,23 +5246,9 @@ body.resizing .resize-handle {
     border-radius: 7px;
 }
 
-.gv2-root.gv2-thumb-xs .gv2-card-caps {
+.gv2-root.gv2-thumb-xs .gv2-card-caps,
+.gv2-root.gv2-thumb-s .gv2-card-caps {
     display: none;
-    left: 4px;
-    right: 4px;
-    bottom: 4px;
-    gap: 2px;
-}
-
-.gv2-root.gv2-thumb-xs .gv2-card:hover .gv2-card-caps {
-    display: flex;
-}
-
-.gv2-root.gv2-thumb-xs .gv2-capsule,
-.gv2-root.gv2-thumb-xs .gv2-tag {
-    font-size: 9px;
-    line-height: 1.5;
-    padding: 1px 5px;
 }
 
 .gv2-thumb-xs .gv2-card-actions {
@@ -5551,6 +5538,12 @@ body.resizing .resize-handle {
     align-items: flex-end;
     gap: 3px;
     pointer-events: none;
+    opacity: 0.45;
+    transition: opacity 140ms ease;
+}
+
+.gv2-card:hover .gv2-card-caps {
+    opacity: 1;
 }
 
 .gv2-capsule {
@@ -5867,6 +5860,13 @@ body.resizing .resize-handle {
 .gv2-detail-album .gv2-select {
     flex: 1 1 auto;
     min-width: 0;
+}
+
+.gv2-detail-album-cover {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 0;
 }
 
 .gv2-detail-tagadd {

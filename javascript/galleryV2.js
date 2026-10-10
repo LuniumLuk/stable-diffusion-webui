@@ -1373,11 +1373,21 @@
       var album = albumById(item.album_id);
       if (album) current = '<div class="gv2-row-hint">currently in <b>' + esc(album.name) + '</b></div>';
     }
+    var coverLine = '';
+    if (item.album_id) {
+      var coverAlbum = albumById(item.album_id);
+      var isCover = coverAlbum && coverAlbum.cover === item.uid;
+      coverLine = '<div class="gv2-detail-album-cover">' +
+        '<button class="gv2-btn gv2-btn-quiet" id="gv2-detail-album-cover"' + (isCover ? ' disabled' : '') +
+        ' title="Use this image as the cover of its album">Set as cover</button>' +
+        (isCover ? '<span class="gv2-row-hint">this is the current cover</span>' : '') +
+        '</div>';
+    }
     return '<div class="gv2-detail-album">' +
       '<select id="gv2-detail-album-pick" class="gv2-select">' + options + '</select>' +
       '<button class="gv2-btn" id="gv2-detail-album-set">Set</button>' +
       '<button class="gv2-btn gv2-btn-quiet" id="gv2-detail-album-remove">Remove</button>' +
-      '</div>' + current;
+      '</div>' + current + coverLine;
   }
 
   function renderDetail(item) {
@@ -1520,6 +1530,20 @@
           })
           .then(function () { resetAndRefresh(); })
           .catch(function (err) { toast('Album remove failed: ' + err.message, true); });
+      });
+    }
+    var albumCoverBtn = el('gv2-detail-album-cover');
+    if (albumCoverBtn) {
+      albumCoverBtn.addEventListener('click', function () {
+        if (!item.album_id) { toast('add it to an album first', true); return; }
+        api('/gallery/api/albums/cover', { album: item.album_id, key: item.uid })
+          .then(function (data) {
+            state.albums = (data && data.albums) || [];
+            renderAlbums();
+            toast('album cover updated');
+            return refreshDetail();
+          })
+          .catch(function (err) { toast('Cover update failed: ' + err.message, true); });
       });
     }
   }
