@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gallery v2 — Refactor &amp; Migration Plan — stable-diffusion-webui</title>
+<style>
+  :root {
+    --bg: #0b0f19; --panel: #121a2b; --panel2: #0f1626; --border: #22304d;
+    --text: #e7edf7; --muted: #93a3bf; --accent: #f97316; --accent2: #22d3ee;
+    --green: #34d399; --red: #f87171; --yellow: #fbbf24; --purple: #a78bfa;
+    --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+            "Noto Sans", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.55; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 90px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .3px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding: 10px 14px;
+       background: linear-gradient(90deg, rgba(249,115,22,.18), rgba(34,211,238,.06) 60%, transparent);
+       border-left: 4px solid var(--accent); border-radius: 6px; }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--accent2); }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: var(--yellow); }
+  p { margin: 8px 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent2); text-decoration: none; } a:hover { text-decoration: underline; }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; background: #0a1020; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; vertical-align: top; }
+  th { background: #17233c; color: #cfe0ff; font-weight: 600; }
+  tr:nth-child(even) td { background: rgba(23,35,60,.28); }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .grid { display: grid; gap: 12px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat { text-align: center; padding: 12px 10px; }
+  .stat .v { font-size: 21px; font-weight: 700; color: var(--accent); }
+  .stat .k { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .callout { background: var(--panel2); border: 1px solid var(--border); border-left: 4px solid var(--accent2); border-radius: 8px; padding: 10px 14px; margin: 14px 0; }
+  .warn { border-left-color: var(--yellow); } .bad { border-left-color: var(--red); } .good { border-left-color: var(--green); }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 8px; }
+  .toc a { background: #17233c; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .chip { display: inline-block; background: #17233c; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  .chip b { color: var(--text); }
+  .pill { display: inline-block; border-radius: 6px; padding: 1px 8px; font-size: 12px; border: 1px solid; }
+  .p-red { color: var(--red); border-color: #7f1d1d; background: rgba(248,113,113,.08); }
+  .p-green { color: var(--green); border-color: #14532d; background: rgba(52,211,153,.08); }
+  .p-yellow { color: var(--yellow); border-color: #7c5a10; background: rgba(251,191,36,.08); }
+  .p-cyan { color: var(--accent2); border-color: #155e75; background: rgba(34,211,238,.08); }
+  .p-purple { color: var(--purple); border-color: #4c1d95; background: rgba(167,139,250,.08); }
+  .small { font-size: 12px; color: var(--muted); }
+  pre.ddl { background: #0a1020; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5; color: #cfe0ff; }
+  .kv td:first-child { width: 190px; color: var(--accent2); }
+  .bar-row { display: grid; grid-template-columns: 120px 1fr 80px; gap: 10px; align-items: center; margin: 6px 0; }
+  .bar { height: 14px; border-radius: 7px; background: linear-gradient(90deg, var(--accent), #fb923c); }
+  .bar.alt { background: linear-gradient(90deg, var(--accent2), #67e8f9); }
+  .bar.small-bar { background: linear-gradient(90deg, var(--purple), #c4b5fd); }
+  .bar.green-bar { background: linear-gradient(90deg, var(--green), #6ee7b7); }
+  figure { margin: 18px 0; }
+  figure svg { display: block; width: 100%; height: auto; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; }
+  figcaption { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  @media print {
+    body { background: #fff; color: #111; }
+    h2 { background: none; border-left-color: #f97316; }
+    th { background: #eee; color: #111; }
+    .card, .callout, figure svg { border-color: #ccc; background: #fafafa; }
+    code, .mono, pre.ddl { background: #f2f2f2; color: #111; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🏗️ Gallery v2 — Refactor &amp; Migration Plan</h1>
+<p class="sub">
+  Workspace <code>d:\stable-diffusion-webui</code> (fork, <code>dev</code>) · 2026-10-10 ·
+  Predecessor: <code>GALLERY_SYSTEM_REPORT.html</code> (audit of the current system) · Status: <b>plan for review — no code changed yet</b>
+</p>
+
+<div class="grid g4" style="margin-top:16px">
+  <div class="card stat"><div class="v">74,092 → ≈13k</div><div class="k">loose gallery-managed files on disk (−82%)</div></div>
+  <div class="card stat"><div class="v">26.9 GB → ≈16.5 GB</div><div class="k">disk footprint (−≈10.4 GB)</div></div>
+  <div class="card stat"><div class="v">8.54 GB</div><div class="k">duplicated endorsed copies → hardlink/flag (0 B)</div></div>
+  <div class="card stat"><div class="v">7 → 4</div><div class="k">data pipelines → one provider model</div></div>
+  <div class="card stat"><div class="v">3 → 7</div><div class="k">core filter dims: time · source · state · tags · resolution · prompt · neg</div></div>
+  <div class="card stat"><div class="v">1 → 4</div><div class="k">sort keys (time · resolution · size · random)</div></div>
+</div>
+
+<div class="toc">
+  <a href="#s0">0 · Executive summary</a>
+  <a href="#s1">1 · Problems (graph)</a>
+  <a href="#s2">2 · Target architecture (graph)</a>
+  <a href="#s3">3 · Storage overhaul</a>
+  <a href="#s4">4 · Extensible database</a>
+  <a href="#s5">5 · Gallery UI refactor</a>
+  <a href="#s6">6 · Migration plan (graph)</a>
+  <a href="#s7">7 · Roadmap &amp; effort</a>
+  <a href="#s8">8 · Risks</a>
+  <a href="#s9">9 · Acceptance criteria</a>
+  <a href="#s10">10 · Decisions needed</a>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s0">0 · Executive summary</h2>
+<p>Your three goals map to four workstreams. The order matters: <b>storage + DB first, UI second</b> — the UI can only be fast and simple once every image source lives in one indexed store.</p>
+
+<table>
+  <tr><th>Your goal</th><th>Workstream</th><th>Core idea</th><th>Phase</th></tr>
+  <tr>
+    <td>1) Fewer loose files; keep only generated image + compressed preview; bundle if needed</td>
+    <td><b>Storage overhaul</b></td>
+    <td>One original PNG stays where it is. Thumbs + previews move into a <b>single bundle store</b> (SQLite blob file; pack-shard scale path). Endorsed copies become <b>hardlinks</b> (0 B). Sidecar <code>.txt</code>/<code>.json</code> files are absorbed into the DB and orphaned ones swept. → −82% files, −10.4 GB. <b>Media policy:</b> active = thumb+preview · archived = thumb only (auto-trash after 24 h) · trash = no media, metadata only.</td>
+    <td>P1–P2</td>
+  </tr>
+  <tr>
+    <td>2) Extendable DB for all image sources (txt2img, img2img, inpaint, composition, qwen, krea2, …)</td>
+    <td><b>Extensible database</b></td>
+    <td>One <code>items</code> table + a <code>sources</code> registry + <code>meta_json</code> for per-source extras + <b>tag categories</b> (rating = composite single-select, workflow = independent multi, captions = auto). Adding a new engine = 1 registry row + 1 parser; a new tag category = 1 DB row.</td>
+    <td>P1–P3</td>
+  </tr>
+  <tr>
+    <td>3) Gallery UI: advanced filters, speed, more actions</td>
+    <td><b>Query API + UI v2</b></td>
+    <td>DB-only queries (no disk scans), batched lookups, FTS5 search, 7 core filter dimensions + extras, 4 sort keys, saved views; incremental card updates, ETag blob serving; batch actions, find-similar, compare, export.</td>
+    <td>P4–P5</td>
+  </tr>
+  <tr>
+    <td>Safety</td>
+    <td><b>Compatibility facade</b></td>
+    <td><code>endorsement_db.py</code> keeps its public API but delegates to the new store, with a <b>dual-write window</b> and a feature flag. Desktop Gallery + SD Lite keep working untouched during migration; rollback = flip one flag.</td>
+    <td>P3</td>
+  </tr>
+</table>
+
+<div class="callout good">
+  <b>No new dependencies.</b> Everything uses Python stdlib (<code>sqlite3</code> incl. FTS5/JSON, <code>zlib</code>, <code>os.link</code>) — no pip installs, no new services. Migration runs <b>online</b> (webui keeps serving); the only restart needed is the usual one for new JS files.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s1">1 · Why — the current system (from the audit)</h2>
+
+<div class="grid g4">
+  <div class="card stat"><div class="v">74,092</div><div class="k">loose files (images, sidecars, caches, copies)</div></div>
+  <div class="card stat"><div class="v">39,608</div><div class="k">.txt sidecars — ~35k are orphans of trashed images</div></div>
+  <div class="card stat"><div class="v">3,976 / 8.54 GB</div><div class="k">endorsed copies = byte-for-byte duplicates</div></div>
+  <div class="card stat"><div class="v">1,169 / 2.37 GB</div><div class="k">.composerstate.json files next to compositions</div></div>
+</div>
+
+<figure>
+<svg viewBox="0 0 960 470" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, Segoe UI, sans-serif">
+  <defs>
+    <marker id="g1a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6b8c"/></marker>
+    <marker id="g1r" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#f87171"/></marker>
+  </defs>
+  <text x="20" y="24" fill="#93a3bf" font-size="12">Sources (6 today)</text>
+  <text x="250" y="24" fill="#93a3bf" font-size="12">Pipelines (4 hand-built paths)</text>
+  <text x="490" y="24" fill="#93a3bf" font-size="12">Stores (fragmented)</text>
+  <text x="745" y="24" fill="#93a3bf" font-size="12">Consumers</text>
+
+  <!-- sources -->
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="10" y="40" width="180" height="34" rx="6"/><rect x="10" y="82" width="180" height="34" rx="6"/>
+    <rect x="10" y="124" width="180" height="34" rx="6"/><rect x="10" y="166" width="180" height="34" rx="6"/>
+    <rect x="10" y="208" width="180" height="34" rx="6"/><rect x="10" y="250" width="180" height="34" rx="6"/>
+  </g>
+  <g fill="#cfe0ff" font-size="12">
+    <text x="22" y="61">txt2img</text><text x="22" y="103">img2img / inpaint</text>
+    <text x="22" y="145">Composer</text><text x="22" y="187">Image Maker</text>
+    <text x="22" y="229">Qwen / Krea 2</text><text x="22" y="271">removebg / nano / comic</text>
+  </g>
+
+  <!-- pipelines -->
+  <g fill="#1d2740" stroke="#2c3e5e">
+    <rect x="240" y="50" width="190" height="42" rx="6"/><rect x="240" y="118" width="190" height="42" rx="6"/>
+    <rect x="240" y="186" width="190" height="42" rx="6"/><rect x="240" y="254" width="190" height="42" rx="6"/>
+  </g>
+  <g fill="#cfe0ff" font-size="12">
+    <text x="252" y="68">Paged SQL queries</text><text x="252" y="83" fill="#93a3bf" font-size="10">endorsements.db only</text>
+    <text x="252" y="136">SQL + sidecar merge</text><text x="252" y="151" fill="#93a3bf" font-size="10">qwen/krea2 keys, 2 key schemes</text>
+    <text x="252" y="204">Folder scan per query</text><text x="252" y="219" fill="#93a3bf" font-size="10">composition / image_maker / none-sdxl</text>
+    <text x="252" y="272">Archived splice</text><text x="252" y="287" fill="#93a3bf" font-size="10">DB rows + scanned rows mixed</text>
+  </g>
+
+  <!-- store boxes -->
+  <g fill="#241a2e" stroke="#6d28d9">
+    <rect x="480" y="34" width="190" height="44" rx="6"/>
+    <rect x="480" y="96" width="190" height="44" rx="6"/>
+    <rect x="480" y="158" width="190" height="44" rx="6"/>
+    <rect x="480" y="220" width="190" height="44" rx="6"/>
+    <rect x="480" y="282" width="190" height="44" rx="6"/>
+  </g>
+  <g fill="#e9d5ff" font-size="11">
+    <text x="490" y="52">endorsements.db — 7 tables</text><text x="490" y="66" fill="#a78bfa" font-size="10">stem-keyed, state duplicated</text>
+    <text x="490" y="114">loose thumb/preview caches</text><text x="490" y="128" fill="#a78bfa" font-size="10">20,564 webp files · path-keyed</text>
+    <text x="490" y="176">endorsed copies — 8.54 GB</text><text x="490" y="190" fill="#a78bfa" font-size="10">pixel duplicates of originals</text>
+    <text x="490" y="238">sidecars: 39.6k .txt + 1.2k .json</text><text x="490" y="252" fill="#a78bfa" font-size="10">orphans linger after trash</text>
+    <text x="490" y="300">query time hits disk (3 views)</text><text x="490" y="314" fill="#a78bfa" font-size="10">scans + N-per-card SQL lookups</text>
+  </g>
+
+  <!-- UIs -->
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="720" y="96" width="220" height="40" rx="6"/><rect x="720" y="176" width="220" height="40" rx="6"/>
+    <rect x="720" y="256" width="220" height="40" rx="6"/>
+  </g>
+  <g fill="#cfe0ff" font-size="12">
+    <text x="734" y="120">Desktop Gallery tab</text><text x="734" y="200">SD Lite gallery</text><text x="734" y="280">scripts / tests</text>
+  </g>
+
+  <!-- arrows: sources to pipelines -->
+  <g stroke="#5b6b8c" stroke-width="1.4" fill="none" marker-end="url(#g1a)">
+    <path d="M190,57 C215,57 215,71 240,71"/>
+    <path d="M190,99 C215,99 215,139 240,139"/>
+    <path d="M190,141 C215,141 215,207 240,207"/>
+    <path d="M190,183 C225,183 225,225 240,225"/>
+    <path d="M190,225 C220,225 220,275 240,275"/>
+    <path d="M190,267 C215,267 215,290 240,290"/>
+  </g>
+  <!-- pipelines to stores (dashed red = ad-hoc) -->
+  <g stroke="#f87171" stroke-width="1.3" stroke-dasharray="5 4" fill="none" marker-end="url(#g1r)">
+    <path d="M430,71 C455,71 455,56 480,56"/>
+    <path d="M430,139 C455,139 455,118 480,118"/>
+    <path d="M430,207 C455,207 455,180 480,180"/>
+    <path d="M430,275 C455,275 455,242 480,242"/>
+    <path d="M430,275 C455,275 455,304 480,304"/>
+  </g>
+  <text x="443" y="330" fill="#f87171" font-size="10">ad-hoc wiring per mode</text>
+  <!-- stores to UIs -->
+  <g stroke="#f87171" stroke-width="1.3" stroke-dasharray="5 4" fill="none" marker-end="url(#g1r)">
+    <path d="M670,56 C695,56 695,116 720,116"/>
+    <path d="M670,118 C695,118 695,196 720,196"/>
+    <path d="M670,180 C695,180 695,196 720,196"/>
+    <path d="M670,304 C695,304 695,276 720,276"/>
+  </g>
+
+  <text x="20" y="420" fill="#93a3bf" font-size="11">Result: 4 data pipelines · 3 identity schemes · per-card N+1 SQL · previews keyed by path+mtime (break on move) · duplicates and orphans accumulate.</text>
+  <text x="20" y="440" fill="#93a3bf" font-size="11">The audit report (GALLERY_SYSTEM_REPORT.html) documents each of these with line-level evidence.</text>
+</svg>
+<figcaption>Graph 1 — current architecture: every source/mode pair was hand-wired to its own pipeline and store.</figcaption>
+</figure>
+
+<!-- ================================================================ -->
+<h2 id="s2">2 · Target architecture</h2>
+
+<div class="callout">
+  <b>Three principles:</b> ① one authoritative metadata DB (<code>gallery.db</code>) where <i>every</i> image source is just a provider row; ② derived data (thumbs, previews) lives in a separate, regenerable bundle store; ③ all consumers (desktop tab, SD Lite, scripts) talk to one Gallery API — the old <code>endorsement_db</code> API keeps working as a facade until everyone is migrated.
+</div>
+
+<figure>
+<svg viewBox="0 0 960 430" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, Segoe UI, sans-serif">
+  <defs>
+    <marker id="g2a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6b8c"/></marker>
+    <marker id="g2g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#34d399"/></marker>
+  </defs>
+
+  <!-- providers panel -->
+  <rect x="10" y="30" width="240" height="360" rx="10" fill="#101a2e" stroke="#2c3e5e"/>
+  <text x="26" y="54" fill="#22d3ee" font-size="13" font-weight="700">Source Providers (registry)</text>
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="26" y="68" width="208" height="26" rx="5"/><rect x="26" y="100" width="208" height="26" rx="5"/>
+    <rect x="26" y="132" width="208" height="26" rx="5"/><rect x="26" y="164" width="208" height="26" rx="5"/>
+    <rect x="26" y="196" width="208" height="26" rx="5"/><rect x="26" y="228" width="208" height="26" rx="5"/>
+  </g>
+  <g fill="#cfe0ff" font-size="11.5">
+    <text x="38" y="85">txt2img / img2img / inpaint</text><text x="38" y="117">Composer + Image Maker</text>
+    <text x="38" y="149">Qwen / Krea 2</text><text x="38" y="181">removebg / nano / comic / sana</text>
+    <text x="38" y="213">(future: video, upscales, grids…)</text>
+  </g>
+  <rect x="26" y="262" width="208" height="54" rx="6" fill="#0f2b22" stroke="#34d399"/>
+  <text x="38" y="282" fill="#6ee7b7" font-size="11">+ new source = 1 registry row</text>
+  <text x="38" y="298" fill="#6ee7b7" font-size="11">+ 1 parser (10–30 lines)</text>
+  <text x="38" y="340" fill="#93a3bf" font-size="10.5">Provider contract: scan() → candidates ·</text>
+  <text x="38" y="356" fill="#93a3bf" font-size="10.5">parse() → metadata · capabilities → actions</text>
+  <text x="38" y="372" fill="#93a3bf" font-size="10.5">UI filter chips read from sources table</text>
+
+  <!-- core panel -->
+  <rect x="300" y="30" width="330" height="360" rx="10" fill="#101a2e" stroke="#2c3e5e"/>
+  <text x="316" y="54" fill="#f97316" font-size="13" font-weight="700">Gallery Core</text>
+  <rect x="316" y="66" width="298" height="42" rx="6" fill="#17233c" stroke="#2c3e5e"/>
+  <text x="328" y="84" fill="#cfe0ff" font-size="11.5">Indexer — scan once, delta updates (mtime)</text>
+  <text x="328" y="99" fill="#93a3bf" font-size="10.5">hooks: on_image_saved · startup delta · manual Sync</text>
+  <rect x="316" y="118" width="298" height="66" rx="6" fill="#251a12" stroke="#f97316"/>
+  <text x="328" y="138" fill="#fdba74" font-size="11.5">gallery.db (authoritative — backup this)</text>
+  <text x="328" y="154" fill="#cfe0ff" font-size="10.5">items · state + events · tag_categories / tags / item_tags</text>
+  <text x="328" y="170" fill="#cfe0ff" font-size="10.5">sources · saved_views · FTS5 · composer states · archive TTL</text>
+  <rect x="316" y="194" width="298" height="60" rx="6" fill="#122030" stroke="#22d3ee"/>
+  <text x="328" y="214" fill="#67e8f9" font-size="11.5">BlobStore (derived — regenerable)</text>
+  <text x="328" y="230" fill="#cfe0ff" font-size="10.5">thumbs 192px + previews 1024px, bundled</text>
+  <text x="328" y="246" fill="#93a3bf" font-size="10.5">served with ETag/304 · pack-shard scale path</text>
+  <rect x="316" y="264" width="298" height="50" rx="6" fill="#17233c" stroke="#a78bfa"/>
+  <text x="328" y="284" fill="#c4b5fd" font-size="11.5">Compatibility facade — endorsement_db API</text>
+  <text x="328" y="300" fill="#93a3bf" font-size="10.5">old callers work unchanged · dual-write during transition</text>
+  <text x="316" y="344" fill="#93a3bf" font-size="10.5">Counts/state maps batched per page · no per-card SQL.</text>
+  <text x="316" y="360" fill="#93a3bf" font-size="10.5">Previews keyed by item id (not path+mtime).</text>
+
+  <!-- API panel -->
+  <rect x="690" y="30" width="260" height="360" rx="10" fill="#101a2e" stroke="#2c3e5e"/>
+  <text x="706" y="54" fill="#22d3ee" font-size="13" font-weight="700">Gallery API (one for all UIs)</text>
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="706" y="66" width="228" height="30" rx="5"/><rect x="706" y="104" width="228" height="30" rx="5"/>
+    <rect x="706" y="142" width="228" height="30" rx="5"/><rect x="706" y="180" width="228" height="30" rx="5"/>
+  </g>
+  <g fill="#cfe0ff" font-size="11">
+    <text x="718" y="85">POST /query — FilterSet + Sort + cursor</text>
+    <text x="718" y="123">POST /action — returns updated card only</text>
+    <text x="718" y="161">GET /blob — ETag/304, hover prefetch</text>
+    <text x="718" y="199">GET /similar · /export · /stats</text>
+  </g>
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="706" y="250" width="228" height="30" rx="5"/><rect x="706" y="288" width="228" height="30" rx="5"/>
+  </g>
+  <g fill="#cfe0ff" font-size="11">
+    <text x="718" y="269">Desktop Gallery tab (Gradio shell kept)</text>
+    <text x="718" y="307">SD Lite · scripts/CLI · future surfaces</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#5b6b8c" stroke-width="1.5" fill="none" marker-end="url(#g2a)">
+    <path d="M250,110 L300,110"/>
+    <path d="M465,108 L465,118"/>
+    <path d="M645,150 L690,150"/>
+    <path d="M645,224 L668,224 L668,161 L690,161"/>
+    <path d="M465,314 L465,324 L690,324 L690,265"/>
+  </g>
+  <g stroke="#34d399" stroke-width="1.4" fill="none" marker-end="url(#g2g)">
+    <path d="M250,280 L300,280"/>
+  </g>
+  <text x="255" y="272" fill="#6ee7b7" font-size="10">new sources flow in</text>
+</svg>
+<figcaption>Graph 2 — target architecture: providers → one indexed store + one bundle store → one API → all UIs.</figcaption>
+</figure>
+
+<!-- ================================================================ -->
+<h2 id="s3">3 · Storage overhaul (goal 1)</h2>
+
+<h3>3.1 File policy — artifact by artifact</h3>
+<table>
+  <tr><th>Artifact</th><th>Today</th><th>After</th><th>Migration action</th></tr>
+  <tr><td>Generated image (any source)</td><td>PNG in <code>outputs/…</code></td><td><b>Unchanged — the one required loose file.</b> Path + name identical.</td><td>none (indexed)</td></tr>
+  <tr><td>Endorsed copy</td><td>3,976 duplicate PNGs · <b>8.54 GB</b></td><td><b>Hardlink</b> to the original (0 extra bytes, same name/behavior) — or DB-flag-only mode (<code>endorse_mode</code> setting)</td><td>verify byte-identical (sha256) → replace copy with <code>os.link</code>; fallback keep copy on cross-volume</td></tr>
+  <tr><td>Thumbnail (192px)</td><td>9,793 loose webp · 44.9 MB</td><td rowspan="2"><b>Bundled</b> into one blob store <code>cache/gallery_blobs.db</code> (≈0.85 GB, 1 file). Served via <code>/gallery/blob</code> with ETag.</td><td rowspan="2">import existing webps by recomputing their <code>sha1(path|mtime)</code> key from DB rows; regenerate misses in a background job; delete loose files after verification</td></tr>
+  <tr><td>Preview (1024px)</td><td>10,519 loose webp · 776 MB</td></tr>
+  <tr><td>Prompt sidecar <code>.txt</code></td><td>39,608 files (58 MB, ~35k orphans of trashed images)</td><td><b>Absorbed</b> into DB (<code>items.infotext</code> already exists); writing sidecars becomes opt-in (<code>save_txt=false</code> default)</td><td>import + orphan sweep; keep for files without DB rows (unindexed/edge); delete after verify</td></tr>
+  <tr><td>Composer state <code>.json</code></td><td>1,169 files · <b>2.37 GB</b></td><td><b>Absorbed</b> into <code>gallery.db</code> (zlib-compressed blob, ≈0.4–0.8 GB est.); Composer Load/Save goes through the API</td><td>import all; update composer save/load paths; delete loose files after verify</td></tr>
+  <tr><td>removebg outputs</td><td>199 PNGs in a separate folder, excluded from index</td><td>Kept as a <b>variant</b> artifact (<code>items.variant='removebg'</code>, <code>parent_id</code> → original) — visible in the gallery at last</td><td>import as variant rows</td></tr>
+  <tr><td>Archived (lifecycle)</td><td>state flag; preview + thumb cached</td><td><b>Thumb only</b> — the preview blob is dropped on archive; the item auto-moves to Trash after <b>24 h</b> (a push-button “undo shelf” for deletion); the Archived view shows a countdown</td><td>sweeper job (<code>gallery_lifecycle.py</code>); unarchive within the window regenerates the preview lazily</td></tr>
+  <tr><td>Trash</td><td>metadata-only (35,462 rows); thumbs/previews deleted</td><td><b>No thumb, no preview — metadata only</b> (your principle)</td><td>trash flow deletes the thumb blob too; nothing imported for old trash rows</td></tr>
+  <tr><td><code>net_cache</code> (remote-client variants)</td><td>252 files · 19.9 MB</td><td>Fold into BlobStore (same endpoint + sizes) — optional</td><td>import or leave for P6</td></tr>
+</table>
+
+<h3>3.2 Bundle decision — how to store compressed previews</h3>
+<table>
+  <tr><th>Option</th><th>Files on disk</th><th>Pros</th><th>Cons</th><th>Verdict</th></tr>
+  <tr>
+    <td>A · Status quo (loose webp)</td><td>20,564</td><td>simplest; direct file URLs</td><td>path+mtime keys break on move; folder bloat; slow backup; orphan-prone</td><td><span class="pill p-red">replaced</span></td>
+  </tr>
+  <tr>
+    <td><b>B · SQLite blob DB</b> <span class="small">(recommended default)</span></td><td><b>1</b> (~0.85 GB)</td><td>transactional; trivial backup; item-id keys; avg blob 76 KB / thumb 5 KB — inside SQLite's sweet spot; no GC logic</td><td>single file grows; VACUUM heavy at multi-GB (mitigate: separate DB, incremental vacuum)</td><td><span class="pill p-green">default</span></td>
+  </tr>
+  <tr>
+    <td>C · Pack shards <code>*.gpack</code></td><td>4–8</td><td>bounded file sizes; byte-range serving; per-shard compaction</td><td>crash-recovery + compaction logic; more code</td><td><span class="pill p-cyan">scale path</span> — same interface, switch when blobs &gt; ≈8 GB or &gt; 100k items</td>
+  </tr>
+</table>
+
+<p>Both backends sit behind one interface, so the choice is reversible:</p>
+<pre class="ddl">class BlobStore:                      # modules/gallery_blobs.py
+    put(item_id, kind, data, meta)    # kind: thumb | preview | trash_thumb | net_variant
+    get(blob_ref) -&gt; bytes | None
+    get_ref(item_id, kind) -&gt; BlobRef # pack/offset/len or sqlite rowid
+    delete(item_id, kind)
+    stats() / compact()               # used by Statistics + maintenance</pre>
+
+<h3>3.3 Expected impact (measured 2026-10-10)</h3>
+<figure>
+<svg viewBox="0 0 960 250" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, Segoe UI, sans-serif">
+  <text x="12" y="44" fill="#f87171" font-size="13" font-weight="700">BEFORE</text>
+  <text x="12" y="60" fill="#93a3bf" font-size="10.5">74,092 files</text>
+  <text x="12" y="74" fill="#93a3bf" font-size="10.5">26.9 GB</text>
+  <!-- before bar: total scale 800px = 74,092 files -->
+  <g>
+    <rect x="110" y="26" width="97" height="52" fill="#3b82f6"/><text x="126" y="56" fill="#fff" font-size="10" transform="rotate(0)">9,027</text>
+    <rect x="207" y="26" width="43" height="52" fill="#f87171"/><text x="211" y="118" fill="#f87171" font-size="10">8.5GB copy</text>
+    <rect x="250" y="26" width="106" height="52" fill="#a78bfa"/><text x="258" y="56" fill="#fff" font-size="10">9,793 thumbs</text>
+    <rect x="356" y="26" width="114" height="52" fill="#22d3ee"/><text x="366" y="56" fill="#0b0f19" font-size="10">10,519 previews</text>
+    <rect x="470" y="26" width="428" height="52" fill="#fbbf24"/><text x="640" y="56" fill="#0b0f19" font-size="10">39,608 .txt sidecars (35k orphans)</text>
+    <rect x="898" y="26" width="12" height="52" fill="#f472b6"/><text x="820" y="118" fill="#f472b6" font-size="10">1,169 JSON · 2.37 GB</text>
+  </g>
+  <text x="110" y="96" fill="#93a3bf" font-size="10.5">originals (9,027) · endorsed copies (3,976, +8.54 GB) · caches (20,564) · sidecars (40,777) · net cache (252)</text>
+
+  <text x="12" y="164" fill="#34d399" font-size="13" font-weight="700">AFTER</text>
+  <text x="12" y="180" fill="#93a3bf" font-size="10.5">≈13k entries</text>
+  <text x="12" y="194" fill="#93a3bf" font-size="10.5">≈16.5 GB</text>
+  <g>
+    <rect x="110" y="146" width="97" height="52" fill="#3b82f6"/><text x="126" y="176" fill="#fff" font-size="10">9,027</text>
+    <rect x="217" y="146" width="36" height="52" fill="#34d399"/><text x="258" y="176" fill="#6ee7b7" font-size="10">gallery.db + gallery_blobs.db</text>
+    <rect x="360" y="146" width="548" height="52" fill="none" stroke="#22304d" stroke-dasharray="4 4"/>
+  </g>
+  <text x="110" y="216" fill="#93a3bf" font-size="10.5">originals + 3,976 hardlink names (0 B) + 2 store files · endorsed duplication eliminated · sidecar orphan sweep · archive = thumb-only (24 h) · trash = no media</text>
+  <text x="110" y="236" fill="#6ee7b7" font-size="11">net: −≈55,000 files (−82%) · −≈10.4 GB (−39%) · one restart for the switchover</text>
+</svg>
+<figcaption>Graph 3 — file-count and byte transformation. The 8.54 GB endorsed duplication and the 35k orphaned sidecars are the two biggest wins; bundling removes ~20.5k cache files.</figcaption>
+</figure>
+
+<h3>3.4 Edge cases handled</h3>
+<ul>
+  <li><b>Cross-volume endorse link</b> → fallback to copy + warning in log (same as today's semantics).</li>
+  <li><b>Blob store corruption</b> → it is <i>derived</i>: rebuild from originals in the background; DB stays intact (separate file). Health check runs <code>PRAGMA integrity_check</code> at startup (cheap) and every N days.</li>
+  <li><b>Preview format upgrades</b> (e.g. AVIF later) → new <code>blob_ref.format</code>; old blobs regenerated lazily per item; no migration file churn.</li>
+  <li><b>Moved originals</b> → identity is <code>uid</code>/item id, not path; blobs keep serving after a move; the row's <code>path</code> updates on next scan.</li>
+  <li><b>Lifecycle media rules</b> → archive keeps only a thumb (preview deleted; original file untouched, 24 h TTL with migration grace); Trash keeps no media at all (original files + blobs deleted, metadata retained); blob rows are removed on state change (SQLite) or dropped records are reclaimed by compaction (packs).</li>
+  <li><b>Endorsed protection</b> → the TTL sweeper skips any item with rating = <code>endorsed</code>; un-endorse first if you really want it to expire. (Prevents “delete archived” sweeps from eating keepers.)</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="s4">4 · Extensible database (goal 2)</h2>
+
+<h3>4.1 Extensibility model</h3>
+<table class="kv">
+  <tr><td>Sources registry</td><td><code>sources(id, label, parser, schema_version, config_json)</code> — seeded with txt2img, img2img, inpaint, composition, image_maker, qwen, krea2, removebg, nano_banana, comic_maker. The UI builds filter chips from this table — no code change to show a new source.</td></tr>
+  <tr><td>Parser registry</td><td>named parsers: <code>a1111</code> (PNG chunk/txt infotext), <code>sidecar_txt</code>, <code>sidecar_json</code>, <code>none</code>. A source picks one or supplies a tiny function.</td></tr>
+  <tr><td>Promoted columns</td><td>Only fields with a real filter / sort / route role are columns: <b>time, source, state, resolution (W/H), prompt, negative prompt</b> (+ identity/routing: uid, path, size, sha256). Everything else — seed, sampler, schedule, steps, CFG, denoise, model(+hash), LoRA list, hires block, mask block, engine params — is compacted into <code>meta_json</code> (per-source <code>schema_version</code>). Promotion later = one generated column + index migration.</td></tr>
+  <tr><td>Tag categories</td><td>Tags live in categories with a cardinality rule: <b>rating</b> = single-select <i>composite</i> tag (endorsed | disliked), <b>workflow</b> = <i>independent</i> multi-select user tags, <b>captions</b> = automatic DeepDanbooru (scored). More categories (quality, character, …) are DB rows — no code change.</td></tr>
+  <tr><td>Kind column</td><td><code>kind</code> = image | video | audio | doc — future AnimateDiff/Wan outputs slot in without schema surgery.</td></tr>
+  <tr><td>Variants</td><td><code>parent_id</code> + <code>variant</code> link derived artifacts (removebg, upscales) to their source image — one tree per generation.</td></tr>
+</table>
+
+<h4>Adding a future source (worked example: SANA)</h4>
+<table>
+  <tr><th>Step</th><th>Where</th><th>Effort</th></tr>
+  <tr><td>1 — register: <code>INSERT INTO sources VALUES('sana','SANA','a1111',1,'{"root":"outputs/sana"}')</code></td><td>DB row (can ship as a small seed function)</td><td>1 line</td></tr>
+  <tr><td>2 — provider scan/parse (10–30 lines, reuse <code>a1111</code> parser)</td><td><code>modules/gallery_sources.py</code></td><td>S</td></tr>
+  <tr><td>3 — test + done: indexer picks it up on next sync; filter chips/actions appear automatically</td><td><code>tmp/*_test.py</code> harness</td><td>S</td></tr>
+</table>
+
+<h3>4.2 Schema sketch</h3>
+<pre class="ddl">-- gallery.db  (authoritative · keep in backup)
+CREATE TABLE sources(
+  id TEXT PRIMARY KEY, label TEXT, parser TEXT,
+  schema_version INTEGER DEFAULT 1, config_json TEXT, created_at TEXT);
+
+CREATE TABLE items(
+  id INTEGER PRIMARY KEY, uid TEXT UNIQUE NOT NULL,        -- source:lower(relpath)
+  source TEXT NOT NULL REFERENCES sources(id), kind TEXT DEFAULT 'image',
+  path TEXT, rel_path TEXT,
+  mtime REAL, file_size INTEGER,
+  width INTEGER, height INTEGER,                           -- resolution filter/sort
+  state TEXT DEFAULT 'active',                             -- active|staged|archived|trashed
+  archive_expires_at REAL,                                 -- TTL: archived -> trashed (24 h)
+  parent_id INTEGER REFERENCES items(id), variant TEXT,    -- removebg / upscale / …
+  prompt TEXT, negative_prompt TEXT, infotext TEXT,        -- filter + display + FTS content
+  meta_json TEXT DEFAULT '{}',                             -- seed/sampler/steps/model/… (JSON)
+  sha256 TEXT,                                             -- lazy: dedupe / verify
+  indexed_at TEXT, updated_at TEXT);
+CREATE INDEX idx_items_source ON items(source);
+CREATE INDEX idx_items_state  ON items(state, archive_expires_at);
+CREATE INDEX idx_items_mtime  ON items(mtime DESC);
+CREATE INDEX idx_items_size   ON items(width, height);
+
+-- tags: categories define behaviour (cardinality + kind)
+CREATE TABLE tag_categories(
+  id TEXT PRIMARY KEY,                      -- rating | workflow | captions | …
+  name TEXT, cardinality TEXT,              -- 'single' | 'multi'
+  kind TEXT,                                -- rating | user | caption | system
+  color TEXT, sort_order INTEGER DEFAULT 0);
+CREATE TABLE tags(
+  id INTEGER PRIMARY KEY, category_id TEXT REFERENCES tag_categories(id),
+  name TEXT NOT NULL, color TEXT, created_at TEXT,
+  UNIQUE(category_id, name COLLATE NOCASE));
+CREATE TABLE item_tags(
+  item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+  tag_id INTEGER REFERENCES tags(id),
+  category_id TEXT, single INTEGER DEFAULT 0, -- denormalised for the index below
+  source TEXT DEFAULT 'user',                 -- user | deepbooru | system
+  score REAL, tagged_at TEXT,
+  PRIMARY KEY(item_id, tag_id, source));
+CREATE UNIQUE INDEX idx_one_single_per_category
+  ON item_tags(item_id, category_id) WHERE single = 1;  -- composite tags: at most 1 per category
+
+CREATE TABLE state_events(id INTEGER PRIMARY KEY, item_id INTEGER,
+  event TEXT, at TEXT, payload_json TEXT);     -- lifecycle history (undo-friendly)
+CREATE TABLE composer_states(item_id INTEGER PRIMARY KEY, blob BLOB, -- zlib JSON
+  schema_version INTEGER, updated_at TEXT);
+CREATE TABLE saved_views(id INTEGER PRIMARY KEY, name TEXT UNIQUE,
+  filter_json TEXT, sort_json TEXT, created_at TEXT);
+CREATE TABLE legacy_keys(legacy_key TEXT PRIMARY KEY, item_id INTEGER); -- transition only
+CREATE VIRTUAL TABLE items_fts USING fts5(
+  prompt, negative_prompt, infotext, tags_text,
+  content='items', content_rowid='id');         -- phrase + column-scoped search
+
+-- cache/gallery_blobs.db  (derived · regenerable · backup optional)
+CREATE TABLE blobs(id INTEGER PRIMARY KEY, item_id INTEGER,
+  kind TEXT,                 -- thumb | preview | net_variant  (never for trashed)
+  format TEXT, width INTEGER, height INTEGER, size INTEGER,
+  crc32 INTEGER, data BLOB, created_at TEXT);
+CREATE INDEX idx_blobs_item ON blobs(item_id, kind);</pre>
+
+<h3>4.3 Field ledger — what actually gets stored</h3>
+<p>Promotion rule: <b>a field becomes a column only if a filter, sort, or route uses it.</b> Everything else is compacted into <code>meta_json</code>. This keeps the table narrow and the schema stable while sources multiply.</p>
+<table>
+  <tr><th>Field</th><th>Where</th><th>Why / used by</th></tr>
+  <tr><td>id · uid · source · kind · path · rel_path</td><td>columns</td><td>identity, routing, source filter, facade/legacy mapping</td></tr>
+  <tr><td>mtime · file_size · width · height</td><td>columns</td><td>time filter + sort · size sort/stats · resolution filter + area sort (+ aspect computed)</td></tr>
+  <tr><td>state · archive_expires_at</td><td>columns</td><td>state filter · TTL sweeper · countdown in the Archived view</td></tr>
+  <tr><td>prompt · negative_prompt · infotext</td><td>columns</td><td>{prompt, negative prompt} filters, display / copy / paste, FTS content</td></tr>
+  <tr><td>sha256</td><td>column (lazy)</td><td>dedupe, endorsed-link verification, integrity checks</td></tr>
+  <tr><td>seed · sampler · schedule · steps · CFG · denoise</td><td><b>meta_json</b></td><td>display, copy/paste, Fire config, “Use seed” — <b>not filtered or sorted</b> (your principle: compact into meta)</td></tr>
+  <tr><td>model · model_hash · VAE · LoRA list · hires block · mask block · token-merging …</td><td><b>meta_json</b></td><td>display + send-to actions only</td></tr>
+  <tr><td>engine-specific extras (SDCPP params, krea2 preset, composer layer summary, comic page)</td><td><b>meta_json</b> + <code>schema_version</code></td><td>per-source extras; new keys never need a migration</td></tr>
+  <tr><td>rating (endorsed | disliked)</td><td>tag category <code>rating</code> (single-select)</td><td>the one rating home; mutually exclusive via the partial unique index</td></tr>
+  <tr><td>workflow tags</td><td>tag category <code>workflow</code> (multi)</td><td>independent user tags; filterable per category</td></tr>
+  <tr><td>captions</td><td>tag category <code>captions</code> (multi, scored)</td><td>DeepDanbooru; insights join against the current rating</td></tr>
+  <tr><td>thumbs / previews / net variants</td><td><code>gallery_blobs.db</code></td><td>derived bytes — never loose files; lifecycle rules apply (archive = thumb, trash = none)</td></tr>
+  <tr><td>composer state JSON</td><td>column blob (zlib) in <code>gallery.db</code></td><td>authoritative user work; loaded via the API</td></tr>
+  <tr><td><i>NOT stored at all</i>: grids · preview for archived · anything for trashed</td><td>—</td><td>by lifecycle policy</td></tr>
+</table>
+<p class="small">If a meta field ever earns a filter (e.g. “model”), the upgrade is one migration adding a generated column + index — <code>ALTER TABLE items ADD COLUMN model TEXT GENERATED ALWAYS AS (json_extract(meta_json,'$.model')) VIRTUAL</code> — no data rewrite.</p>
+<p><b>Modules introduced:</b> <code>gallery_db.py</code> (schema + CRUD + FTS sync) · <code>gallery_blobs.py</code> (BlobStore) · <code>gallery_sources.py</code> (providers/parsers) · <code>gallery_lifecycle.py</code> (state machine + archive TTL sweeper) · <code>gallery_query.py</code> (FilterSet/SortSpec → SQL) · <code>gallery_api.py</code> (HTTP endpoints).</p>
+
+<h3>4.4 Identity, keys and compatibility</h3>
+<ul>
+  <li><b>uid</b> = <code>source + ':' + lower(rel_path without extension)</code> — deterministic, matches the existing qwen/krea2 shared-key scheme, so SD Lite archive state stays consistent. Collisions get a <code>#2</code> suffix (rare: same-stem regenerations).</li>
+  <li><b>legacy_keys</b> maps every old <code>item_key</code> (filename stem + engine-prefixed keys) to the new item id — old links, SD Lite probes and trash rows keep resolving during and after migration. Dropped in P6.</li>
+  <li><b>sha256</b> backfilled lazily in the background (≈12 GB to hash once); enables dedupe ("is this the same image?"), endorsed-link verification and corruption checks.</li>
+  <li><b>Facade</b>: <code>endorsement_db.py</code> keeps every public function (<code>endorse</code>, <code>search_generated</code>, <code>trash_archived_and_disliked</code>, <code>read_sidecar_metadata</code>, …) but delegates to <code>gallery_db.py</code>. Dual-write to both DBs until gate G3 so rollback is a flag flip.</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 960 350" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, Segoe UI, sans-serif">
+  <defs>
+    <marker id="g4a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6b8c"/></marker>
+  </defs>
+  <text x="20" y="24" fill="#f87171" font-size="13" font-weight="700">OLD — 7 tables, 2 key schemes, state scattered</text>
+  <text x="540" y="24" fill="#34d399" font-size="13" font-weight="700">NEW — registry + items + states (+ history)</text>
+
+  <g fill="#241a2e" stroke="#6d28d9">
+    <rect x="20" y="40" width="180" height="26" rx="5"/><rect x="20" y="72" width="180" height="26" rx="5"/>
+    <rect x="20" y="104" width="180" height="26" rx="5"/><rect x="20" y="136" width="180" height="26" rx="5"/>
+    <rect x="20" y="168" width="180" height="26" rx="5"/><rect x="20" y="200" width="180" height="26" rx="5"/>
+    <rect x="220" y="40" width="180" height="26" rx="5"/><rect x="220" y="72" width="180" height="26" rx="5"/>
+  </g>
+  <g fill="#e9d5ff" font-size="11">
+    <text x="30" y="57">generated_images</text><text x="30" y="89">endorsements (copy path)</text>
+    <text x="30" y="121">dislikes</text><text x="30" y="153">archived</text>
+    <text x="30" y="185">staged</text><text x="30" y="217">trash (35,462 rows)</text>
+    <text x="230" y="57">image_tags (caption)</text><text x="230" y="89">dup state columns ×6 tables</text>
+  </g>
+  <text x="20" y="252" fill="#f87171" font-size="10.5">Issues: 6 tables repeat the same metadata columns · no history</text>
+  <text x="20" y="268" fill="#f87171" font-size="10.5">(undo is JS-only) · no user tags · no sorting/filter indexes</text>
+  <text x="20" y="284" fill="#f87171" font-size="10.5">beyond 4 fields · LIKE-only search · source = if/elif chain.</text>
+
+  <g fill="#12281f" stroke="#14532d">
+    <rect x="540" y="40" width="180" height="26" rx="5"/><rect x="540" y="72" width="180" height="26" rx="5"/>
+    <rect x="540" y="104" width="180" height="26" rx="5"/><rect x="540" y="136" width="180" height="26" rx="5"/>
+    <rect x="540" y="168" width="180" height="26" rx="5"/><rect x="540" y="200" width="180" height="26" rx="5"/>
+    <rect x="740" y="40" width="180" height="26" rx="5"/><rect x="740" y="72" width="180" height="26" rx="5"/>
+    <rect x="740" y="104" width="180" height="26" rx="5"/><rect x="740" y="136" width="180" height="26" rx="5"/>
+  </g>
+  <g fill="#bbf7d0" font-size="11">
+    <text x="550" y="57">sources (registry)</text><text x="550" y="89">items (+meta_json, variants)</text>
+    <text x="550" y="121">state machine + archive TTL</text><text x="550" y="153">state_events (history)</text>
+    <text x="550" y="185">tag_categories · tags · item_tags</text><text x="550" y="217">saved_views</text>
+    <text x="750" y="57">items_fts (FTS5)</text><text x="750" y="89">composer_states (zlib)</text>
+    <text x="750" y="121">legacy_keys (transition)</text><text x="750" y="153">blob index → gallery_blobs.db</text>
+  </g>
+  <text x="540" y="252" fill="#6ee7b7" font-size="10.5">Wins: one metadata home · filters/sorts indexed · full search ·</text>
+  <text x="540" y="268" fill="#6ee7b7" font-size="10.5">per-source JSON without schema churn · event history per item ·</text>
+  <text x="540" y="284" fill="#6ee7b7" font-size="10.5">new engine = registry row + parser, zero UI edits.</text>
+
+  <g stroke="#5b6b8c" stroke-width="1.6" fill="none" marker-end="url(#g4a)">
+    <path d="M410,60 L540,60"/><path d="M410,120 L540,120"/><path d="M410,185 L540,185"/>
+  </g>
+  <text x="418" y="52" fill="#93a3bf" font-size="10">import rows</text>
+  <text x="418" y="112" fill="#93a3bf" font-size="10">split state</text>
+  <text x="418" y="177" fill="#93a3bf" font-size="10">split tags</text>
+  <text x="380" y="315" fill="#93a3bf" font-size="11">One-time migration · verifiable per table · old DB kept read-only until gate G3 for rollback.</text>
+</svg>
+<figcaption>Graph 4 — data model evolution: the 7 fragmented tables become a registry-driven item store with history and search.</figcaption>
+</figure>
+
+<!-- ================================================================ -->
+<h2 id="s5">5 · Gallery UI refactor (goal 3)</h2>
+
+<figure>
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, Segoe UI, sans-serif">
+  <defs>
+    <marker id="g7a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6b8c"/></marker>
+    <marker id="g7g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#34d399"/></marker>
+  </defs>
+  <rect x="10" y="30" width="200" height="240" rx="10" fill="#101a2e" stroke="#2c3e5e"/>
+  <text x="26" y="54" fill="#22d3ee" font-size="12" font-weight="700">Client (Gradio tab · lite)</text>
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="26" y="66" width="168" height="30" rx="5"/><rect x="26" y="104" width="168" height="30" rx="5"/>
+    <rect x="26" y="142" width="168" height="30" rx="5"/><rect x="26" y="180" width="168" height="30" rx="5"/>
+  </g>
+  <g fill="#cfe0ff" font-size="11">
+    <text x="36" y="85">Filter bar (FilterSet state)</text><text x="36" y="123">Grid (cursor pages)</text>
+    <text x="36" y="161">Preview overlay + filmstrip</text><text x="36" y="199">Batch selection bar</text>
+  </g>
+  <text x="26" y="240" fill="#93a3bf" font-size="10">Vanilla JS modules (fork constraint)</text>
+
+  <rect x="330" y="30" width="260" height="240" rx="10" fill="#101a2e" stroke="#2c3e5e"/>
+  <text x="346" y="54" fill="#f97316" font-size="12" font-weight="700">Gallery API</text>
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="346" y="66" width="228" height="34" rx="5"/><rect x="346" y="112" width="228" height="34" rx="5"/>
+    <rect x="346" y="158" width="228" height="34" rx="5"/><rect x="346" y="204" width="228" height="34" rx="5"/>
+  </g>
+  <g fill="#cfe0ff" font-size="11">
+    <text x="356" y="80">POST /query — FilterSet,Sort,cursor</text><text x="356" y="126">POST /action — 1 card returned</text>
+    <text x="356" y="172">GET /blob — ETag 304 prefetch</text><text x="356" y="218">GET /similar · /export · /stats</text>
+  </g>
+
+  <rect x="710" y="30" width="240" height="240" rx="10" fill="#101a2e" stroke="#2c3e5e"/>
+  <text x="726" y="54" fill="#34d399" font-size="12" font-weight="700">Store</text>
+  <g fill="#12281f" stroke="#14532d">
+    <rect x="726" y="66" width="208" height="48" rx="5"/><rect x="726" y="126" width="208" height="48" rx="5"/>
+  </g>
+  <g fill="#bbf7d0" font-size="11">
+    <text x="736" y="86">gallery.db — SQL + FTS5</text><text x="736" y="102" font-size="10">batched state map · index-only sorts</text>
+    <text x="736" y="146">BlobStore — refs only</text><text x="736" y="162" font-size="10">no bytes in list responses</text>
+  </g>
+  <text x="726" y="210" fill="#93a3bf" font-size="10">counts cached · cursor pagination</text>
+  <text x="726" y="228" fill="#93a3bf" font-size="10">no FS access at query time</text>
+
+  <g stroke="#5b6b8c" stroke-width="1.5" fill="none" marker-end="url(#g7a)">
+    <path d="M210,100 L330,82"/>
+    <path d="M590,82 L710,86"/>
+    <path d="M710,146 L590,128"/>
+    <path d="M590,128 L210,120"/>
+    <path d="M210,196 L330,172"/>
+    <path d="M590,172 L210,212"/>
+  </g>
+  <text x="222" y="66" fill="#93a3bf" font-size="10">query (JSON)</text>
+  <text x="600" y="72" fill="#93a3bf" font-size="10">SQL + blob refs</text>
+  <text x="600" y="146" fill="#93a3bf" font-size="10">cards + blob URLs</text>
+  <text x="222" y="234" fill="#34d399" font-size="10">action → updated card only (no full re-render)</text>
+</svg>
+<figcaption>Graph 5 — query/action flow: filter state in the client, everything else server-side; bytes only via the cached blob endpoint.</figcaption>
+</figure>
+
+<h3>5.1 Advanced filters (3 → 7 core dimensions + extras)</h3>
+<table>
+  <tr><th>Dimension</th><th>Type</th><th>Examples / notes</th></tr>
+  <tr><td><b>time</b></td><td>presets + custom range</td><td>today · 7d · this month · from/to — applies to <i>all</i> views (fixes the scan-view gap)</td></tr>
+  <tr><td><b>source</b></td><td>multi-chip (from <code>sources</code> table)</td><td>txt2img · img2img · inpaint · composition · image_maker · qwen · krea2 · removebg · nano · comic</td></tr>
+  <tr><td><b>state</b></td><td>multi-chip (lifecycle)</td><td>active · staged · archived · trashed (+ derived “unrated” = active with no rating)</td></tr>
+  <tr><td><b>rating</b> (composite tag category, single-select)</td><td>single-chip</td><td>endorsed ⭐ · disliked 👎 · none</td></tr>
+  <tr><td><b>tags</b> (independent tag categories)</td><td>include / exclude picker with counts</td><td>workflow: include “wallpaper”, exclude “test” · captions: “1girl” etc.</td></tr>
+  <tr><td><b>resolution</b></td><td>exact / ratio buckets / min-max side / orientation</td><td>≥1024 · square · portrait · 3:2 · exact 1024×1536</td></tr>
+  <tr><td><b>prompt</b> / <b>negative prompt</b></td><td>text, FTS column-scoped</td><td><code>prompt:cat</code> · <code>negative:blur</code> · phrases · <code>-exclude</code></td></tr>
+  <tr><td>extras</td><td>boolean chips / text</td><td>has-variants (removebg…) · has-composer-state · path/folder substring · saved views</td></tr>
+</table>
+
+<h4>Search grammar (FTS5 + parser)</h4>
+<pre class="ddl">cat on sofa               -- AND tokens over prompt+negative+infotext+tags, ranked
+"on the sofa"             -- exact phrase
+-rain -blur               -- exclusion
+tag:1girl tag:"red dress" -- tag filters (any category)
+rating:endorsed           -- composite rating
+source:qwen               -- source filter
+prompt:cat negative:blur  -- column-scoped text search</pre>
+
+<h4>Sort keys</h4>
+<p>time · resolution (area) · file size · random — each asc/desc. (Today: one fixed order + a single Unrated reverse checkbox.) Meta-only fields (seed / model / steps) are deliberately not sortable; if one ever earns an index, promote it to a generated column in a single migration.</p>
+
+<h3>5.2 Speed plan — measured bottlenecks → fixes</h3>
+<table>
+  <tr><th>#</th><th>Bottleneck (audit finding)</th><th>Fix</th><th>Expected</th></tr>
+  <tr><td>1</td><td>2 SQL queries per card (<code>get_endorsed_id_by_path</code> / dislike) → ~192 queries per page</td><td>one batched state-map query per page</td><td>−95% queries</td></tr>
+  <tr><td>2</td><td>3 views scan the filesystem on every page load (Composed / Image Maker / None SDXL)</td><td>index-at-sync + delta mtime scans; queries become DB-only</td><td>page latency decoupled from folder size</td></tr>
+  <tr><td>3</td><td>Full re-render after every endorse/archive (server renders all cards again)</td><td><code>/action</code> returns only the changed card; client swaps one node</td><td>action feels instant (≤250 ms)</td></tr>
+  <tr><td>4</td><td>Heavy HTML payload (full infotext + actions base64 embedded per card)</td><td>slim cards; metadata fetched on preview open; gzip responses</td><td>−40–60% payload</td></tr>
+  <tr><td>5</td><td>No HTTP caching for thumbs/previews (cache-busted loose files)</td><td>blob endpoint with ETag/immutable + hover prefetch</td><td>repeat views ~0 bytes</td></tr>
+  <tr><td>6</td><td>LIKE-only search; COUNT on big tables</td><td>FTS5 + cached counts + filtered indexes</td><td>search ≤ 80 ms @50k items</td></tr>
+  <tr><td>7</td><td>Path+mtime cache keys break on any move</td><td>item-id keyed blobs</td><td>no cache churn on moves</td></tr>
+</table>
+
+<h3>5.3 More actions</h3>
+<table>
+  <tr><th>Area</th><th>New</th></tr>
+  <tr><td>Batch bar</td><td>multi-select (click + shift range + select-page), batch endorse / dislike / archive / stage / tag / trash, batch export ZIP (images + <code>params.json</code>), batch removebg, batch queue-regenerate, batch copy prompts</td></tr>
+  <tr><td>Find similar</td><td>same-seed family · perceptual hash neighbours · prompt-token similarity → “variants” grouping</td></tr>
+  <tr><td>Compare</td><td>A/B overlay with parameter diff (reuses the existing prompt-compare diff logic)</td></tr>
+  <tr><td>Preview v2</td><td>filmstrip of the page, inline tag editor + notes, variant switcher, metadata diff, keyboard culling flow (exists) + “X of Y triaged” progress</td></tr>
+  <tr><td>Maintenance</td><td>Empty Trash (purge metadata rows), purge orphan sidecars, rebuild FTS, regenerate missing previews, compact blob store; the Archived view shows an auto-trash countdown + “Trash now” action</td></tr>
+</table>
+
+<div class="callout warn">
+  <b>Fork constraints to respect during implementation</b> (learned the hard way, kept in repo memory):
+  new <code>javascript/*.js</code> files need a webui restart (script list is baked at UI creation); edited JS/CSS needs a hard reload (<code>?mtime</code> cache-buster); keep source ASCII (emoji as numeric entities) and run the U+FFFD guard; Python prints must stay cp1252-safe; no pip installs while webui is running; follow the <code>tmp/*_test.py</code> harness pattern; SD Lite API suite (79/79) and mock probes must stay green.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s6">6 · Migration plan</h2>
+
+<figure>
+<svg viewBox="0 0 960 330" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, Segoe UI, sans-serif">
+  <defs>
+    <marker id="g5a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6b8c"/></marker>
+    <marker id="g5r" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#f87171"/></marker>
+  </defs>
+  <!-- phases -->
+  <g fill="#17233c" stroke="#2c3e5e">
+    <rect x="10" y="70" width="120" height="58" rx="8"/><rect x="150" y="70" width="120" height="58" rx="8"/>
+    <rect x="290" y="70" width="120" height="58" rx="8"/><rect x="430" y="70" width="130" height="58" rx="8"/>
+    <rect x="580" y="70" width="120" height="58" rx="8"/><rect x="720" y="70" width="110" height="58" rx="8"/>
+    <rect x="850" y="70" width="100" height="58" rx="8"/>
+  </g>
+  <g fill="#cfe0ff" font-size="11" text-anchor="middle">
+    <text x="70" y="94">M0 Snapshot</text><text x="70" y="110" fill="#93a3bf" font-size="10">DB + caches copy</text>
+    <text x="210" y="94">M1 Schema v1</text><text x="210" y="110" fill="#93a3bf" font-size="10">gallery.db created</text>
+    <text x="350" y="94">M2 Import rows</text><text x="350" y="110" fill="#93a3bf" font-size="10">7 tables → items…</text>
+    <text x="495" y="94">M3 Files &amp; blobs</text><text x="495" y="110" fill="#93a3bf" font-size="10">bundle · links · sweep</text>
+    <text x="640" y="94">M4 Facade swap</text><text x="640" y="110" fill="#93a3bf" font-size="10">dual-write on</text>
+    <text x="775" y="94">M5 UI v2</text><text x="775" y="110" fill="#93a3bf" font-size="10">filters/speed/actions</text>
+    <text x="900" y="94">M6 Retire</text><text x="900" y="110" fill="#93a3bf" font-size="10">delete backups</text>
+  </g>
+  <g stroke="#5b6b8c" stroke-width="1.4" fill="none" marker-end="url(#g5a)">
+    <path d="M130,99 L150,99"/><path d="M270,99 L290,99"/><path d="M410,99 L430,99"/>
+    <path d="M560,99 L580,99"/><path d="M700,99 L720,99"/><path d="M830,99 L850,99"/>
+  </g>
+  <!-- gates -->
+  <g>
+    <rect x="322" y="160" width="56" height="34" rx="6" fill="#251a12" stroke="#fbbf24"/>
+    <text x="350" y="181" fill="#fbbf24" font-size="11" text-anchor="middle">G1</text>
+    <rect x="462" y="160" width="56" height="34" rx="6" fill="#251a12" stroke="#fbbf24"/>
+    <text x="490" y="181" fill="#fbbf24" font-size="11" text-anchor="middle">G2</text>
+    <rect x="612" y="160" width="56" height="34" rx="6" fill="#251a12" stroke="#fbbf24"/>
+    <text x="640" y="181" fill="#fbbf24" font-size="11" text-anchor="middle">G3</text>
+    <rect x="752" y="160" width="56" height="34" rx="6" fill="#251a12" stroke="#fbbf24"/>
+    <text x="780" y="181" fill="#fbbf24" font-size="11" text-anchor="middle">G4</text>
+  </g>
+  <g fill="#93a3bf" font-size="10">
+    <text x="350" y="208" text-anchor="middle">data parity: counts match old DB per table</text>
+    <text x="490" y="208" text-anchor="middle">blob coverage ≥99% · disk reclaimed · sample diffs clean</text>
+    <text x="640" y="208" text-anchor="middle">1-week soak, no P1 bugs (dual-write active)</text>
+    <text x="780" y="208" text-anchor="middle">UI parity checklist + lite suite green</text>
+  </g>
+  <!-- rollback -->
+  <path d="M900,250 C700,290 350,290 210,250" stroke="#f87171" stroke-width="1.4" stroke-dasharray="6 4" fill="none" marker-end="url(#g5r)"/>
+  <text x="470" y="284" fill="#f87171" font-size="10.5" text-anchor="middle">rollback: gallery_v2=0 → old DB + old caches untouched (available until G3 passes)</text>
+  <text x="20" y="34" fill="#93a3bf" font-size="11">Runs online — the webui keeps serving; import jobs are resumable and batched (like the tagger queue). Only M5 needs the usual restart for new JS files.</text>
+</svg>
+<figcaption>Graph 6 — migration pipeline with gates and rollback path.</figcaption>
+</figure>
+
+<h3>6.1 Phases, entry/exit criteria</h3>
+<table>
+  <tr><th>Phase</th><th>What happens</th><th>Exit criteria (gate)</th></tr>
+  <tr><td><b>M0 — Snapshot</b></td><td>copy <code>endorsements.db</code> → <code>endorsements.backup.db</code>; inventory counts; disk-space check; feature flag <code>gallery_v2</code> added (off)</td><td>backup verified openable; inventory report saved</td></tr>
+  <tr><td><b>M1 — Schema</b></td><td>create <code>gallery.db</code> (+ WAL, FTS5 smoke test, <code>PRAGMA user_version=1</code>); seed <code>sources</code></td><td>FTS5 available confirmed; schema version recorded</td></tr>
+  <tr><td><b>M2 — Import rows</b></td><td><code>tools/gallery_migrate/import_rows.py</code>: 7 old tables → <code>items</code> (state machine) + rating tags + <code>tag_categories</code>/<code>tags</code>/<code>item_tags</code> + <code>legacy_keys</code>; archived rows get grace TTL <code>max(archived_at+24h, migration_time+24h)</code>; 35,462 trash rows imported metadata-only; dry-run first, then apply</td><td><b>G1</b>: per-table counts equal (items ⊇ old union), 200-row random metadata diff clean, legacy keys resolve 100%</td></tr>
+  <tr><td><b>M3 — Files &amp; blobs</b></td><td>import existing 20.5k webps into <code>gallery_blobs.db</code> (recompute keys from DB rows); regenerate misses in background (resumable); convert endorsed copies → hardlinks after sha256 verify; absorb 39.6k sidecars + 1.2k composer JSON; sweep orphaned sidecars; removebg → variant rows</td><td><b>G2</b>: blob coverage ≥99% (then 100% via regen), 0 duplicated bytes in <code>endorsed/</code>, orphan sweep logged, disk freed ≥8 GB</td></tr>
+  <tr><td><b>M4 — Facade swap</b></td><td><code>endorsement_db.py</code> delegates to <code>gallery_db.py</code>; <b>dual-write both DBs</b>; lifecycle sweeper active (<code>gallery_lifecycle.py</code>: archive → trash TTL, hourly + at startup); desktop + SD Lite run on v2 in production use</td><td><b>G3</b>: one-week soak, no P1 regressions, lite suite 79/79, performance sanity (page ≤150 ms)</td></tr>
+  <tr><td><b>M5 — UI v2</b></td><td>new query API + filter bar + sort + search + incremental rendering + batch bar + preview v2 (phase plan P4–P5 below)</td><td><b>G4</b>: UI parity checklist (all 10 views, all actions), old renderer behind flag</td></tr>
+  <tr><td><b>M6 — Retire</b></td><td>stop dual-writes; delete loose caches + old DB backup (after one more week); drop <code>legacy_keys</code>; schedule blob compaction</td><td>final disk report; all suites green</td></tr>
+</table>
+
+<h3>6.2 Verification harness (as scripts in <code>tmp/</code>)</h3>
+<ul>
+  <li><code>gallery_parity_test.py</code> — counts + random-sample metadata diff old↔new.</li>
+  <li><code>gallery_blob_test.py</code> — put/get/delete/compact; corruption fallback; ETag behavior.</li>
+  <li><code>gallery_migrate_dryrun.py</code> — full dry run with a JSON report (sizes, orphans, link candidates).</li>
+  <li>Existing suites kept green: <code>mlite_api_test.py</code> (79), mock probes (112), <code>nonesdxl_filter_test.py</code>, desktop render probes.</li>
+</ul>
+
+<div class="callout bad">
+  <b>Known migration hazards:</b> endorsed copies may have different mtimes (sha256 verify before linking, not mtime); A1111 recycles filename numbers (re-index already clears stale trash rows — keep that logic); 35k trash rows import needs batching (10k/batch, resumable); composer JSON parse must tolerate corrupt files (skip + report, never abort); archived rows get the grace TTL so nothing auto-trashes at migration; the old caption label column (endorse/dislike context) is dropped — insights recompute against the current rating tag.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s7">7 · Roadmap &amp; effort</h2>
+
+<div class="card">
+  <div class="bar-row"><span>P0 · Decisions (this doc)</span><div class="bar small-bar" style="width:8%"></div><span class="pill p-purple">S</span></div>
+  <div class="bar-row"><span>P1 · Store + schema</span><div class="bar" style="width:24%"></div><span class="pill p-yellow">M</span></div>
+  <div class="bar-row"><span>P2 · Migration + verify</span><div class="bar" style="width:24%"></div><span class="pill p-yellow">M</span></div>
+  <div class="bar-row"><span>P3 · Facade swap + soak</span><div class="bar green-bar" style="width:10%"></div><span class="pill p-green">S</span></div>
+  <div class="bar-row"><span>P4 · UI filters/search/speed</span><div class="bar alt" style="width:34%"></div><span class="pill p-cyan">L</span></div>
+  <div class="bar-row"><span>P5 · Batch/preview/actions</span><div class="bar alt" style="width:26%"></div><span class="pill p-cyan">M</span></div>
+  <div class="bar-row"><span>P6 · Cleanup + retire</span><div class="bar small-bar" style="width:10%"></div><span class="pill p-purple">S</span></div>
+</div>
+<p class="small" style="margin-top:8px">S ≈ ½–1 day · M ≈ 2–3 days · L ≈ 4–7 days (single developer, this codebase, incl. tests). P4/P5 can start in parallel with M4's soak window. Each phase ends with its gate report.</p>
+
+<!-- ================================================================ -->
+<h2 id="s8">8 · Risks &amp; mitigations</h2>
+<table>
+  <tr><th>Risk</th><th>Mitigation</th></tr>
+  <tr><td>Migration corrupts or loses rows</td><td>M0 snapshot + import in one transaction per batch + G1 parity report + dual-write keeps old DB authoritative until G3</td></tr>
+  <tr><td>Hardlink unsupported (cross-volume / network drive)</td><td>fallback to copy; <code>endorse_mode</code> can also be <code>flag</code> (no file created)</td></tr>
+  <tr><td>Blob store corruption</td><td>separate derived DB; rebuild from originals; integrity check at startup; ETag versioning means browsers won't hold bad data</td></tr>
+  <tr><td>Gradio 3.41 UI constraints</td><td>vanilla JS modules only (no frameworks); keep the Gradio shell; all known fork gotchas baked into the plan (§5 box)</td></tr>
+  <tr><td>Long-running import blocks the UI</td><td>resumable background jobs via a worker queue (same pattern as <code>gallery_tagger</code>); UI shows progress</td></tr>
+  <tr><td>SD Lite breaks mid-transition</td><td>facade keeps its public API; lite suite (79/79) + mock probe (112) run at every gate</td></tr>
+  <tr><td>Disk-space spike during migration</td><td>hardlink conversion happens <i>after</i> verify (no double copies); blob import reuses existing 0.85 GB of caches (no regeneration); check ≥5 GB free at M0</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s9">9 · Acceptance criteria</h2>
+<table>
+  <tr><th>Metric</th><th>Target</th></tr>
+  <tr><td>Loose gallery-managed files</td><td>≤ 13,500 entries (today 74,092) — originals + links only</td></tr>
+  <tr><td>Disk footprint</td><td>≤ 17 GB (today 26.9 GB); endorsed duplication = 0 B</td></tr>
+  <tr><td>Sidecars on disk</td><td>&lt; 500 (today 40,777 incl. orphans); <code>.txt</code> writing off by default</td></tr>
+  <tr><td>Data parity</td><td>100% of old rows reachable; random 200-item metadata diff = 0 mismatches</td></tr>
+  <tr><td>Lifecycle rules</td><td>archived items hold thumb-only and auto-trash after 24 h (endorsed items skipped); trash holds zero media; 0 previews for archived, 0 blobs for trashed</td></tr>
+  <tr><td>Gallery performance</td><td>first page p95 ≤ 150 ms @50k items · action round-trip ≤ 250 ms · search ≤ 80 ms</td></tr>
+  <tr><td>Filters / sort</td><td>7 core filter dims + extras (rating/tag categories) · 4 sort keys · saved views · FTS5 syntax working</td></tr>
+  <tr><td>Regressions</td><td>desktop views parity checklist 100% · lite suite 79/79 · mock probes 112/112</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="s10">10 · Decisions needed from you</h2>
+<table>
+  <tr><th>#</th><th>Decision</th><th>Options</th><th>Recommendation</th></tr>
+  <tr><td>D1</td><td>Endorsed storage</td><td>hardlink · flag-only (no file) · keep copies</td><td><b>hardlink</b> (keeps “endorsed survives delete” semantics at 0 B; flag-only available as setting)</td></tr>
+  <tr><td>D2</td><td>Preview bundle backend</td><td>SQLite blob DB · pack shards · loose files</td><td><b>SQLite blob DB</b> now; pack-shard path behind the same interface when blobs &gt; 8 GB</td></tr>
+  <tr><td>D3</td><td>Composer state</td><td>absorb compressed into DB · keep loose JSON · both</td><td><b>absorb</b> (2.37 GB → ≈0.4–0.8 GB, Composer loads via API)</td></tr>
+  <tr><td>D4</td><td>Sidecar policy</td><td>off-by-default · keep writing · zip archive</td><td><b>off by default</b>, opt-in setting; existing files absorbed + orphans swept</td></tr>
+  <tr><td>D5</td><td>Trash / archive media</td><td>— (decided)</td><td><b>Your principle:</b> Trash = no thumb, no preview (metadata only). Archive = thumb only (preview dropped), auto-moved to Trash after <b>24 h</b> with a visible countdown; endorsed items are TTL-protected. Disliked remains manual. Only left to confirm: the global 24 h TTL.</td></tr>
+  <tr><td>D6</td><td>removebg outputs</td><td>variant in-place · separate files</td><td><b>variant</b> (gallery-visible, linked to parent)</td></tr>
+  <tr><td>D7</td><td>UI shell</td><td>upgrade inside the Gradio tab · standalone page (like /mlite/)</td><td><b>upgrade the tab first</b>; standalone later reuses the same API</td></tr>
+  <tr><td>D8</td><td>Migration timing</td><td>start now · after a manual bare backup</td><td>your call — plan includes its own M0 snapshot, but a manual copy of <code>outputs/</code> is never wrong</td></tr>
+  <tr><td>D9</td><td>Tag categories to seed</td><td>rating + workflow + captions · add quality/character now · fully user-defined categories</td><td><b>rating (single) + workflow (multi, user) + captions (auto)</b>; more categories are data, not code</td></tr>
+</table>
+
+<hr />
+<p class="small">
+  Companion documents: <code>GALLERY_SYSTEM_REPORT.html</code> (audit, live numbers, line-level evidence) ·
+  wiki: <code>analyses/stable-diffusion-webui-gallery-v2-refactor-plan-2026-10-10.md</code>.
+  This plan changes no code; implementation starts at P1 after you pick D1–D8 (defaults are pre-selected if you just say “go”).
+</p>
+
+</div>
+</body>
+</html>

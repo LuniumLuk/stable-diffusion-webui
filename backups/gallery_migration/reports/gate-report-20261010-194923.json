@@ -1,0 +1,97 @@
+{
+  "at": "2026-10-10T19:49:23",
+  "g1": {
+    "tables": {
+      "endorsements": {
+        "old": 4030,
+        "new": null
+      },
+      "dislikes": {
+        "old": 0,
+        "new": null
+      },
+      "generated_images": {
+        "old": 4026,
+        "new": null
+      },
+      "trash": {
+        "old": 35462,
+        "new": 35449
+      }
+    },
+    "spot_checks": 199,
+    "spot_mismatch": 1
+  },
+  "g2": {
+    "items_active": 6259,
+    "items_archived": 0,
+    "items_with_path": 6259,
+    "thumb_covered": 6259,
+    "coverage_pct": 100.0,
+    "blob_store": {
+      "rows": 11283,
+      "bytes": 483085294,
+      "kinds": {
+        "preview": {
+          "rows": 5024,
+          "bytes": 453743664
+        },
+        "thumb": {
+          "rows": 6259,
+          "bytes": 29341630
+        }
+      }
+    }
+  },
+  "states": {
+    "active": 6259,
+    "trashed": 35449
+  },
+  "sources": [
+    {
+      "source": "txt2img",
+      "count": 25356,
+      "bytes": 7699700587
+    },
+    {
+      "source": "img2img",
+      "count": 13109,
+      "bytes": 1418865976
+    },
+    {
+      "source": "composition",
+      "count": 1064,
+      "bytes": 2076075034
+    },
+    {
+      "source": "image_maker",
+      "count": 921,
+      "bytes": 636062745
+    },
+    {
+      "source": "krea2",
+      "count": 497,
+      "bytes": 30783911
+    },
+    {
+      "source": "qwen",
+      "count": 496,
+      "bytes": 4741869
+    },
+    {
+      "source": "comic_maker",
+      "count": 161,
+      "bytes": 157528195
+    },
+    {
+      "source": "endorsed",
+      "count": 100,
+      "bytes": 12465267
+    },
+    {
+      "source": "nano_banana",
+      "count": 4,
+      "bytes": 4056656
+    }
+  ]
+}

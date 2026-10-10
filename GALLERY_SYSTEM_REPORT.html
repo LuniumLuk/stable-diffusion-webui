@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gallery System Audit — stable-diffusion-webui</title>
+<style>
+  :root {
+    --bg: #0b0f19;
+    --panel: #121a2b;
+    --panel2: #0f1626;
+    --border: #22304d;
+    --text: #e7edf7;
+    --muted: #93a3bf;
+    --accent: #f97316;
+    --accent2: #22d3ee;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+            "Noto Sans", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .3px; }
+  h2 {
+    font-size: 20px; margin: 42px 0 12px; padding: 10px 14px;
+    background: linear-gradient(90deg, rgba(249,115,22,.18), rgba(34,211,238,.06) 60%, transparent);
+    border-left: 4px solid var(--accent); border-radius: 6px;
+  }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--accent2); }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: var(--yellow); }
+  p { margin: 8px 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; background: #0a1020; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .chip { display: inline-block; background: #17233c; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); margin: 2px 4px 2px 0; }
+  .chip b { color: var(--text); }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; vertical-align: top; }
+  th { background: #17233c; color: #cfe0ff; font-weight: 600; position: sticky; top: 0; }
+  tr:nth-child(even) td { background: rgba(23,35,60,.28); }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .grid { display: grid; gap: 12px; }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat { text-align: center; padding: 14px 10px; }
+  .stat .v { font-size: 22px; font-weight: 700; color: var(--accent); }
+  .stat .k { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .callout { background: var(--panel2); border: 1px solid var(--border); border-left: 4px solid var(--accent2); border-radius: 8px; padding: 10px 14px; margin: 14px 0; }
+  .warn { border-left-color: var(--yellow); }
+  .bad  { border-left-color: var(--red); }
+  .good { border-left-color: var(--green); }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+  .flow .step { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12.5px; position: relative; }
+  .flow .step b { display: block; color: var(--accent); font-size: 12px; margin-bottom: 4px; }
+  .flow .step span { color: var(--muted); }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 8px; }
+  .toc a { background: #17233c; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .tag { display: inline-block; border-radius: 6px; padding: 1px 7px; font-size: 12px; border: 1px solid; }
+  .tag-state  { color: #fbbf24; border-color: #7c5a10; background: rgba(251,191,36,.08); }
+  .tag-caption{ color: #34d399; border-color: #14532d; background: rgba(52,211,153,.08); }
+  .tag-source { color: #22d3ee; border-color: #155e75; background: rgba(34,211,238,.08); }
+  .pri { font-weight: 700; }
+  .p1 { color: var(--green); } .p2 { color: var(--yellow); } .p3 { color: var(--accent2); }
+  .small { font-size: 12px; color: var(--muted); }
+  .kb { font-family: var(--mono); background: #0a1020; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; font-size: 12px; }
+  ul { margin: 6px 0 12px; padding-left: 22px; }
+  li { margin: 3px 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 30px 0; }
+  @media print {
+    body { background: #fff; color: #111; }
+    h2 { background: none; border-left-color: #f97316; }
+    th { background: #eee; color: #111; }
+    .card, .callout, .flow .step { border-color: #ccc; background: #fafafa; }
+    code, .mono { background: #f2f2f2; color: #111; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🖼 Gallery System Audit</h1>
+<p class="sub">
+  Workspace: <code>d:\stable-diffusion-webui</code> (fork, branch <code>dev</code>) · Generated 2026-10-10 ·
+  Source-verified against <code>scripts/endorsed_gallery.py</code> (2,387 ln), <code>modules/endorsement_db.py</code> (1,892 ln),
+  <code>modules/gallery_tagger.py</code> (182 ln), <code>javascript/endorsedGallery.js</code> (3,053 ln) · Live numbers queried from <code>endorsements.db</code> and the cache/output folders.
+</p>
+
+<div class="grid g4" style="margin-top:18px">
+  <div class="card stat"><div class="v">4,026</div><div class="k">Indexed images (generated_images)</div></div>
+  <div class="card stat"><div class="v">4,030</div><div class="k">⭐ Endorsements (3,976 files in outputs/endorsed)</div></div>
+  <div class="card stat"><div class="v">2,986</div><div class="k">Unique caption tags (645,252 rows)</div></div>
+  <div class="card stat"><div class="v">10</div><div class="k">Gallery views (mode filters)</div></div>
+  <div class="card stat"><div class="v">28</div><div class="k">Discrete filter/display option values + search</div></div>
+  <div class="card stat"><div class="v">35,462</div><div class="k">Trash records (metadata-only graveyard)</div></div>
+  <div class="card stat"><div class="v">9,793</div><div class="k">Thumb cache files (192px webp)</div></div>
+  <div class="card stat"><div class="v">10,519</div><div class="k">Preview cache files (1024px webp)</div></div>
+</div>
+
+<div class="toc">
+  <a href="#s1">1 · What data is saved when an image is generated</a>
+  <a href="#s2">2 · Tags</a>
+  <a href="#s3">3 · Filters, views &amp; actions</a>
+  <a href="#s4">4 · Suggested upgrades &amp; “formalize first”</a>
+  <a href="#s5">Appendix · architecture &amp; quirks</a>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s1">1 · What data is saved when an image is generated</h2>
+
+<h3>1.1 Save pipeline (txt2img / img2img / inpaint)</h3>
+<div class="flow">
+  <div class="step"><b>① create_infotext()</b><span><code>modules/processing.py</code> builds the parameters string per image (prompt, negative, params, fork extras).</span></div>
+  <div class="step"><b>② PNG info chunk</b><span>A1111 writes the string into the PNG <code>parameters</code> tEXt chunk.</span></div>
+  <div class="step"><b>③ .txt sidecar</b><span><code>save_txt</code> default is True in this fork → same-name <code>.txt</code> beside the image.</span></div>
+  <div class="step"><b>④ on_image_saved hook</b><span><code>scripts/endorsed_gallery.py::on_image_saved</code> parses infotext → <code>endorsement_db.index_image()</code> row.</span></div>
+  <div class="step"><b>⑤ Sync All (backfill)</b><span>mtime-based rescan of txt2img/img2img sample dirs + <code>outdir_save</code>; grids &amp; removebg excluded.</span></div>
+  <div class="step"><b>⑥ Thumbnails</b><span>192px thumb + 1024px preview webp generated lazily into <code>cache/gallery_thumbs</code> / <code>gallery_previews</code>.</span></div>
+  <div class="step"><b>⑦ Actions</b><span>Endorse copies the file to <code>outputs/endorsed/YYYY-MM-DD/</code> and stores the copy path + original path.</span></div>
+</div>
+
+<h3>1.2 Infotext fields (source: <code>create_infotext()</code>)</h3>
+
+<h4>Always written</h4>
+<table>
+  <tr><th>Field</th><th>Source</th><th>Notes</th></tr>
+  <tr><td>Prompt</td><td>first line(s) before <code>Negative prompt:</code></td><td>Prompt comments (<code>#</code> lines / <code>#(…)</code> groups) are stripped for sampling but preserved in metadata via <code>all_prompts_with_comments</code>.</td></tr>
+  <tr><td>Negative prompt</td><td>second section</td><td>only when non-empty.</td></tr>
+  <tr><td>Steps</td><td><code>p.steps</code></td><td></td></tr>
+  <tr><td>Sampler</td><td><code>p.sampler_name</code></td><td></td></tr>
+  <tr><td>Schedule type</td><td><code>p.scheduler</code></td><td></td></tr>
+  <tr><td>CFG scale</td><td><code>p.cfg_scale</code></td><td></td></tr>
+  <tr><td>Seed</td><td><code>all_seeds[index]</code></td><td></td></tr>
+  <tr><td>Size</td><td><code>p.width x p.height</code></td><td>base size; see Hires fields below for final size.</td></tr>
+</table>
+
+<h4>Conditional / opt-in (settings switches)</h4>
+<table>
+  <tr><th>Field</th><th>Condition</th></tr>
+  <tr><td>Model, Model hash</td><td><code>add_model_name_to_info</code> / <code>add_model_hash_to_info</code></td></tr>
+  <tr><td>VAE, VAE hash</td><td><code>add_vae_name_to_info</code> / <code>add_vae_hash_to_info</code>; also “VAE Encoder” / “VAE Decoder” when overridden</td></tr>
+  <tr><td>Version, User</td><td><code>add_version_to_infotext</code> / <code>add_user_name_to_info</code></td></tr>
+  <tr><td>Image CFG scale, Face restoration, Variation seed(+strength), Seed resize from, Clip skip, ENSD, RNG, Tiling, FP8 weight / Cache FP16 weight</td><td>only when actually active</td></tr>
+  <tr><td>Token merging ratio (+ hr)</td><td>when ToMe ratio ≠ 0</td></tr>
+  <tr><td>Init image hash</td><td>img2img/inpaint</td></tr>
+</table>
+
+<h4>Fork-specific extras (via <code>extra_generation_params</code>)</h4>
+<table>
+  <tr><th>Group</th><th>Keys</th></tr>
+  <tr><td>Hires. fix (classic)</td><td>Hires upscale · Hires resize · Hires upscaler · Hires steps · Hires checkpoint · Hires sampler · Hires prompt · Hires negative prompt · Hires schedule type · Denoising strength</td></tr>
+  <tr><td>Hires. fix (staged, fork)</td><td><b>Hires stage config</b> · <b>Hires stage count</b> · <b>Hires stage plan</b></td></tr>
+  <tr><td>img2img / inpaint</td><td>Denoising strength · Mask mode · Mask blur · Inpaint area · Masked area padding · Masked content · Noise multiplier · Conditional mask weight</td></tr>
+  <tr><td>Misc</td><td>Old prompt editing timelines</td></tr>
+</table>
+
+<h3>1.3 Where the data lands</h3>
+<table>
+  <tr><th>Store</th><th>Content</th><th>Consumers</th></tr>
+  <tr><td>PNG <code>parameters</code> chunk</td><td>full infotext (single source of truth)</td><td>A1111 paste, gallery indexing, sidecar metadata fallback</td></tr>
+  <tr><td><code>.txt</code> sidecar</td><td>same text (UTF-8)</td><td>sidecar engines (qwen/krea2) always write it; gallery reads it first for None SDXL cards</td></tr>
+  <tr><td><code>generated_images</code> DB row</td><td>path · item_key (filename stem, lowercase) · indexed_at · file_mtime · prompt · negative_prompt · seed · steps · sampler · cfg_scale · width · height · model_name · model_hash · <b>infotext</b> (raw)</td><td>All Generated / Unrated / Archived / Staged views; keyword search; stats</td></tr>
+  <tr><td><code>endorsements</code> / <code>dislikes</code> rows</td><td>same metadata + state timestamp; endorse also stores <code>original_path</code> (file copy in <code>outputs/endorsed</code>)</td><td>Endorsed / Disliked views, tagger, insights</td></tr>
+  <tr><td><code>trash</code> row</td><td>full metadata copy kept <b>after</b> files + cache are deleted</td><td>Trash view, statistics</td></tr>
+  <tr><td>Thumb / preview caches</td><td>keyed <code>sha1(path|mtime)</code>; fall back to DB <code>file_mtime</code> when the original was deleted</td><td>grid cards, preview overlay</td></tr>
+</table>
+
+<h3>1.4 Database schema (7 tables — <code>endorsements.db</code> at repo root)</h3>
+<table>
+  <tr><th>Table</th><th>Key</th><th>Role / rules</th></tr>
+  <tr><td><code>generated_images</code></td><td><code>path</code> UNIQUE, <code>item_key</code> indexed</td><td>the searchable index; mtime index for date sorting; re-index replaces by item_key and clears a stale trash row (A1111 recycles filename numbers).</td></tr>
+  <tr><td><code>endorsements</code></td><td><code>item_key</code></td><td>⭐ state; copy of file in <code>outputs/endorsed/&lt;date&gt;</code>; unendorse deletes only the copy. Removes any dislike for the same item.</td></tr>
+  <tr><td><code>dislikes</code></td><td><code>image_path</code> UNIQUE, <code>item_key</code></td><td>👎 state (DB-only, no file copy). Mutually exclusive with endorse.</td></tr>
+  <tr><td><code>archived</code></td><td><code>item_key</code> UNIQUE</td><td>📦 hides from Unrated; unarchive restores.</td></tr>
+  <tr><td><code>staged</code></td><td><code>item_key</code> UNIQUE</td><td>📌 “picked”; excluded from Unrated; blocked if already rated.</td></tr>
+  <tr><td><code>trash</code></td><td><code>item_key</code> UNIQUE</td><td>🗑 metadata graveyard; every state query appends a trash exclusion → trashed items show <b>only</b> in Trash; state-changing card actions are guarded off.</td></tr>
+  <tr><td><code>image_tags</code></td><td>(<code>item_key</code>, <code>label</code>)</td><td>DeepDanbooru caption tags with per-tag score; <code>label</code> = <code>endorse</code> | <code>dislike</code>.</td></tr>
+</table>
+
+<div class="callout">
+  <b>Item identity.</b> Everything hangs off <code>item_key</code> = lowercase filename stem. For qwen/krea2 outputs the key is <code>qwen-… / krea2-… + lowercased outputs-relative path</code> (every run writes <code>000.png</code>), and the same key is used by the desktop Gallery and SD Lite so archive state is shared.
+</div>
+
+<h3>1.5 Derived labels shown on cards (computed, not stored)</h3>
+<ul>
+  <li><b>Resolution badge</b> — <code>width×height</code>, multiplied by Hires upscale when Hires markers are present.</li>
+  <li><b>🔼 Hires marker</b> — shown when any of <code>Hires upscale/upscaler/steps</code>, <code>First pass size</code>, <code>Hires resize</code> appears.</li>
+  <li><b>Generation type badge</b> — <code>txt2img</code> / <code>img2img</code> inferred metadata-first (Hires markers win), then path fallback.</li>
+  <li><b>Capsules</b> — Steps · CFG · HSteps · Denoise · Seed (golden-ratio colour capsule for visual seed separation) · Hires stage chips.</li>
+  <li><b>⚙ config badge</b> (Composed) when a <code>.composerstate.json</code> sidecar exists.</li>
+  <li><b>Date overlay</b> — file mtime (or state timestamp when the original is gone).</li>
+</ul>
+
+<!-- ==================================================================== -->
+<h2 id="s2">2 · Tags</h2>
+
+<p>“Tags” in this system means three different things — keep them separate when planning upgrades:</p>
+
+<h3>2.1 State tags (workflow states, 1 per image)</h3>
+<table>
+  <tr><th>Tag</th><th>Store</th><th>Meaning / rules</th></tr>
+  <tr><td><span class="tag tag-state">⭐ Endorsed</span></td><td><code>endorsements</code></td><td>keeper; file copied to <code>outputs/endorsed/</code>. Dislike for the same item is removed.</td></tr>
+  <tr><td><span class="tag tag-state">👎 Disliked</span></td><td><code>dislikes</code></td><td>negative feedback; DB-only. Drives Keyword Insights “remove” list.</td></tr>
+  <tr><td><span class="tag tag-state">📦 Archived</span></td><td><code>archived</code></td><td>hidden from Unrated; can be bulk-archived (“Archive Unrated”). Deleting archived/disliked moves them to Trash.</td></tr>
+  <tr><td><span class="tag tag-state">📌 Staged</span></td><td><code>staged</code></td><td>“pick list”; excluded from Unrated; auto-cancelled by endorse / dislike / archive.</td></tr>
+  <tr><td><span class="tag tag-state">🗑 Trash</span></td><td><code>trash</code></td><td>files + thumbnails deleted, metadata kept; invisible everywhere except the Trash view.</td></tr>
+  <tr><td><span class="tag tag-state">⬜ Unrated</span></td><td><i>derived</i></td><td>indexed images not in any of the five states above, not staged and not trashed. The triage queue.</td></tr>
+</table>
+
+<h3>2.2 Source tags (scan-only views — not DB states)</h3>
+<p>
+  <span class="tag tag-source">🎨 Composed</span> <code>outputs/composition</code> ·
+  <span class="tag tag-source">📷 Image Maker</span> <code>outputs/image_maker</code> ·
+  <span class="tag tag-source">🚫 None SDXL</span> <code>outputs/qwen</code> + <code>outputs/krea2</code> (single merged view, but separate keys/actions per engine)
+</p>
+
+<h3>2.3 Caption tags (auto DeepDanbooru) — the real “tag” database</h3>
+<div class="grid g3">
+  <div class="card stat"><div class="v">645,252</div><div class="k">tag rows in <code>image_tags</code></div></div>
+  <div class="card stat"><div class="v">2,986</div><div class="k">unique tags</div></div>
+  <div class="card stat"><div class="v">168,854 / 476,398</div><div class="k">rows labelled endorse / dislike</div></div>
+</div>
+<ul>
+  <li><b>When:</b> queued automatically by <code>modules/gallery_tagger.py</code> when you endorse or dislike a card (background daemon, queue cap 200); batch backfill runs on “Refresh Insights” with a live progress bar (tagging only un-tagged items).</li>
+  <li><b>What:</b> <code>deepbooru.model.tag_raw()</code> → <code>{tag: score}</code>, stored per (item_key, label).</li>
+  <li><b>Where they show:</b> card “Caption” pills (top 20), preview overlay (full list), Keyword Insights (top 50 “✅ add” / “❌ remove” with counts + confidence), and Queue-Fire prompt autocomplete (endorsed captions are folded into the suggestion counter).</li>
+</ul>
+
+<div class="callout warn">
+  <b>Live-data oddity worth a cleanup task:</b> the <code>dislikes</code> table is currently empty (0), yet 476,398 dislike-labelled caption rows remain. Caption rows survive trash operations, so these are orphaned historical tags. They inflate the DB and pollute the “remove” insights with unverifiable signal.
+</div>
+
+<h3>2.4 Visual markers on cards (for completeness)</h3>
+<p>
+  Corner toggles: ⭐/☆ endorse · 📦/📤 archive · 👎/⬇ dislike · 📌/📍 stage.
+  Badges: resolution · 🔼 Hires · <code>txt2img</code>/<code>img2img</code>. Capsules: Steps, CFG, HSteps, Denoise, Seed, Hires-stage.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="s3">3 · Filters, views &amp; actions</h2>
+
+<h3>3.1 The 10 Gallery views (mode filter)</h3>
+<table>
+  <tr><th>#</th><th>View</th><th>Data source</th><th>Sort</th><th>Notes</th></tr>
+  <tr><td>1</td><td>⭐ Endorsed</td><td><code>endorsements</code> (paged SQL)</td><td>endorsed_at ↓</td><td>Excludes disliked + trashed; files live in <code>outputs/endorsed</code>.</td></tr>
+  <tr><td>2</td><td>📌 Staged</td><td><code>staged</code> JOIN <code>generated_images</code></td><td>staged_at ↓</td><td>Picked list; excluded from Unrated.</td></tr>
+  <tr><td>3</td><td>🖼 All Generated</td><td><code>generated_images</code></td><td>file_mtime ↓</td><td>Excludes disliked + trashed; shows sync hint when index empty.</td></tr>
+  <tr><td>4</td><td>⬜ Unrated</td><td><code>generated_images</code> minus all states</td><td>file_mtime ↓ (+reverse toggle)</td><td>Triage queue; target of auto-refresh.</td></tr>
+  <tr><td>5</td><td>🎨 Composed</td><td><b>folder scan</b> <code>outputs/composition/*.png</code></td><td>mtime ↓</td><td>⚙ badge when <code>.composerstate.json</code> exists; image-only actions; <b>ignores the Date filter</b>.</td></tr>
+  <tr><td>6</td><td>📷 Image Maker</td><td><b>recursive scan</b> <code>outputs/image_maker</code></td><td>mtime ↓</td><td>No generation metadata; search = relative path; ignores Date filter.</td></tr>
+  <tr><td>7</td><td>🚫 None SDXL</td><td><b>scan</b> <code>outputs/qwen</code> + <code>outputs/krea2</code></td><td>mtime ↓</td><td>Archived items move to the Archived view; trashed hidden; sidecar metadata recovered from <code>.txt</code>/PNG; K2/Qwen reference sends; ignores Date filter.</td></tr>
+  <tr><td>8</td><td>📦 Archived</td><td><code>archived</code> JOIN index <b>+</b> archived qwen/krea2 rows</td><td>archived_at ↓</td><td>Two sources spliced into one page window.</td></tr>
+  <tr><td>9</td><td>👎 Disliked</td><td><code>dislikes</code></td><td>disliked_at ↓</td><td>Toggle restores to generated/endorsed.</td></tr>
+  <tr><td>10</td><td>🗑 Trash</td><td><code>trash</code></td><td>trashed_at ↓</td><td>Card action stacks removed; preview/copy/download still work; state-changing actions blocked.</td></tr>
+</table>
+
+<h3>3.2 Filter controls — the count</h3>
+<p>
+  <b>3 true data-filter dimensions:</b> <b>View</b> (10 options) × <b>Search</b> (free text) × <b>Date</b> (4 options).
+  Plus <b>6 result/presentation controls:</b> page size ×3, thumb size ×3, card extras ×2, auto-refresh ×5, reverse order ×1, Prev/Next pagination.
+  <b>Total discrete option values: 28 + free-text search.</b>
+</p>
+<table>
+  <tr><th>Control</th><th>Options</th><th class="num">Count</th><th>Default</th><th>Notes</th></tr>
+  <tr><td>Mode / View</td><td>Endorsed · Staged · All Generated · Unrated · Composed · Image Maker · None SDXL · Archived · Disliked · Trash</td><td class="num">10</td><td>⭐ Endorsed</td><td>The primary filter (radio).</td></tr>
+  <tr><td>Search</td><td>free text — multi-token AND, comma/space separated, case-insensitive</td><td class="num">1</td><td>empty</td><td>DB modes: LIKE over prompt, negative_prompt, model_name, sampler. Scan modes: substring on the display path only.</td></tr>
+  <tr><td>Date</td><td>All time · 1 day · 2 days · 1 week</td><td class="num">4</td><td><b>1 day</b></td><td>Applied as <code>since_ts</code> (mtime for generated/archived/staged; state ts for endorsed/disliked/trash). <b>Ignored by the 3 scan views.</b></td></tr>
+  <tr><td>Page Size</td><td>24 · 48 · 96</td><td class="num">3</td><td>48</td><td>Server-side; backend clamps to ≥ 12.</td></tr>
+  <tr><td>Thumb Size</td><td>Small 140px · Medium 220px · Large 280px</td><td class="num">3</td><td>Medium</td><td>CSS grid card min-width.</td></tr>
+  <tr><td>Card Extras</td><td>Expanded · Folded</td><td class="num">2</td><td>Folded</td><td>Details panel open/closed by default.</td></tr>
+  <tr><td>Auto Refresh</td><td>Off · 10s · 20s · 30s · 60s</td><td class="num">5</td><td>Off</td><td>Only acts on <b>Unrated</b>: refreshes when an image completes + periodically.</td></tr>
+  <tr><td>Reverse order</td><td>on / off</td><td class="num">1</td><td>off</td><td>Unrated only checkbox; persisted to localStorage.</td></tr>
+</table>
+
+<div class="callout">
+  <b>Sorting today is fixed per view</b> (newest state/mtime first). The only user sort control is the Unrated reverse toggle. No sort-by-model / seed / steps / resolution exists yet — a prime quick-win candidate.
+</div>
+
+<h3>3.3 Action inventory</h3>
+
+<h4>Per-card (DB cards: 9 buttons; scan cards: 3–7)</h4>
+<table>
+  <tr><th>Card type</th><th>Buttons</th></tr>
+  <tr><td>DB card (Endorsed / Staged / All Generated / Unrated / Archived / Disliked)</td><td>Corner: ⭐/☆ · 📦/📤 · 👎/⬇ · 📌/📍 ⟶ Quick row: 📝 txt2img (params+seed) · 🔥 Fire-queue jobs · 🖼 img2img (+source image) · ✂ removebg · 🎨 Inpaint</td></tr>
+  <tr><td>None SDXL card (with recovered metadata)</td><td>📝 Use-in-text (seed recovery) · 🧩 Composer · 🖼 img2img · 🎨 Inpaint · <b>K2</b>/<b>Qwen</b> reference sends · 📦 archive — without metadata the 📝/param-carrying sends degrade to image-only.</td></tr>
+  <tr><td>Composed / Image Maker card</td><td>🧩 Composer · 🖼 img2img · 🎨 Inpaint (all image-only)</td></tr>
+  <tr><td>Trash card</td><td>none (metadata details + preview only)</td></tr>
+</table>
+
+<h4>Preview overlay (click any thumbnail)</h4>
+<ul>
+  <li>Zoom (wheel, cursor-anchored) · pan (drag) · dbl-click reset · three-column layout: metadata left / image centre / actions right.</li>
+  <li>Base actions: 📁 View in Explorer · ⇩ Download original · 🧩 To Composer · 🖊 To Censor · ✕ Close + mirror of the card’s quick buttons.</li>
+  <li>Keyboard: <span class="kb">Esc</span> close · <span class="kb">←</span>/<span class="kb">→</span> prev/next · <span class="kb">↑</span> endorse+advance · <span class="kb">↓</span> dislike+advance · <span class="kb">H</span> Fire-queue · <span class="kb">A</span> archive · <span class="kb">S</span> stage · <span class="kb">Ctrl+Z</span>/<span class="kb">Ctrl+Y</span> action undo/redo.</li>
+</ul>
+
+<h4>Toolbar / bulk / panels</h4>
+<ul>
+  <li><b>Refresh</b> · <b>📊 Statistics</b> (modal: indexed, originals on disk, deleted originals, thumb/preview cache counts+sizes, all state counts, unique caption tags, total disk) · <b>📦 Archive Unrated</b> · <b>🧹 Delete Archived and Disliked</b> (→ Trash) · <b>Sync All</b> · <b>Rebuild Suggest DB</b>.</li>
+  <li><b>Queue-Fire config</b> — textarea of override sets; 19 canonical keys (Prompt, Negative prompt, Hires stage, Enable Hires fix, Steps, Sampler, Schedule type, CFG scale, Seed, Width, Height, Denoising strength, Hires upscale/upscaler/steps/resize-1/resize-2, Batch count, Batch size) with aliases, per-line Cartesian expansion for <code>[a,b]</code> lists, syntax highlighting + value autocomplete; persisted server-side to <code>config_states/endgal_fire_config.txt</code> (+ localStorage).</li>
+  <li><b>🔍 Keyword Insights</b> — streams captioning progress, then shows top-50 “add to prompt” vs “remove from prompt” tables (endorse − dislike net, avg confidence).</li>
+</ul>
+
+<h3>3.4 Known gaps observed while auditing</h3>
+<ul>
+  <li><b>Filter parity:</b> the 3 scan views (Composed / Image Maker / None SDXL) ignore the Date dropdown; search covers only the display path, not prompt text (except None SDXL where prompt comes from sidecars but still isn’t searched).</li>
+  <li><b>Sorting:</b> no sort picker; newest-first only (+ one reverse checkbox).</li>
+  <li><b>Trash lifecycle:</b> 35,462 rows with no Restore / Purge / Empty-Trash UI; trash rows include metadata but there is no way to purge them (disk impact is only cache rows).</li>
+  <li><b>Orphaned caption data:</b> 476k dislike-labelled tag rows with 0 dislikes live.</li>
+  <li><b>Index coverage:</b> removebg outputs are deliberately excluded from the index; nano-banana (4) / comic_maker (161) / sana (0) outputs exist on disk but have no gallery view at all.</li>
+  <li><b>Two gallery front-ends</b> (desktop Gallery tab + SD Lite “Gallery” screen with 9 views) share DB state but not filter/action code.</li>
+</ul>
+
+<!-- ==================================================================== -->
+<h2 id="s4">4 · Suggested upgrades &amp; “formalize first”</h2>
+
+<p>
+  <b>How to read this:</b> “Formalize first” = the design documents/specs to write <i>before</i> touching code, because every later upgrade leans on them.
+  The roadmap below is ordered by dependency and by value-per-effort against the live numbers above.
+</p>
+
+<h3>4.1 Formalize first (spec phase — no code)</h3>
+<table>
+  <tr><th>#</th><th>Spec</th><th>Why it must come first</th><th>Contents / acceptance</th></tr>
+  <tr>
+    <td class="pri">F1</td>
+    <td><b>Unified Gallery Item &amp; Provider model</b></td>
+    <td>Today there are 4 different data pipelines (paged SQL, SQL+sidecar merge, folder scan, archived-splice) and 3 key schemes. Every inconsistency in §3.4 traces back to this. Without it, each new filter/view/action must be implemented 4×.</td>
+    <td>Define <code>GalleryItem</code> (key, provider, path, mtime, state flags, metadata, caption tags, cache urls) and <code>GalleryProvider</code> (list(filters, sort, page) → items+total; capability map for filters/actions). Register: generated, endorsed, disliked, archived, staged, trash, composed, image_maker, none_sdxl (+ later removebg, nano-banana, comic_maker, sana). <b>Acceptance:</b> a new source = 1 provider, 0 UI changes; all views accept the same filter object.</td>
+  </tr>
+  <tr>
+    <td class="pri">F2</td>
+    <td><b>Filter &amp; Sort Matrix</b></td>
+    <td>The current control set is fixed and uneven (date ignored by scans; search means different things per view). Users cannot slice 4k+ images by model/sampler/tag; sort is frozen.</td>
+    <td>Define <code>FilterSet</code> {search syntax, date-range, models[], samplers[], caption tags[], states[], resolution/aspect, seed range, has-metadata} + <code>SortSpec</code> {key: date|seed|model|steps|resolution|state, dir}. Per-provider capability flags drive grey-out in UI. Search grammar: quoted phrases, <code>-exclude</code>, <code>tag:name</code>, later FTS5. <b>Acceptance:</b> written per-provider capability table + UI spec for unsupported controls.</td>
+  </tr>
+  <tr>
+    <td class="pri">F3</td>
+    <td><b>Tag taxonomy &amp; storage</b></td>
+    <td>“Tags” conflates 3 concepts (§2). There is no user tagging, no collections, no tag filter, and orphan cleanup is undefined — that’s why 476k stale dislike rows exist.</td>
+    <td>Split: <i>state</i> (existing 1-per-item tables — keep), <i>caption tags</i> (rename semantics of <code>image_tags</code>, keep scores), <i>user tags/collections</i> (new <code>gallery_tags</code> + <code>item_tags</code>: colour, rename/merge/delete, multi-assign, filterable). Define case folding, limits, bulk tagging, export/import, orphan + retention policy. <b>Acceptance:</b> tag filter in every DB view; caption purge rules documented.</td>
+  </tr>
+  <tr>
+    <td class="pri">F4</td>
+    <td><b>Trash lifecycle &amp; storage policy</b></td>
+    <td>35,462 trash rows already, zero restore/purge tooling. Trash currently deletes files + caches immediately (no undo), while keeping metadata forever — that contract must be written down and surfaced.</td>
+    <td>Define: retention (row cap / age), Restore semantics (file copy is gone → what restores?), Purge / Empty-Trash (rows only) vs Delete-now, per-item vs bulk, disk accounting into Statistics. Document the “recycled item_key clears trash row” behavior. <b>Acceptance:</b> UI spec for Trash view buttons + counter; policy table.</td>
+  </tr>
+</table>
+
+<h3>4.2 Upgrade roadmap (after specs)</h3>
+<table>
+  <tr><th>Band</th><th>Upgrade</th><th>Impact / notes</th></tr>
+  <tr><td class="pri p1">P1 · quick wins</td><td><b>Sort picker</b> (date / seed / model / sampler / steps / resolution, asc-desc)</td><td>Reuses <code>SortSpec</code>; the only sort today is one reverse checkbox. Low effort — SQL already returns all fields.</td></tr>
+  <tr><td class="pri p1">P1</td><td><b>Trash view tooling</b>: Restore pointers, Purge selected, Empty Trash, trash counter in Statistics</td><td>Directly addresses 35,462 rows; no file I/O (metadata-only), so safest bulk UI to build first.</td></tr>
+  <tr><td class="pri p1">P1</td><td><b>Search syntax v2</b>: <code>-exclude</code>, <code>"phrase"</code>, <code>tag:name</code>, <code>model:x</code>; unify DB + scan modes</td><td>Current AND-token LIKE is fine but shallow; a shared tokenizer also fixes scan-mode search (“path only”).</td></tr>
+  <tr><td class="pri p1">P1</td><td><b>Caption/orphan cleanup job</b>: purge dislike tags with no dislike rows, VACUUM/ANALYZE</td><td>645k rows → immediate DB size + insights-quality win.</td></tr>
+  <tr><td class="pri p1">P1</td><td><b>Date-filter parity for scan views</b></td><td>Reuse every file’s mtime (already known); removes the biggest “why doesn’t this filter work” trap.</td></tr>
+  <tr><td class="pri p2">P2 · workflow</td><td><b>Multi-select batch bar</b> (range/shift-click, select-page): endorse, dislike, archive, stage, tag, export, trash</td><td>The current bulk set is only “Archive Unrated” + “Delete Archived and Disliked”; per-card only otherwise.</td></tr>
+  <tr><td class="pri p2">P2</td><td><b>Saved views / smart filters</b> (persist a FilterSet as a named chip)</td><td>E.g. “krea2 portraits, last week, seeded refs” — today all control state resets (only fire config + reverse toggle persist).</td></tr>
+  <tr><td class="pri p2">P2</td><td><b>FTS5 search index</b> over prompt / negative / infotext / caption tags</td><td>Needed beyond ~10k items; ranking + phrase queries; keep LIKE fallback for small DBs.</td></tr>
+  <tr><td class="pri p2">P2</td><td><b>Duplicate / variation clustering</b> (seed+prompt groups, perceptual hash)</td><td>Batch runs (batch count / fire queue) produce near-identical groups that currently look like noise.</td></tr>
+  <tr><td class="pri p2">P2</td><td><b>Unrated triage speed-run</b>: prefetch next previews, “X of Y triaged” progress, auto-advance toggle</td><td>Keyboard flow already exists in the overlay (↑↓←→) — this makes it a proper culling session.</td></tr>
+  <tr><td class="pri p3">P3 · platform</td><td><b>One Gallery API</b> serving desktop tab + SD Lite + scripts (server-side FilterSet/SortSpec)</td><td>Removes the two-front-end drift; SD Lite already mirrors 9 of 10 views.</td></tr>
+  <tr><td class="pri p3">P3</td><td><b>New providers</b>: removebg (currently excluded), nano-banana, comic_maker, sana</td><td>~364 files on disk today are completely invisible in the gallery (4 + 161 + 199).</td></tr>
+  <tr><td class="pri p3">P3</td><td><b>Analytics expansion</b>: tag charts, model/sampler dashboards, storage cleanup view</td><td>Extends Keyword Insights (already label-aware) into a real stats surface.</td></tr>
+  <tr><td class="pri p3">P3</td><td><b>Virtualized grid / infinite scroll</b> for 10k+ collections</td><td>Keep server-side paging; render windowed. Only needed once collections grow well past today’s 4k.</td></tr>
+  <tr><td class="pri p3">P3</td><td><b>Gallery regression harness</b> (extend the existing <code>tmp/*_filter_test.py</code> pattern)</td><td>Provider/filter/sort specs make this testable at last; prevents the emoji-U+FFFD / stale-<code>?mtime</code> classes of bugs.</td></tr>
+</table>
+
+<div class="callout good">
+  <b>Suggested execution order:</b> F1 + F2 (specs) → P1 batch 1 (sort picker, trash tooling, cleanup job — all independent of F1) →
+  F3 + F4 specs → P2 (batch bar, saved views, FTS5) → P3. The P1 items were chosen so they can ship while the specs are being written.
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s5">Appendix · Architecture &amp; quirks</h2>
+
+<h3>A.1 Code map</h3>
+<table>
+  <tr><th>File</th><th>Lines</th><th>Role</th></tr>
+  <tr><td><code>scripts/endorsed_gallery.py</code></td><td class="num">2,387</td><td>UI tab, 10 view fetchers, card renderers, actions, Fire config, insights, statistics, indexing hook.</td></tr>
+  <tr><td><code>modules/endorsement_db.py</code></td><td class="num">1,892</td><td>SQLite: schema, states, search/count functions, trash engine, sidecar metadata reader.</td></tr>
+  <tr><td><code>modules/gallery_tagger.py</code></td><td class="num">182</td><td>DeepDanbooru tagging queue + batch backfill for endorsed/disliked items.</td></tr>
+  <tr><td><code>javascript/endorsedGallery.js</code></td><td class="num">3,053</td><td>Card actions, preview overlay (zoom/pan/keyboard), Fire queueing, suggestions, auto-refresh, stats modal.</td></tr>
+  <tr><td><code>style.css</code></td><td class="num">219 rules*</td><td><code>.endgal-*</code> styling (grid, cards, capsules, overlay). *<code>.endgal-</code> selector lines inside 4,087-line file.</td></tr>
+  <tr><td><code>modules/deepbooru.py</code></td><td class="num">90</td><td>Caption model wrapper used by the tagger.</td></tr>
+</table>
+
+<h3>A.2 Live inventory (2026-10-10)</h3>
+<table>
+  <tr><th>Location</th><th class="num">Images</th><th>Location</th><th class="num">Images</th></tr>
+  <tr><td><code>outputs/txt2img-images</code></td><td class="num">3,379</td><td><code>outputs/composition</code></td><td class="num">1,064</td></tr>
+  <tr><td><code>outputs/img2img-images</code></td><td class="num">660</td><td><code>outputs/image_maker</code></td><td class="num">921</td></tr>
+  <tr><td><code>outputs/endorsed</code></td><td class="num">3,976</td><td><code>outputs/removebg</code> (excluded from index)</td><td class="num">199</td></tr>
+  <tr><td><code>outputs/qwen</code></td><td class="num">11</td><td><code>outputs/krea2</code></td><td class="num">63</td></tr>
+  <tr><td><code>outputs/comic_maker</code> (no view)</td><td class="num">161</td><td><code>outputs/nano-banana</code> (no view)</td><td class="num">4</td></tr>
+  <tr><td><code>outputs/grids</code></td><td class="num">0</td><td><code>outputs/sana</code></td><td class="num">0</td></tr>
+</table>
+
+<h3>A.3 Behavioural quirks to keep in mind</h3>
+<ul>
+  <li>Indexing skips grid images and removebg attachments; re-indexing clears a stale trash row for the same item_key.</li>
+  <li>Endorse = <b>copy</b> (original stays); unendorse deletes the copy only. Archive/dislike/stage are DB-only flags.</li>
+  <li>Delete-Archived-and-Disliked moves metadata to trash, deletes originals + cached thumb/preview (cache keys use path+mtime).</li>
+  <li>Thumbnails can outlive originals (archived+deleted case) via the DB-stored mtime fallback.</li>
+  <li>Scan views hide archived (None SDXL → moved into Archived view) and trashed items; item keys for qwen/krea2 are shared with SD Lite.</li>
+  <li>Date filter defaults to <b>1 day</b> — older images are hidden until you switch to “All time”.</li>
+  <li>Trash guard: any state-changing action on a trashed item is neutralised server-side.</li>
+</ul>
+
+<hr />
+<p class="small">
+  Report generated by Copilot from source + live DB state. Companion wiki page:
+  <code>D:\wiki\wiki\analyses\stable-diffusion-webui-gallery-system-audit-2026-10-10.md</code> ·
+  HTML artifact: <code>GALLERY_SYSTEM_REPORT.html</code> (repo root).
+</p>
+
+</div>
+</body>
+</html>

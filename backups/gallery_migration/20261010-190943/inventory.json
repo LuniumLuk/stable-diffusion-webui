@@ -1,0 +1,13 @@
+{
+  "taken_at": "20261010-190943",
+  "source_db": "D:\\stable-diffusion-webui\\endorsements.db",
+  "tables": {
+    "endorsements": 4030,
+    "dislikes": 0,
+    "generated_images": 4026,
+    "archived": 3,
+    "staged": 1,
+    "trash": 35462,
+    "image_tags": 645252
+  }
+}

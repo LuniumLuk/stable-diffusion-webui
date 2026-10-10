@@ -7,6 +7,24 @@ import shutil
 import sqlite3
 from datetime import datetime
 
+try:
+    from modules import gallery_bridge
+except Exception:  # partial/stubbed module trees (test harnesses): degrade to legacy-only
+    class _NullGalleryBridge:
+        @staticmethod
+        def v2_enabled():
+            return False
+
+        @staticmethod
+        def read_meta(path):
+            return {}
+
+        def __getattr__(self, name):
+            def _noop(*args, **kwargs):
+                return None
+            return _noop
+
+    gallery_bridge = _NullGalleryBridge()
 _DB_ROOT = os.path.dirname(os.path.dirname(__file__))
 _DB_PATH = os.path.join(_DB_ROOT, "endorsements.db")
 _ENDORSED_ROOT = os.path.join(_DB_ROOT, "outputs", "endorsed")
@@ -196,6 +214,7 @@ def init_db():
         _ensure_staged_table(conn)
         _ensure_trash_table(conn)
         conn.commit()
+    gallery_bridge.init()
 
 
 def _ensure_archived_table(conn):
@@ -280,6 +299,7 @@ def save_image_tags(item_key: str, tags_dict: dict, label: str) -> None:
             [(item_key, tag, float(score), label, now) for tag, score in tags_dict.items()],
         )
         conn.commit()
+    gallery_bridge.on_captions(item_key, tags_dict)
 
 
 def get_tag_analysis(min_appearances: int = 1) -> dict:
@@ -681,8 +701,24 @@ def _move_into_endorsed(path: str, endorsed_at: datetime) -> tuple[str, str]:
     target_dir = os.path.join(_ENDORSED_ROOT, day_folder)
     os.makedirs(target_dir, exist_ok=True)
 
+    mode = "copy"
+    try:
+        if gallery_bridge.v2_enabled():
+            mode = (os.environ.get("GALLERY_ENDORSE_MODE") or "link").strip().lower()
+    except Exception:
+        mode = "copy"
+    if mode == "flag":
+        # DB-flag-only endorsement: no second file anywhere.
+        return abs_path, abs_path
+
     target_path = _unique_target_path(os.path.join(target_dir, os.path.basename(abs_path)))
-    shutil.copy2(abs_path, target_path)  # Copy instead of move
+    if mode == "link":
+        try:
+            os.link(abs_path, target_path)  # hardlink: 0 extra bytes, survives original deletion
+            return target_path, abs_path
+        except OSError:
+            pass
+    shutil.copy2(abs_path, target_path)  # fallback (cross-volume / no hardlink support)
     return target_path, abs_path  # Return endorsed path and original path
 
 
@@ -788,18 +824,34 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
         )
         conn.commit()
 
+    gallery_bridge.on_endorse(
+        item_key, endorsed_copy_path, original_path,
+        {
+            "prompt": prompt, "negative_prompt": negative_prompt,
+            "seed": seed, "steps": steps, "sampler": sampler, "cfg_scale": cfg_scale,
+            "width": width, "height": height,
+            "model_name": model_name, "model_hash": model_hash,
+            "infotext": infotext,
+        },
+    )
+
 
 def delete_endorsement(eid: int):
+    removed = None
     with _get_conn() as conn:
         row = conn.execute("SELECT * FROM endorsements WHERE id=?", (eid,)).fetchone()
         if row:
             _restore_endorsement_row(conn, row)
             conn.execute("DELETE FROM endorsements WHERE id=?", (eid,))
+            removed = {"item_key": row["item_key"], "path": row["image_path"]}
         conn.commit()
+    if removed:
+        gallery_bridge.on_endorsement_removed(removed["item_key"], removed["path"])
 
 
 def delete_endorsement_by_path(path: str):
     item_key = _item_key_from_path(path)
+    removed = None
     with _get_conn() as conn:
         row = None
         if item_key:
@@ -819,6 +871,10 @@ def delete_endorsement_by_path(path: str):
                 _restore_endorsement_row(conn, row)
             conn.execute("DELETE FROM endorsements WHERE image_path=?", (path,))
         conn.commit()
+        if row:
+            removed = {"item_key": row["item_key"], "path": row["image_path"]}
+    if removed:
+        gallery_bridge.on_endorsement_removed(removed["item_key"] or item_key, removed["path"])
 
 
 def get_endorsed_paths() -> set:
@@ -894,11 +950,28 @@ def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
         )
         conn.commit()
 
+    gallery_bridge.on_dislike(
+        item_key, image_path,
+        {
+            "prompt": prompt, "negative_prompt": negative_prompt,
+            "seed": seed, "steps": steps, "sampler": sampler, "cfg_scale": cfg_scale,
+            "width": width, "height": height,
+            "model_name": model_name, "model_hash": model_hash,
+            "infotext": infotext,
+        },
+    )
+
 
 def delete_dislike(did: int):
+    removed = None
     with _get_conn() as conn:
+        row = conn.execute("SELECT * FROM dislikes WHERE id=?", (did,)).fetchone()
         conn.execute("DELETE FROM dislikes WHERE id=?", (did,))
         conn.commit()
+        if row:
+            removed = {"item_key": row["item_key"], "path": row["image_path"]}
+    if removed:
+        gallery_bridge.on_dislike_removed(removed["item_key"], removed["path"])
 
 
 def delete_dislike_by_path(path: str):
@@ -909,6 +982,7 @@ def delete_dislike_by_path(path: str):
         else:
             conn.execute("DELETE FROM dislikes WHERE image_path=?", (path,))
         conn.commit()
+    gallery_bridge.on_dislike_removed(item_key, path)
 
 
 def delete_endorsement_by_key(item_key: str):
@@ -919,12 +993,16 @@ def delete_endorsement_by_key(item_key: str):
     key = str(item_key or "")
     if not key:
         return
+    removed = []
     with _get_conn() as conn:
         rows = conn.execute("SELECT * FROM endorsements WHERE item_key=?", (key,)).fetchall()
         for row in rows:
             _restore_endorsement_row(conn, row)
+            removed.append({"item_key": row["item_key"], "path": row["image_path"]})
         conn.execute("DELETE FROM endorsements WHERE item_key=?", (key,))
         conn.commit()
+    for entry in removed:
+        gallery_bridge.on_endorsement_removed(entry["item_key"] or key, entry["path"])
 
 
 def delete_dislike_by_key(item_key: str):
@@ -934,6 +1012,7 @@ def delete_dislike_by_key(item_key: str):
     with _get_conn() as conn:
         conn.execute("DELETE FROM dislikes WHERE item_key=?", (key,))
         conn.commit()
+    gallery_bridge.on_dislike_removed(key)
 
 
 def get_disliked_paths() -> set:
@@ -1077,6 +1156,7 @@ def archive_item(item_key: str) -> None:
             (item_key, now),
         )
         conn.commit()
+    gallery_bridge.on_archive(item_key)
 
 
 def unarchive_item(item_key: str) -> None:
@@ -1085,14 +1165,14 @@ def unarchive_item(item_key: str) -> None:
     with _get_conn() as conn:
         conn.execute("DELETE FROM archived WHERE item_key=?", (item_key,))
         conn.commit()
+    gallery_bridge.on_unarchive(item_key)
 
 
 def archive_all_unrated() -> int:
     """Archive all generated images not yet endorsed, disliked, archived, or trashed. Returns count added."""
     now = datetime.now().isoformat(timespec="seconds")
-    sql = """
-        INSERT OR IGNORE INTO archived (item_key, archived_at)
-        SELECT item_key, ?
+    select_sql = """
+        SELECT item_key
         FROM generated_images
         WHERE item_key IS NOT NULL AND item_key != ''
           AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')
@@ -1101,9 +1181,16 @@ def archive_all_unrated() -> int:
           AND item_key NOT IN (SELECT item_key FROM trash WHERE item_key IS NOT NULL AND item_key != '')
     """
     with _get_conn() as conn:
-        cur = conn.execute(sql, (now,))
+        keys = [r[0] for r in conn.execute(select_sql).fetchall()]
+        if keys:
+            conn.executemany(
+                "INSERT OR IGNORE INTO archived (item_key, archived_at) VALUES (?,?)",
+                [(key, now) for key in keys],
+            )
         conn.commit()
-        return cur.rowcount
+    for key in keys:
+        gallery_bridge.on_archive(key)
+    return len(keys)
 
 
 def get_archived_item_keys(item_keys: list[str]) -> set:
@@ -1213,6 +1300,7 @@ def stage_item(item_key: str) -> None:
             (item_key, now),
         )
         conn.commit()
+    gallery_bridge.on_stage(item_key)
 
 
 def unstage_item(item_key: str) -> None:
@@ -1222,6 +1310,7 @@ def unstage_item(item_key: str) -> None:
     with _get_conn() as conn:
         conn.execute("DELETE FROM staged WHERE item_key=?", (item_key,))
         conn.commit()
+    gallery_bridge.on_unstage(item_key)
 
 
 def get_staged_item_keys(item_keys: list[str]) -> set:
@@ -1305,6 +1394,10 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
             ),
         )
         conn.commit()
+    gallery_bridge.on_index_image(
+        path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
+        cfg_scale, width, height, model_name, model_hash, infotext,
+    )
 
 
 def get_indexed_path_mtimes() -> dict:
@@ -1582,11 +1675,14 @@ def read_sidecar_metadata(path: str) -> dict:
         except Exception:
             text = ""
 
-    parsed = _parse_sidecar_infotext(text)
-    if len(_SIDECAR_METADATA_CACHE) > 4096:
-        _SIDECAR_METADATA_CACHE.clear()
-    _SIDECAR_METADATA_CACHE[cache_key] = parsed
-    return parsed
+    if text:
+        parsed = _parse_sidecar_infotext(text)
+        if len(_SIDECAR_METADATA_CACHE) > 4096:
+            _SIDECAR_METADATA_CACHE.clear()
+        _SIDECAR_METADATA_CACHE[cache_key] = parsed
+        return parsed
+    # No sidecar file and no PNG chunk: serve from the v2 store (post-migration).
+    return gallery_bridge.read_meta(path)
 
 
 def trash_archived_and_disliked() -> dict:
@@ -1766,6 +1862,9 @@ def trash_archived_and_disliked() -> dict:
                 except OSError:
                     errors += 1
 
+    # Mirror the trash transition into the v2 store (state + blob media policy).
+    gallery_bridge.on_trash_keys(item_keys)
+
     if trashed > 0 or deleted > 0 or errors > 0:
         freed_mb = freed_bytes / (1024 * 1024)
         print(
@@ -1786,6 +1885,182 @@ def trash_archived_and_disliked() -> dict:
         "errors": errors,
         "freed_bytes": freed_bytes,
     }
+
+
+def _meta_int(value, default=0):
+    try:
+        return int(float(str(value).split(",")[0].strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _file_mtime(path):
+    if not path:
+        return None
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def trash_item_by_key(item_key: str) -> dict:
+    """Move a single item to trash (used by the v2 gallery action bar).
+
+    Mirrors trash_archived_and_disliked for one key: metadata into trash,
+    original + cached media deleted, removed from all state tables, v2 store
+    updated via the bridge. Returns {"ok": True, ...} or {"error": ...}.
+    """
+    key = str(item_key or "")
+    if not key:
+        return {"error": "empty key"}
+    now = datetime.now().isoformat(timespec="seconds")
+    path = None
+    mtime = None
+    v2_alias = None
+
+    with _get_conn() as conn:
+        if conn.execute("SELECT id FROM trash WHERE item_key=?", (key,)).fetchone():
+            return {"error": "already trashed"}
+        meta_row = conn.execute(
+            """
+            SELECT path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
+                   cfg_scale, width, height, model_name, model_hash, infotext
+            FROM generated_images WHERE item_key=? LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+        if meta_row:
+            columns = meta_row
+        else:
+            row = conn.execute(
+                """
+                SELECT image_path, prompt, negative_prompt, seed, steps, sampler,
+                       cfg_scale, width, height, model_name, model_hash, infotext
+                FROM dislikes WHERE item_key=? ORDER BY id DESC LIMIT 1
+                """,
+                (key,),
+            ).fetchone()
+            if row:
+                columns = (row[0], None) + tuple(row[1:])
+            else:
+                row = conn.execute(
+                    """
+                    SELECT image_path, prompt, negative_prompt, seed, steps, sampler,
+                           cfg_scale, width, height, model_name, model_hash, infotext
+                    FROM endorsements WHERE item_key=? ORDER BY id DESC LIMIT 1
+                    """,
+                    (key,),
+                ).fetchone()
+                if row:
+                    columns = (row[0], None) + tuple(row[1:])
+                else:
+                    columns = (None, None, "", "", "", 0, "", 0.0, 0, 0, "", "", "")
+
+        path, mtime = columns[0], columns[1]
+        if path is None and (key.startswith("qwen-") or key.startswith("krea2-")):
+            path = _sidecar_output_paths_by_key().get(key)
+            if path and not os.path.isfile(path):
+                path = None
+            if path:
+                columns = (path, None) + tuple(columns[2:])
+        if path is None:
+            # v2-only sources (composition / image_maker / ...) and freshly indexed
+            # files have no legacy row: resolve through the gallery store instead.
+            try:
+                from modules import gallery_db
+                v2_item = gallery_db.get_item(gallery_db.resolve_item_id(key))
+            except Exception:
+                v2_item = None
+            if v2_item:
+                path = v2_item.get("path") or v2_item.get("alias_path")
+                if path and not os.path.isfile(path):
+                    alias = v2_item.get("alias_path")
+                    path = alias if alias and os.path.isfile(alias) else None
+                if path:
+                    v2_meta = gallery_db.get_item_meta(v2_item["id"])
+                    columns = (
+                        path, columns[1],
+                        columns[2] or (v2_item.get("prompt") or ""),
+                        columns[3] or (v2_item.get("negative_prompt") or ""),
+                        columns[4] or str(v2_meta.get("seed") or ""),
+                        columns[5] or _meta_int(v2_meta.get("steps")),
+                        columns[6] or str(v2_meta.get("sampler") or ""),
+                        columns[7] or 0.0,
+                        columns[8] or int(v2_item.get("width") or 0),
+                        columns[9] or int(v2_item.get("height") or 0),
+                        columns[10] or str(v2_meta.get("model") or ""),
+                        columns[11] or str(v2_meta.get("model_hash") or ""),
+                        columns[12] or (v2_item.get("infotext") or ""),
+                    )
+                    v2_alias = v2_item.get("alias_path")
+        if path and mtime is None and os.path.isfile(path):
+            try:
+                mtime = os.path.getmtime(path)
+                columns = (columns[0], mtime) + tuple(columns[2:])
+            except OSError:
+                pass
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO trash
+                (item_key, trashed_at, path, file_mtime, prompt, negative_prompt, seed, steps,
+                 sampler, cfg_scale, width, height, model_name, model_hash, infotext)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                key, now, columns[0], columns[1], columns[2], columns[3],
+                str(columns[4] or ""), int(columns[5] or 0), columns[6],
+                float(columns[7] or 0), int(columns[8] or 0), int(columns[9] or 0),
+                columns[10], columns[11], columns[12],
+            ),
+        )
+        conn.execute("DELETE FROM archived WHERE item_key=?", (key,))
+        conn.execute("DELETE FROM dislikes WHERE item_key=?", (key,))
+        conn.execute("DELETE FROM endorsements WHERE item_key=?", (key,))
+        conn.execute("DELETE FROM staged WHERE item_key=?", (key,))
+        conn.execute("DELETE FROM generated_images WHERE item_key=?", (key,))
+        conn.commit()
+
+    deleted = 0
+    freed = 0
+    seen_inodes = set()
+    for candidate in (path, v2_alias):
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        try:
+            stat = os.stat(candidate)
+            inode = getattr(stat, "st_ino", None)
+            if inode is not None and inode in seen_inodes:
+                continue
+            if inode is not None:
+                seen_inodes.add(inode)
+            freed += stat.st_size
+            os.remove(candidate)
+            deleted += 1
+        except OSError:
+            pass
+    for cache_base, cache_mtime in ((path, mtime), (v2_alias, _file_mtime(v2_alias))):
+        if cache_mtime is None:
+            continue
+        for cache_path in (_trash_thumb_cache_path(cache_base, cache_mtime), _trash_preview_cache_path(cache_base, cache_mtime)):
+            if os.path.isfile(cache_path):
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+    gallery_bridge.on_trash_keys([key])
+    print(f"[Gallery] Trashed '{key}'" + (f" (deleted {freed / 1048576:.1f} MB)" if deleted else ""))
+    return {"ok": True, "deleted": deleted, "freed_bytes": freed}
+
+
+def remove_trash_row(item_key: str) -> None:
+    """Delete the legacy trash row (restore / purge)."""
+    key = str(item_key or "")
+    if not key:
+        return
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM trash WHERE item_key=?", (key,))
+        conn.commit()
 
 
 def delete_archived_originals() -> dict:
