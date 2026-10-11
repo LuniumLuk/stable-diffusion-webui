@@ -377,6 +377,10 @@
   function buildChrome(root) {
     root.innerHTML =
       '<div class="gv2-toolbar">' +
+        '<div class="gv2-row gv2-keys" id="gv2-keys">' +
+          '<span class="gv2-row-hint gv2-key-hint"><kbd>R</kbd> sync \u00B7 refresh \u00B7 clear filters</span>' +
+          '<span class="gv2-row-hint gv2-key-hint"><kbd>S</kbd> toggle select mode</span>' +
+        '</div>' +
         '<div class="gv2-row gv2-row-main">' +
           '<input id="gv2-q" class="gv2-search" type="search" spellcheck="false" ' +
             'placeholder="search: word, -exclude, &quot;phrase&quot;, tag:x, rating:endorsed, source:qwen, prompt:..., negative:...">' +
@@ -475,15 +479,7 @@
     el('gv2-res').addEventListener('change', function () {
       applyResolution(el('gv2-res').value); resetAndRefresh();
     });
-    el('gv2-clear').addEventListener('click', function () {
-      state.filters = { q: '', preset: 'all', states: [], sources: [], albums: [], show_albumed: false, rating: '', tags: {} };
-      el('gv2-q').value = '';
-      el('gv2-time').value = 'all';
-      el('gv2-rating').value = '';
-      el('gv2-res').value = '';
-      syncControlsFromFilters();
-      resetAndRefresh();
-    });
+    el('gv2-clear').addEventListener('click', clearFilters);
     el('gv2-refresh').addEventListener('click', function () { refreshFacets(); resetAndRefresh(); });
     el('gv2-select').addEventListener('click', function () { setSelectMode(!state.selectMode); });
     el('gv2-top').addEventListener('click', function () {
@@ -1225,6 +1221,25 @@
 
   // ---------------------------------------------------------------- query
 
+  /** Reset every filter control to its neutral value (no grid reload). */
+  function resetFiltersState() {
+    state.filters = { q: '', preset: 'all', states: [], sources: [], albums: [], show_albumed: false, rating: '', tags: {} };
+    var q = el('gv2-q');
+    if (q) q.value = '';
+    var time = el('gv2-time');
+    if (time) time.value = 'all';
+    var rating = el('gv2-rating');
+    if (rating) rating.value = '';
+    var res = el('gv2-res');
+    if (res) res.value = '';
+    syncControlsFromFilters();
+  }
+
+  function clearFilters() {
+    resetFiltersState();
+    resetAndRefresh();
+  }
+
   function resetAndRefresh() {
     state.page = 1;
     state.offset = 0;
@@ -1411,6 +1426,30 @@
       toast('Select mode: click cards or drag a box to select \u00b7 shift-drag deselects \u00b7 shift-click selects a range');
     } else {
       setSelection([]);
+    }
+  }
+
+  // The shortcuts are advertised in the toolbar's top row (#gv2-keys):
+  //   R = clear filters + refresh + Sync        S = toggle select mode
+  // Inert while typing, while a viewer owns the keyboard, or when the gallery
+  // page is not the visible tab.
+  function gv2Hotkeys(ev) {
+    if (ev.defaultPrevented || ev.repeat) return;
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (window.gv2LightboxNav || ev._lightboxHandled) return;
+    if (isTypingTarget(ev.target)) return;
+    var root = el(ROOT_ID);
+    if (!root || !root.getClientRects().length) return;
+    var key = (ev.key || '').toLowerCase();
+    if (key === 'r') {
+      ev.preventDefault();
+      resetFiltersState();
+      refreshFacets();
+      resetAndRefresh();
+      runMaintenance('reindex', 'Sync');
+    } else if (key === 's') {
+      ev.preventDefault();
+      setSelectMode(!state.selectMode);
     }
   }
 
@@ -2150,6 +2189,7 @@
     wireChips(root);
     wireGrid(root);
     wireCtxMenu();
+    document.addEventListener('keydown', gv2Hotkeys);
     refreshViews();
     refreshFacets().then(function () { loadPage(false); });
     // infinite scroll

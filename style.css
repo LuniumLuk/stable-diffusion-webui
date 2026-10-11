@@ -5057,6 +5057,27 @@ body.resizing .resize-handle {
     color: var(--gv2-muted);
 }
 
+/* advertised keyboard shortcuts at the top of the toolbar */
+.gv2-keys {
+    gap: 4px 16px;
+}
+
+.gv2-key-hint kbd {
+    display: inline-block;
+    min-width: 16px;
+    margin-right: 4px;
+    padding: 0 5px;
+    border: 1px solid var(--gv2-line);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: var(--gv2-panel);
+    color: var(--gv2-text);
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+}
+
 .gv2-row-status {
     justify-content: space-between;
 }
