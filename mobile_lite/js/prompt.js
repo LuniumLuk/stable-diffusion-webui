@@ -12,8 +12,11 @@
  *                          '# --- name ---' block divider above the line
  *   - long lines       -> folded to one row by default ('▸N' expands them again)
  *   - ⚖ per line        -> weight for the WHOLE line (wraps it in '(…:w)'; 1.0 unwraps)
- *   - [⌨ Text] toggle   -> plain textarea mode (the textarea stays the source of truth);
- *                          the area grows with the content and ⤢ opens a fullscreen editor
+ *   - [⌨ Text] toggle   -> CodeMirror 6 text mode (prompt-cm.js; the hidden textarea stays
+ *                          the value store + fallback): inline keyword suggestions while
+ *                          typing, `#` comment styling, tap-a-keyword quick actions
+ *                          (weight / ⛔ / 💬 / move / delete) and drag-to-rearrange;
+ *                          ⤢ opens a fullscreen copy of the same editor
  *
  * The MRU + endorsed keyword suggestions live in a fold that is COLLAPSED by default
  * (state.ui.suggestionsOpen persists the user's choice).
@@ -22,6 +25,7 @@
 import { api_ } from './api.js';
 import { el, toast } from './ui.js';
 import { on, persist, state } from './state.js';
+import { createPromptCM } from './prompt-cm.js';
 import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
 
 const WEIGHT_STEP = 0.05;
@@ -77,7 +81,10 @@ function createChipsField(key, placeholder, title) {
     text: '\u2922',
     title: 'Open the fullscreen text editor',
   });
-  const textWrap = el('div', { class: 'pedit-textarea-wrap' }, [textarea, expandButton]);
+  // the text-mode CodeMirror instances mount here lazily (the textarea stays as the
+  // fallback and as the value store every other code path keeps using)
+  const cmHost = el('div', { class: 'pedit-cm-host' });
+  const textWrap = el('div', { class: 'pedit-textarea-wrap' }, [textarea, cmHost, expandButton]);
 
   const editorArea = el('textarea', {
     class: 'text-editor-area',
@@ -85,13 +92,14 @@ function createChipsField(key, placeholder, title) {
     autocapitalize: 'off',
     spellcheck: false,
   });
+  const cmFullHost = el('div', { class: 'pedit-cm-host pedit-cm-host-full' });
   const editorCount = el('span', { class: 'small muted' });
   const textEditor = el('div', { class: 'text-editor', hidden: true }, [
     el('div', { class: 'text-editor-head' }, [
       el('span', { class: 'text-editor-title', text: title }),
       el('button', { class: 'btn tiny', type: 'button', text: '\u2713 Done', onClick: () => closeTextEditor() }),
     ]),
-    el('div', { class: 'text-editor-body' }, [editorArea]),
+    el('div', { class: 'text-editor-body' }, [editorArea, cmFullHost]),
     el('div', { class: 'text-editor-foot' }, [editorCount]),
   ]);
   document.body.append(textEditor);
@@ -108,6 +116,80 @@ function createChipsField(key, placeholder, title) {
   const mode = () => (state.ui.peditMode === 'text' ? 'text' : 'chips');
   const value = () => textarea.value;
   const isNegative = key === 'textNegative' || key === 'imageNegative';
+
+  /* CodeMirror mounts (prompt-cm.js): the textarea remains the value store and the
+     fallback — the CM views are synced from it on every external write and push their
+     edits back through onCmInput.  Both mount lazily: the inline one when text mode is
+     first shown, the fullscreen one when the ⤢ overlay is first opened. */
+  let cm = null;
+  let cmFull = null;
+  let cmStarted = false;
+  let cmFullStarted = false;
+
+  function syncCmViews() {
+    if (cm && cm.getText() !== textarea.value) cm.setText(textarea.value);
+    if (cmFull && cmFull.getText() !== textarea.value) cmFull.setText(textarea.value);
+    if (editorArea.value !== textarea.value) editorArea.value = textarea.value;
+  }
+
+  function onCmInput(text) {
+    if (text === textarea.value) return; // echo of an external sync
+    textarea.value = text;
+    state.prompt[key] = text;
+    persist();
+    if (editorArea.value !== text) {
+      editorArea.value = text;
+      updateEditorCount();
+    }
+    const off = countDisabled();
+    offBadge.textContent = off ? `${off} off` : '';
+    if (cm && cm.getText() !== text) cm.setText(text);
+    if (cmFull && cmFull.getText() !== text) cmFull.setText(text);
+  }
+
+  function ensureCM() {
+    if (cmStarted) return;
+    cmStarted = true;
+    createPromptCM({
+      host: cmHost,
+      text: value(),
+      placeholder,
+      variant: 'inline',
+      getSuggestions: suggestionItems,
+      onChange: onCmInput,
+    }).then((instance) => {
+      cm = instance;
+      textWrap.classList.add('pedit-has-cm');
+      queueMicrotask(() => cm.requestMeasure());
+    }).catch(() => {
+      cmStarted = false; // bundle unavailable — keep the plain textarea
+    });
+  }
+
+  function ensureCMFull() {
+    if (cmFullStarted) return;
+    cmFullStarted = true;
+    createPromptCM({
+      host: cmFullHost,
+      text: value(),
+      placeholder,
+      variant: 'full',
+      getSuggestions: suggestionItems,
+      onChange: onCmInput,
+    }).then((instance) => {
+      cmFull = instance;
+      textEditor.classList.add('pedit-has-cm');
+      if (!textEditor.hidden) {
+        queueMicrotask(() => {
+          cmFull.setText(value());
+          cmFull.requestMeasure();
+          cmFull.focus();
+        });
+      }
+    }).catch(() => {
+      cmFullStarted = false;
+    });
+  }
 
   const isCommentedLine = (text) => /^\s*#(?!\()/.test(text);
   const stripLineComment = (text) => text.replace(/^(\s*)#\s?/, '$1');
@@ -143,11 +225,13 @@ function createChipsField(key, placeholder, title) {
     textarea.value = text;
     state.prompt[key] = text;
     persist();
+    syncCmViews();
     render();
   }
 
   /** Text mode: size the inline area to its content (the CSS gives it a 40vh floor). */
   function fitTextarea() {
+    if (cm) return; // CodeMirror measures itself
     if (mode() !== 'text') {
       textarea.style.height = '';
       return;
@@ -168,7 +252,16 @@ function createChipsField(key, placeholder, title) {
     updateEditorCount();
     textEditor.hidden = false;
     document.body.classList.add('text-editing');
-    editorArea.focus();
+    ensureCMFull();
+    if (cmFull) {
+      cmFull.setText(value());
+      queueMicrotask(() => {
+        cmFull.requestMeasure();
+        cmFull.focus();
+      });
+    } else {
+      editorArea.focus();
+    }
   }
 
   function closeTextEditor() {
@@ -674,9 +767,13 @@ function createChipsField(key, placeholder, title) {
     offBadge.textContent = disabled ? `${disabled} off` : '';
 
     if (mode() === 'text') {
+      ensureCM();
       body.replaceChildren();
       actions.replaceChildren();
-      queueMicrotask(fitTextarea);
+      queueMicrotask(() => {
+        fitTextarea();
+        if (cm) cm.requestMeasure();
+      });
       return;
     }
 
@@ -862,10 +959,7 @@ function createChipsField(key, placeholder, title) {
 
   addLineButton.addEventListener('click', () => {
     const next = value().replace(/\n*$/, '') + '\n';
-    textarea.value = next;
-    state.prompt[key] = next;
-    persist();
-    render();
+    commit(next);
     openAdd(next.split('\n').length - 1);
   });
 
@@ -881,10 +975,13 @@ function createChipsField(key, placeholder, title) {
       textarea.value = next;
       state.prompt[key] = next;
       persist();
+      syncCmViews();
       render();
     },
     onHide() {
       closeTextEditor();
+      if (cm) cm.closePopups();
+      if (cmFull) cmFull.closePopups();
     },
     /** Re-measure line folds (screens call this from onShow, the DOM is measurable then). */
     relayout() {

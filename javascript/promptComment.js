@@ -240,8 +240,8 @@
         // ── layout sync ─────────────────────────────────────────────────────
 
         function syncLayout() {
-            // chips mode owns the prompt UI: the backdrop is hidden there anyway
-            if (host.classList.contains('pedit-chips-mode')) return;
+            // chips / CodeMirror text mode own the prompt UI: the backdrop is hidden there anyway
+            if (host.classList.contains('pedit-chips-mode') || host.classList.contains('pedit-cm-mode')) return;
             var cs = window.getComputedStyle(textarea);
             // Account for the textarea's border so the backdrop content area
             // aligns pixel-for-pixel with the actual text inside the textarea.
@@ -264,7 +264,7 @@
         }
 
         function syncContent() {
-            if (host.classList.contains('pedit-chips-mode')) return;
+            if (host.classList.contains('pedit-chips-mode') || host.classList.contains('pedit-cm-mode')) return;
             backdrop.innerHTML = buildCommentHighlightHtml(textarea.value || '');
             backdrop.scrollTop  = textarea.scrollTop;
             backdrop.scrollLeft = textarea.scrollLeft;

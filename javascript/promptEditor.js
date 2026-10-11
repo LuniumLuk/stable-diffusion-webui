@@ -870,6 +870,8 @@
                 state.lastCommitted = state.text;
                 render();
             }
+            // the CodeMirror text-mode editor (javascript/promptCM.mjs) watches this
+            host.dispatchEvent(new CustomEvent('pedit-mode', { detail: chips ? 'chips' : 'text' }));
         }
 
         function mode() {
@@ -906,6 +908,12 @@
                 if (h) h.dispatchEvent(new CustomEvent('pedit-set-mode', { detail: m }));
             });
         };
+
+        // shared with the CodeMirror text-mode editor (javascript/promptCM.mjs): the
+        // same MRU + endorsed + extra-network pool, and the same MRU writer
+        window.promptEditorMode = mode;
+        window.promptEditorPool = pool;
+        window.promptEditorPushRecent = pushRecent;
     }
 
     function installAll() {

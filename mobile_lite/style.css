@@ -1062,6 +1062,136 @@ body.mask-editing { overflow: hidden; }
 }
 body.text-editing { overflow: hidden; }
 
+/* ---------------------------------------------------------------- prompt CM editor
+   text mode is a CodeMirror 6 editor (js/prompt-cm.js) over the same hidden textarea.
+   The host only shows once the vendored bundle mounted (.pedit-has-cm), so while it
+   loads — or if it failed — the plain textarea stays fully usable. */
+
+.pedit-cm-host { display: none; }
+.pedit-textarea-wrap.pedit-has-cm .pedit-cm-host { display: block; }
+.pedit-textarea-wrap.pedit-has-cm .pedit-textarea { display: none; }
+.text-editor .pedit-cm-host-full { display: none; }
+.text-editor.pedit-has-cm .pedit-cm-host-full { display: flex; flex: 1 1 auto; min-height: 0; }
+.text-editor.pedit-has-cm .text-editor-area { display: none; }
+
+.pedit-cm { position: relative; }
+.pedit-cm .cm-editor { background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; }
+.pedit-cm .cm-editor.cm-focused { outline: none; }
+.pedit-cm .cm-scroller { font-family: inherit; }
+.pedit-cm .cm-content { padding: 0; caret-color: var(--text); }
+.pedit-cm .cm-line { padding: 0 2px; }
+.pedit-cm .cm-placeholder { color: var(--muted); }
+.pedit-cm .cm-content ::selection { background: rgba(249, 115, 22, 0.28); }
+
+/* inline variant: like the old textarea — 40vh floor, grows with the content */
+.pedit-cm-inline { display: block; }
+.pedit-cm-inline .cm-editor {
+  min-height: 40vh;
+  height: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface2);
+}
+.pedit-cm-inline .cm-scroller { overflow: visible; }
+
+/* fullscreen variant: fills the overlay body and scrolls inside */
+.pedit-cm-full { display: flex; flex: 1 1 auto; min-height: 0; }
+.pedit-cm-full .cm-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface2);
+}
+.pedit-cm-full .cm-scroller { overflow: auto; }
+
+/* decorations: comments, block markers, disabled groups, the actioned keyword */
+.pedit-cm .pedit-cm-commentline { color: var(--muted); opacity: 0.85; }
+.pedit-cm .pedit-cm-blockmark { color: var(--accent); }
+.pedit-cm .pedit-cm-comment-hash { opacity: 0.8; }
+.pedit-cm .pedit-cm-tok-off { opacity: 0.55; text-decoration: line-through; }
+.pedit-cm .pedit-cm-tok-active { background: var(--accent-soft); border-radius: 4px; }
+
+/* autocomplete (inline suggestions) */
+.pedit-cm .cm-tooltip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.pedit-cm .cm-tooltip-autocomplete ul { font-family: inherit; max-height: 40vh; }
+.pedit-cm .cm-tooltip-autocomplete ul li { padding: 7px 10px; line-height: 1.3; }
+.pedit-cm .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent-soft); color: var(--text); }
+.pedit-cm .cm-tooltip-autocomplete .cm-completionIcon { display: none; }
+
+/* drag affordances: ghost under the finger + drop bar at the landing slot */
+.pedit-cm-dragging .cm-content { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+.pedit-cm-ghost {
+  position: fixed;
+  z-index: 72;
+  pointer-events: none;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.pedit-cm-dropbar {
+  position: fixed;
+  z-index: 71;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.pedit-cm-dropbar[hidden] { display: none; }
+
+/* quick-action popup for the tapped keyword */
+.pedit-cm-pop {
+  position: fixed;
+  z-index: 73;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  min-width: 240px;
+  max-width: min(94vw, 360px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.pedit-cm-pop-title {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pedit-cm-pop-row { display: flex; gap: 6px; align-items: center; }
+.pedit-cm-pop-row .pedit-weight { flex: 0 0 auto; }
+.pedit-cm-pop-btn {
+  flex: 1 1 auto;
+  min-height: 36px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 14px;
+}
+.pedit-cm-pop-btn.is-on { border-color: var(--accent); color: var(--accent); }
+
 /* ---------------------------------------------------------------- folds (suggestions / negative) */
 
 .fold { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); }
