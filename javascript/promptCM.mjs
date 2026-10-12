@@ -8,8 +8,9 @@
  *   - suggestions while typing    (the same MRU + endorsed + extra-network pool the
  *                                  chips editor uses, via window.promptEditorPool);
  *   - `#` comment + `# ---` block markers styled like the old backdrop overlay;
- *   - drag a keyword to rearrange it (ghost + drop bar, separators repaired);
- *   - tap / right-click a keyword → weight, ⛔ disable, nudge, comment, delete;
+ *   - left-click / left-drag stay NATIVE (caret + text selection) — the manipulation
+ *     popup opens on RIGHT-CLICK only: on a keyword, or inside a selection to apply
+ *     weight / ⛔ to every selected keyword at once; Alt+drag rearranges a keyword;
  *   - desktop hotkeys: Ctrl+↑/↓ weight (edit-attention parity), Ctrl+/ line comment.
  *
  * The gradio textarea stays the single source of truth and is only visually replaced

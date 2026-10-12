@@ -11,15 +11,19 @@
  *   - 💬 comments          — `# ...` lines and `# ---` markers are styled like the old
  *                            overlay; the token popup comments / uncomments a line, and
  *                            on a `# ---` marker it toggles the whole block;
- *   - drag to rearrange    — press a keyword and move it; a ghost follows the pointer
- *                            and a drop bar shows the landing slot (top-level comma
- *                            boundaries).  Separators are repaired automatically;
- *   - quick actions        — tap / right-click a keyword → floating popup: weight −/＋,
- *                            quick 0.8 / 1.1 / 1.2 / ⟲1.0, ⛔/✅ disable, ⇦⇨ nudge,
- *                            💬 comment, 🗑 delete;
+ *   - drag to rearrange    — TOUCH: press a keyword and move it (ghost + drop bar at the
+ *                            top-level comma slots; separators repaired).  MOUSE: left
+ *                            drags stay native SELECTION; Alt+drag rearranges instead;
+ *   - quick actions        — TOUCH: tap a keyword → popup.  MOUSE: the manipulation popup
+ *                            is RIGHT-CLICK only — on a keyword, or inside a selection
+ *                            to act on every selected keyword at once (batch weight /
+ *                            ⛔).  Popup: weight −/＋, quick 0.8 / 1.1 / 1.2 / ⟲1.0,
+ *                            ⛔/✅ disable, ⇦⇨ nudge, 💬 comment, 🗑 delete;
  *   - desktop hotkeys      — `desktopKeys: true` adds Ctrl+↑/↓ (weight of the tokens at
  *                            the cursor / selection, edit-attention parity) and Ctrl+/
- *                            (toggle the line comment).
+ *                            (toggle the line comment).  Ctrl/Cmd+Enter is always
+ *                            CONSUMED here (no blank line) and left to the page's global
+ *                            generate shortcut (desktop `script.js`).
  *
  * The vendored bundle (`../vendor/codemirror6.js`, built by `vendor/cm6build/build.bat`)
  * loads lazily on first use; when that fails the caller keeps its plain textarea.
@@ -110,8 +114,9 @@ export async function createPromptCM({
       let next = value.map(tr.changes);
       for (const effect of tr.effects) {
         if (effect.is(setActiveToken)) {
-          next = effect.value
-            ? Decoration.set([Decoration.mark({ class: 'pedit-cm-tok-active' }).range(effect.value.from, effect.value.to)])
+          const ranges = effect.value || [];
+          next = ranges.length
+            ? Decoration.set(ranges.map((range) => Decoration.mark({ class: 'pedit-cm-tok-active' }).range(range.from, range.to)))
             : Decoration.none;
         }
       }
@@ -205,11 +210,30 @@ export async function createPromptCM({
     return tokenAt(view.state.doc.toString(), pos);
   }
 
+  /** Tokens a right-click popup should act on: the keyword under the cursor, or the
+   *  whole selection when the right-click lands inside it (batch manipulation). */
+  function popupTargetsAt(x, y) {
+    const selection = view.state.selection.main;
+    const docText = view.state.doc.toString();
+    const selectionTokens = selection.empty ? [] : tokensInRange(docText, selection.from, selection.to);
+    const pos = view.posAtCoords({ x, y });
+    const token = pos == null ? null : tokenAt(docText, pos);
+    if (token && selectionTokens.length && token.from >= selection.from && token.to <= selection.to) {
+      return selectionTokens;
+    }
+    if (token) return [token];
+    return selectionTokens;
+  }
+
   /* ---------------------------------------------------------- quick actions */
 
   function closePopup() {
     if (!popup) return;
-    if (active) lastClosed = { from: active.from, to: active.to, at: Date.now() };
+    if (active && active.tokens.length) {
+      const first = active.tokens[0];
+      const last = active.tokens[active.tokens.length - 1];
+      lastClosed = { from: first.from, to: last.to, at: Date.now() };
+    }
     popup.remove();
     popup = null;
     active = null;
@@ -232,9 +256,14 @@ export async function createPromptCM({
   }
 
   function renderPopupContent() {
-    const t = active;
-    if (!t) return;
-    const weight = t.token.weight == null ? DEFAULT_WEIGHT : t.token.weight;
+    if (!active || !active.tokens.length) return;
+    const tokens = active.tokens;
+    const multi = active.multi;
+    const t = tokens[0];
+    const weightOf = (token) => (token.token.weight == null ? DEFAULT_WEIGHT : token.token.weight);
+    const firstWeight = weightOf(t);
+    const commonWeight = tokens.every((token) => Math.abs(weightOf(token) - firstWeight) < 1e-9) ? firstWeight : null;
+    const allDisabled = tokens.every((token) => token.token.disabled);
     const row = (...children) => el('div', { class: 'pedit-cm-pop-row' }, children);
     const button = (label, title, act, extra = {}) => el('button', {
       class: 'pedit-cm-pop-btn' + (extra.on ? ' is-on' : ''),
@@ -243,11 +272,27 @@ export async function createPromptCM({
       title,
       dataset: { act },
     });
+    const actionRow = [
+      button(allDisabled ? '\u2705' : '\u26D4',
+        multi
+          ? 'Disable every selected keyword (or enable them all when already disabled)'
+          : (t.token.disabled ? 'Enable this keyword' : 'Disable (stripped when generating)'),
+        'toggle', { on: allDisabled }),
+    ];
+    if (!multi) {
+      actionRow.push(
+        button('\u21E6', 'Move one keyword left', 'move-left'),
+        button('\u21E8', 'Move one keyword right', 'move-right'),
+        button('\uD83D\uDCAC', lineCommentState(view.state.doc.toString(), t.line) ? 'Uncomment this line' : 'Comment this line', 'comment'),
+        button('\uD83D\uDDD1', 'Delete this keyword', 'delete'),
+      );
+    }
+    actionRow.push(button('\u2715', 'Close', 'close'));
     popup.replaceChildren(
-      el('div', { class: 'pedit-cm-pop-title', text: t.text }),
+      el('div', { class: 'pedit-cm-pop-title', text: multi ? `${tokens.length} keywords selected` : t.text }),
       row(
         button('\u2212', `Lower weight by ${stepValue()}`, 'w-minus'),
-        el('span', { class: 'pedit-weight', text: formatWeight(weight) }),
+        el('span', { class: 'pedit-weight', text: commonWeight == null ? '\u00b1' : formatWeight(commonWeight) }),
         button('\uFF0B', `Raise weight by ${stepValue()}`, 'w-plus'),
       ),
       row(
@@ -256,21 +301,16 @@ export async function createPromptCM({
         button('1.2', 'Set weight 1.2', 'w-1.2'),
         button('\u27F2', 'Back to weight 1 (brackets removed)', 'w-reset'),
       ),
-      row(
-        button(t.token.disabled ? '\u2705' : '\u26D4', t.token.disabled ? 'Enable this keyword' : 'Disable (stripped when generating)', 'toggle', { on: t.token.disabled }),
-        button('\u21E6', 'Move one keyword left', 'move-left'),
-        button('\u21E8', 'Move one keyword right', 'move-right'),
-        button('\uD83D\uDCAC', lineCommentState(view.state.doc.toString(), t.line) ? 'Uncomment this line' : 'Comment this line', 'comment'),
-        button('\uD83D\uDDD1', 'Delete this keyword', 'delete'),
-        button('\u2715', 'Close', 'close'),
-      ),
+      row(...actionRow),
     );
   }
 
   function positionPopup() {
     if (!popup || !active) return;
-    const start = view.coordsAtPos(active.from);
-    const end = view.coordsAtPos(active.to);
+    const first = active.tokens[0];
+    const last = active.tokens[active.tokens.length - 1];
+    const start = view.coordsAtPos(first.from);
+    const end = view.coordsAtPos(last.to);
     if (!start || !end) {
       closePopup();
       return;
@@ -284,11 +324,11 @@ export async function createPromptCM({
     popup.style.top = `${Math.round(top)}px`;
   }
 
-  function openTokenPopup(token) {
+  function openTokenPopup(tokens) {
     closePopup();
     lastClosed = null;
-    active = token;
-    view.dispatch({ effects: setActiveToken.of({ from: token.from, to: token.to }) });
+    active = { tokens: tokens.slice(), multi: tokens.length > 1 };
+    view.dispatch({ effects: setActiveToken.of(active.tokens.map((t) => ({ from: t.from, to: t.to }))) });
     popup = el('div', { class: 'pedit-cm-pop' });
     renderPopupContent();
     document.body.append(popup);
@@ -317,14 +357,29 @@ export async function createPromptCM({
       closePopup();
       return;
     }
+    if (active && active.multi) {
+      // batch mode: the token list re-derives from the (auto-mapped) selection
+      const docText = view.state.doc.toString();
+      const selection = view.state.selection.main;
+      const tokens = selection.empty ? [] : tokensInRange(docText, selection.from, selection.to);
+      if (!tokens.length) {
+        closePopup();
+        return;
+      }
+      active = { tokens, multi: tokens.length > 1 };
+      view.dispatch({ effects: setActiveToken.of(active.tokens.map((t) => ({ from: t.from, to: t.to }))) });
+      renderPopupContent();
+      positionPopup();
+      return;
+    }
     const caret = plan.caret == null ? view.state.selection.main.head : plan.caret;
     const refreshed = tokenAt(view.state.doc.toString(), Math.max(0, caret - 1));
     if (!refreshed) {
       closePopup();
       return;
     }
-    active = refreshed;
-    view.dispatch({ effects: setActiveToken.of({ from: refreshed.from, to: refreshed.to }) });
+    active = { tokens: [refreshed], multi: false };
+    view.dispatch({ effects: setActiveToken.of(active.tokens.map((t) => ({ from: t.from, to: t.to }))) });
     renderPopupContent();
     positionPopup();
   }
@@ -334,45 +389,67 @@ export async function createPromptCM({
     if (!target || !popup || !popup.contains(target) || !active) return;
     const action = target.dataset.act;
     const docText = view.state.doc.toString();
-    const t = active;
-    const weight = t.token.weight == null ? DEFAULT_WEIGHT : t.token.weight;
+    const tokens = active.tokens;
+    const multi = active.multi;
+    const t = tokens[0];
+    const weightOf = (token) => (token.token.weight == null ? DEFAULT_WEIGHT : token.token.weight);
 
     if (action === 'close') {
       closePopup();
       return;
     }
-    if (action === 'comment') {
+    if (!multi && action === 'comment') {
       applyEdit(toggleCommentAt(docText, t.line), { close: true });
       return;
     }
-    if (action === 'delete') {
+    if (!multi && action === 'delete') {
       applyEdit(removeToken(docText, t), { close: true });
       return;
     }
-    if (action === 'move-left' || action === 'move-right') {
+    if (!multi && (action === 'move-left' || action === 'move-right')) {
       const slot = action === 'move-left' ? t.seg - 1 : t.seg + 2;
       applyEdit(moveToken(docText, t, t.line, slot));
       return;
     }
     if (action === 'toggle') {
-      const disabled = !t.token.disabled;
-      const next = rebuild(t.token, weight, disabled);
-      applyEdit(replaceToken(docText, t, next));
-      toast(disabled ? `disabled ${t.token.text}` : `enabled ${t.token.text}`, 'ok', 1400);
+      const targetDisabled = !tokens.every((token) => token.token.disabled);
+      if (multi) {
+        const changes = tokens.map((token) => ({
+          from: token.from,
+          to: token.to,
+          insert: rebuild(token.token, weightOf(token), targetDisabled),
+        }));
+        applyEdit({ changes, caret: null });
+        toast(`${tokens.length} keywords ${targetDisabled ? 'disabled' : 'enabled'}`, 'ok', 1400);
+      } else {
+        applyEdit(replaceToken(docText, t, rebuild(t.token, weightOf(t), targetDisabled)));
+        toast(targetDisabled ? `disabled ${t.token.text}` : `enabled ${t.token.text}`, 'ok', 1400);
+      }
       return;
     }
-    let targetWeight = null;
     const step = stepValue();
-    if (action === 'w-minus') targetWeight = Math.max(0, Math.round((weight - step) * 1000) / 1000);
-    else if (action === 'w-plus') targetWeight = Math.min(MAX_WEIGHT, Math.round((weight + step) * 1000) / 1000);
-    else if (action === 'w-reset') targetWeight = DEFAULT_WEIGHT;
-    else if (action.indexOf('w-') === 0) {
+    const wantsStep = action === 'w-minus' || action === 'w-plus';
+    let fixedWeight = null;
+    if (action === 'w-reset') fixedWeight = DEFAULT_WEIGHT;
+    else if (!wantsStep && action.indexOf('w-') === 0) {
       const parsed = parseFloat(action.slice(2));
-      if (!Number.isNaN(parsed)) targetWeight = parsed;
+      if (!Number.isNaN(parsed)) fixedWeight = parsed;
     }
-    if (targetWeight != null) {
-      const next = rebuild(t.token, targetWeight, t.token.disabled);
-      applyEdit(replaceToken(docText, t, next));
+    if (wantsStep || fixedWeight != null) {
+      const changes = tokens.map((token) => {
+        const current = weightOf(token);
+        const next = wantsStep
+          ? (action === 'w-plus'
+            ? Math.min(MAX_WEIGHT, Math.round((current + step) * 1000) / 1000)
+            : Math.max(0, Math.round((current - step) * 1000) / 1000))
+          : fixedWeight;
+        return { from: token.from, to: token.to, insert: rebuild(token.token, next, token.token.disabled) };
+      });
+      if (multi) {
+        applyEdit({ changes, caret: null });
+      } else {
+        applyEdit(replaceToken(docText, t, changes[0].insert));
+      }
     }
   }
 
@@ -438,6 +515,11 @@ export async function createPromptCM({
 
   function onPointerDown(event) {
     if (event.button !== undefined && event.button !== 0) return; // right-click -> contextmenu
+    // MOUSE: selection and caret stay fully native; the manipulation popup is
+    // RIGHT-CLICK only (contextmenu).  Alt+drag still rearranges a keyword.
+    // TOUCH: keep the tap-popup + drag-to-rearrange grammar.
+    const isMouse = event.pointerType === 'mouse';
+    if (isMouse && !event.altKey) return;
     if (popup) closePopup();
     if (!view.contentDOM.contains(event.target)) return;
     const token = tokenFromPoint(event.clientX, event.clientY);
@@ -452,6 +534,7 @@ export async function createPromptCM({
       ghost: null,
       indicator: null,
       drop: null,
+      allowTap: !isMouse,
     };
     window.addEventListener('pointermove', onPointerMove, true);
     window.addEventListener('pointerup', onPointerUp, true);
@@ -554,11 +637,12 @@ export async function createPromptCM({
     cancelPress();
     const smallMove = Math.hypot(event.clientX - state.x, event.clientY - state.y) < DRAG_THRESHOLD;
     if (!smallMove || Date.now() - state.at > TAP_MAX_MS) return;
+    if (!state.allowTap) return; // mouse + Alt was a rearrange-only gesture
     if (lastClosed && lastClosed.from === state.token.from && lastClosed.to === state.token.to && Date.now() - lastClosed.at < TAP_TOGGLE_MS) {
       lastClosed = null; // second tap on the same keyword: stay closed, keep the caret
       return;
     }
-    openTokenPopup(state.token);
+    openTokenPopup([state.token]);
   }
 
   function onPointerCancel(event) {
@@ -593,6 +677,10 @@ export async function createPromptCM({
       extensions: [
         history(),
         keymap.of([
+          // Ctrl/Cmd+Enter is the app-wide "generate" shortcut (the desktop page's
+          // script.js handles it on document level) - consume the key here so the
+          // default keymap cannot insert a blank line into the prompt.
+          { key: 'Mod-Enter', run: () => true },
           ...hotkeyEntries,
           ...closeBracketsKeymap,
           ...completionKeymap,
@@ -630,10 +718,10 @@ export async function createPromptCM({
               event.preventDefault();
               return true;
             }
-            const token = tokenFromPoint(event.clientX, event.clientY);
-            if (!token) return false;
+            const targets = popupTargetsAt(event.clientX, event.clientY);
+            if (!targets.length) return false;
             event.preventDefault();
-            openTokenPopup(token);
+            openTokenPopup(targets);
             return true;
           },
         }),

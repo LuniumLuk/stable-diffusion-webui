@@ -3,6 +3,7 @@ import threading
 import time
 import traceback
 import uuid
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import gradio as gr
@@ -152,7 +153,12 @@ class JobQueueManager:
 
         progress_module.add_task_to_queue(task_id)
 
-        with queue_lock:
+        # Krea 2 runs through the sd-server bridge, which takes the queue lock
+        # itself (engine hand-over + SDXL unload), so it must NOT be held here.
+        # The lock still serialises everything: other jobs wait on it while the
+        # krea2 job runs, and vice versa.
+        lock_ctx = nullcontext() if job.job_type == "krea2" else queue_lock
+        with lock_ctx:
             if self._non_queue_generation_active():
                 return
 
@@ -164,14 +170,20 @@ class JobQueueManager:
             shared.state.begin(job=task_id)
             progress_module.start_task(task_id)
             try:
+                res = None
                 if job.job_type == "txt2img":
                     res = modules.txt2img.txt2img(task_id, fake_request, *job.args)
                 elif job.job_type == "img2img":
                     res = modules.img2img.img2img(task_id, fake_request, *job.args)
+                elif job.job_type == "krea2":
+                    _run_krea2_queue_job(job)
                 else:
                     raise RuntimeError(f"Unknown queue job type: {job.job_type}")
 
-                progress_module.record_results(task_id, res)
+                if res is not None:
+                    # krea2 has no Processed result for the txt2img restore path;
+                    # its images are written to outputs/krea2/ instead
+                    progress_module.record_results(task_id, res)
                 with self._lock:
                     job.status = "done"
                     job.finished_at = time.time()
@@ -205,6 +217,11 @@ def _job_image_count(job_type: str, args: tuple) -> int:
     if job_type == "img2img":
         if len(args) > 15:
             return _safe_int(args[14]) * _safe_int(args[15])
+        return 1
+
+    if job_type == "krea2":
+        if args and isinstance(args[0], dict):
+            return _safe_int(args[0].get("batch"))
         return 1
 
     return 1
@@ -381,6 +398,31 @@ def add_to_queue_img2img(*args):
         return f'<span class="jq-notice">img2img queued: <code>{job.id}</code> ({queued} waiting)</span>'
 
 
+def add_krea2_job(payload: dict, label: str = "") -> QueueJob:
+    """Queue a Krea 2 generation (payload = the desktop Krea 2 tab's run payload)."""
+    return queue_manager.add_job("krea2", (dict(payload),), label=label)
+
+
+def _run_krea2_queue_job(job: QueueJob) -> None:
+    """Run a krea2 payload through the mobile_lite sidecar bridge (blocking)."""
+    from modules import mobile_lite
+
+    payload = dict(job.args[0]) if job.args and isinstance(job.args[0], dict) else {}
+    payload["task_id"] = job.task_id
+
+    # The runner takes the queue lock itself, so first wait out a manual krea2
+    # job (it would reject the run with "a krea2 job is already running").
+    deadline = time.time() + 1800
+    while time.time() < deadline and mobile_lite.krea2_job_status().get("active"):
+        time.sleep(0.5)
+
+    try:
+        mobile_lite.run_krea2_job(payload)
+    except Exception as error:
+        # HTTPException carries the useful message on .detail
+        raise RuntimeError(str(getattr(error, "detail", None) or error)) from error
+
+
 def _fmt_time(ts):
     if ts is None:
         return ""
@@ -509,6 +551,32 @@ def _build_job_details(job) -> dict:
         # Try to extract seed, sampler, steps, scheduler from custom_inputs (args[36:])
         custom = list(args[36:]) if len(args) > 36 else []
         _extract_custom_params(custom, details)
+
+    elif job.job_type == "krea2":
+        # args[0] is the payload dict the Krea 2 tab queued
+        payload = args[0] if args and isinstance(args[0], dict) else {}
+        if payload.get("prompt"):
+            details["Prompt"] = _safe_detail_val(payload.get("prompt"))
+        if payload.get("negative_prompt"):
+            details["Negative prompt"] = _safe_detail_val(payload.get("negative_prompt"))
+        if payload.get("steps") is not None:
+            details["Steps"] = _safe_detail_val(payload.get("steps"))
+        if payload.get("cfg") is not None:
+            details["CFG scale"] = _safe_detail_val(payload.get("cfg"))
+        width, height = payload.get("width"), payload.get("height")
+        if width and height:
+            details["Size"] = f"{width}×{height}"
+        if payload.get("batch"):
+            details["Images"] = _safe_detail_val(payload.get("batch"))
+        refs = payload.get("refs") or []
+        if refs:
+            details["References"] = f"{len(refs)} reference(s)"
+        seed = payload.get("seed")
+        if seed is not None:
+            try:
+                details["Seed"] = "random (-1)" if int(seed) < 0 else str(int(seed))
+            except Exception:
+                details["Seed"] = str(seed)
 
     # Clean up empty values
     return {k: v for k, v in details.items() if v}

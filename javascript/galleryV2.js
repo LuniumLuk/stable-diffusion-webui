@@ -118,8 +118,8 @@
 
   var SEND_ACTIONS = [
     ['txt2img', '\u270E  txt2img', 'Apply the prompt + parameters to txt2img'],
-    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send the image + parameters to img2img'],
-    ['inpaint', '\u{1F3A8}  Inpaint', 'Send the image + parameters to inpaint'],
+    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send only the image to img2img (right-click: prompt-only / send all)'],
+    ['inpaint', '\u{1F3A8}  Inpaint', 'Send only the image to inpaint (right-click: prompt-only / send all)'],
     ['composer', '\u{1F9E9}  Composer', 'Open the image in the Composer tab'],
     ['censor', '\u{1F58A}\uFE0F  Censor', 'Open the image in the Censor panel']
   ];
@@ -164,6 +164,21 @@
     return true;
   }
 
+  // "Send prompt + negative only": write JUST the item's prompt / negative
+  // prompt into the img2img prompt boxes (the inpaint sub-tab shares them).
+  // Deliberately NOT via the paste bridge: parse_generation_parameters always
+  // fills in defaults (Clip skip=1, Hires resize/prompt/sampler/checkpoint,
+  // ...) and paste_func applies every present key, so the bridge cannot
+  // express "prompt + negative only". Fields the item lacks stay untouched.
+  function applyPromptOnly(item) {
+    var prompt = item.prompt || '';
+    var negative = item.negative_prompt || '';
+    if (!prompt && !negative) { toast('No prompt / negative prompt to send', true); return false; }
+    if (prompt) setGradioTextbox('img2img_prompt', prompt);
+    if (negative) setGradioTextbox('img2img_neg_prompt', negative);
+    return true;
+  }
+
   function fetchItemImageBlob(item) {
     // Prefer the original file on disk, fall back to the stored preview blob.
     var path = item.path || item.alias_path || '';
@@ -180,10 +195,10 @@
     return attempt(0);
   }
 
-  function injectImageToImg2Img(item) {
+  function injectImageInto(item, hostId) {
     return fetchItemImageBlob(item).then(function (blob) {
-      var fileInput = gradioApp().querySelector('#img2img_image input[type="file"]');
-      if (!fileInput) { toast('img2img image input not found', true); return; }
+      var fileInput = gradioApp().querySelector('#' + hostId + ' input[type="file"]');
+      if (!fileInput) { toast(hostId + ' image input not found', true); return; }
       var name = ((item.path || '').split(/[\\/]/).pop()) || 'gallery-image.png';
       var file = new File([blob], name, { type: blob.type || 'image/png' });
       var data = new DataTransfer();
@@ -191,6 +206,22 @@
       fileInput.files = data.files;
       fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     }).catch(function () { toast('No image media available for this item', true); });
+  }
+
+  // Land on the img2img top tab + the requested sub-tab and, when an item is given,
+  // drop the image into that sub-tab's OWN component.  The img2img and Inpaint
+  // sub-tabs have SEPARATE gradio components (#img2img_image vs #img2maskimg), so
+  // injecting into the wrong one "loses" the image in the hidden sub-tab.
+  function goToImg2ImgSub(sub, item) {
+    setTimeout(function () { switchToTabByName('img2img'); }, 200);
+    setTimeout(function () {
+      if (sub === 'inpaint') {
+        if (typeof window.switch_to_inpaint === 'function') window.switch_to_inpaint();
+      } else if (typeof window.switch_to_img2img === 'function') {
+        window.switch_to_img2img();
+      }
+      if (item) injectImageInto(item, sub === 'inpaint' ? 'img2maskimg' : 'img2img_image');
+    }, 360);
   }
 
   function sendableText(item) {
@@ -203,7 +234,8 @@
     return infotext;
   }
 
-  function sendItemTo(item, action) {
+  function sendItemTo(item, action, opts) {
+    var only = (opts && opts.only) || '';
     var path = item.path || item.alias_path || '';
     var text = sendableText(item);
     if (action === 'txt2img') {
@@ -212,18 +244,31 @@
       setTimeout(function () { switchToTabByName('txt2img'); }, 200);
       toast('To txt2img');
     } else if (action === 'img2img') {
-      if (text && !applyInfotext(text, 'img2img')) return;
-      setTimeout(function () { switchToTabByName('img2img'); }, 200);
-      setTimeout(function () { injectImageToImg2Img(item); }, 320);
-      toast('To img2img');
+      if (only === 'prompt') {
+        if (!applyPromptOnly(item)) return;
+        goToImg2ImgSub('img2img');
+        toast('To img2img \u2014 prompt + negative only');
+      } else if (only === 'all') {
+        if (text && !applyInfotext(text, 'img2img')) return;
+        goToImg2ImgSub('img2img', item);
+        toast('To img2img \u2014 image + prompt + settings');
+      } else {
+        goToImg2ImgSub('img2img', item);
+        toast('To img2img \u2014 image only');
+      }
     } else if (action === 'inpaint') {
-      if (text && !applyInfotext(text, 'img2img')) return;
-      setTimeout(function () { switchToTabByName('img2img'); }, 200);
-      setTimeout(function () {
-        if (typeof window.switch_to_inpaint === 'function') window.switch_to_inpaint();
-        injectImageToImg2Img(item);
-      }, 340);
-      toast('To inpaint');
+      if (only === 'prompt') {
+        if (!applyPromptOnly(item)) return;
+        goToImg2ImgSub('inpaint');
+        toast('To inpaint \u2014 prompt + negative only');
+      } else if (only === 'all') {
+        if (text && !applyInfotext(text, 'img2img')) return;
+        goToImg2ImgSub('inpaint', item);
+        toast('To inpaint \u2014 image + prompt + settings');
+      } else {
+        goToImg2ImgSub('inpaint', item);
+        toast('To inpaint \u2014 image only');
+      }
     } else if (action === 'composer') {
       if (!path) { toast('No file path on this item', true); return; }
       switchToTabByName('composer');
@@ -247,28 +292,99 @@
     }
   }
 
-  function sendItemByKey(key, action) {
+  function sendItemByKey(key, action, opts) {
     api('/gallery/api/item?id=' + encodeURIComponent(key)).then(function (item) {
-      sendItemTo(item, action);
+      sendItemTo(item, action, opts);
     }).catch(function (err) { toast('Item lookup failed: ' + err.message, true); });
   }
 
   var _ctxMenuEl = null;
+  var _ctxSubEl = null;
 
   function ctxMenuOutside(ev) {
-    if (_ctxMenuEl && !_ctxMenuEl.contains(ev.target)) closeCtxMenu();
+    var inSub = _ctxSubEl && _ctxSubEl.contains(ev.target);
+    if (_ctxSubEl && !inSub) closeCtxSub();
+    if (_ctxMenuEl && !inSub && !_ctxMenuEl.contains(ev.target)) closeCtxMenu();
   }
 
   function ctxMenuKey(ev) {
-    if (ev.key === 'Escape') closeCtxMenu();
+    if (ev.key !== 'Escape') return;
+    if (_ctxSubEl) { closeCtxSub(); return; }
+    closeCtxMenu();
+  }
+
+  function closeCtxSub() {
+    if (!_ctxSubEl) return;
+    _ctxSubEl.remove();
+    _ctxSubEl = null;
+    if (!_ctxMenuEl) {
+      document.removeEventListener('mousedown', ctxMenuOutside, true);
+      document.removeEventListener('keydown', ctxMenuKey, true);
+    }
   }
 
   function closeCtxMenu() {
+    closeCtxSub();
     if (!_ctxMenuEl) return;
     _ctxMenuEl.remove();
     _ctxMenuEl = null;
     document.removeEventListener('mousedown', ctxMenuOutside, true);
     document.removeEventListener('keydown', ctxMenuKey, true);
+  }
+
+  function bareSendAction(action) {
+    return action === 'img2img' || action === 'inpaint';
+  }
+
+  // Right-click options for a send-to-img2img / send-to-inpaint entry: either
+  // inject ONLY the image (keep prompt + parameters) or apply ONLY the item's
+  // prompt + negative prompt (no image, no other settings).
+  function makeSendOptions(makeRun) {
+    return [
+      {
+        id: 'prompt',
+        label: '\u270E  Send prompt + negative only',
+        title: 'Apply only the prompt and negative prompt \u2014 no image, no other settings',
+        run: makeRun('prompt'),
+      },
+      {
+        id: 'all',
+        label: '\u{1F4E6}  Send all (image + prompt + settings)',
+        title: 'Send the image AND apply the prompt + parameters (the old full send)',
+        run: makeRun('all'),
+      },
+    ];
+  }
+
+  function openSendOptionsMenu(ev, options) {
+    closeCtxSub();
+    var sub = document.createElement('div');
+    sub.className = 'gv2-ctx gv2-ctx-sub';
+    options.forEach(function (opt) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-bare-send', opt.id);
+      btn.textContent = opt.label;
+      btn.title = opt.title;
+      sub.appendChild(btn);
+    });
+    document.body.appendChild(sub);
+    var w = sub.offsetWidth;
+    var h = sub.offsetHeight;
+    sub.style.left = Math.max(4, Math.min(ev.clientX, window.innerWidth - w - 6)) + 'px';
+    sub.style.top = Math.max(4, Math.min(ev.clientY, window.innerHeight - h - 6)) + 'px';
+    sub.addEventListener('click', function (e) {
+      var pick = e.target.closest ? e.target.closest('[data-bare-send]') : null;
+      if (!pick) return;
+      closeCtxSub();
+      var id = pick.getAttribute('data-bare-send');
+      for (var i = 0; i < options.length; i++) {
+        if (options[i].id === id) { options[i].run(); return; }
+      }
+    });
+    _ctxSubEl = sub;
+    document.addEventListener('mousedown', ctxMenuOutside, true);
+    document.addEventListener('keydown', ctxMenuKey, true);
   }
 
   function openCtxMenu(ev, key) {
@@ -293,6 +409,20 @@
       if (!btn) return;
       closeCtxMenu();
       sendItemByKey(key, btn.getAttribute('data-send'));
+    });
+    menu.addEventListener('contextmenu', function (e) {
+      var btn = e.target.closest ? e.target.closest('[data-send]') : null;
+      if (!btn) return;
+      var action = btn.getAttribute('data-send');
+      if (!bareSendAction(action)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openSendOptionsMenu(e, makeSendOptions(function (only) {
+        return function () {
+          closeCtxMenu();
+          sendItemByKey(key, action, { only: only });
+        };
+      }));
     });
     _ctxMenuEl = menu;
     document.addEventListener('mousedown', ctxMenuOutside, true);
@@ -1874,9 +2004,19 @@
       });
     });
     box.querySelectorAll('[data-send-act]').forEach(function (btn) {
+      var act = btn.getAttribute('data-send-act');
       btn.addEventListener('click', function () {
-        sendItemTo(item, btn.getAttribute('data-send-act'));
+        sendItemTo(item, act);
       });
+      if (bareSendAction(act)) {
+        btn.addEventListener('contextmenu', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          openSendOptionsMenu(e, makeSendOptions(function (only) {
+            return function () { sendItemTo(item, act, { only: only }); };
+          }));
+        });
+      }
     });
     box.querySelectorAll('[data-detail-act]').forEach(function (btn) {
       btn.addEventListener('click', function () {

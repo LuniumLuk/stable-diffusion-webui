@@ -6207,6 +6207,11 @@ body.resizing .resize-handle {
     color: #e0f2fe;
 }
 
+.gv2-ctx-sub {
+    min-width: 232px;
+    border-color: #0284c7;
+}
+
 .gv2-detail-tagadd {
     display: flex;
     gap: 6px;

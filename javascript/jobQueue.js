@@ -71,9 +71,11 @@ function queue_job_img2img() {
     function setGenerateButtonsDisabled(disabled) {
         var txt2imgGenerate = gradioApp().getElementById('txt2img_generate');
         var img2imgGenerate = gradioApp().getElementById('img2img_generate');
+        var krea2Generate = gradioApp().getElementById('krea2_generate_btn');
 
         if (txt2imgGenerate) txt2imgGenerate.disabled = disabled;
         if (img2imgGenerate) img2imgGenerate.disabled = disabled;
+        if (krea2Generate) krea2Generate.disabled = disabled;
     }
 
     function setInterruptSkipForAllTabs(running) {
@@ -115,6 +117,12 @@ function queue_job_img2img() {
 
     function startQueueProgressTracking(taskId, jobType) {
         if (!taskId || activeProgressTrackers[taskId]) {
+            return;
+        }
+
+        // Only txt2img / img2img tasks have restorable results in the task system;
+        // other engines (krea2) report through the Queue tab itself.
+        if (jobType !== 'txt2img' && jobType !== 'img2img') {
             return;
         }
 

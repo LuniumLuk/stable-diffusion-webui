@@ -147,12 +147,13 @@ document.addEventListener('keydown', function(e) {
     const isAltKey = e.altKey;
     const isEsc = e.key === 'Escape';
 
-    const generateButton = get_uiCurrentTabContent().querySelector('button[id$=_generate]');
+    // `_generate` = txt2img / img2img; `_generate_btn` = the Qwen / Krea 2 panels.
+    const generateButton = get_uiCurrentTabContent().querySelector('button[id$=_generate], button[id$=_generate_btn]');
     const interruptButton = get_uiCurrentTabContent().querySelector('button[id$=_interrupt]');
     const skipButton = get_uiCurrentTabContent().querySelector('button[id$=_skip]');
 
     if (isCtrlKey && isEnter) {
-        if (interruptButton.style.display === 'block') {
+        if (interruptButton && interruptButton.style.display === 'block') {
             interruptButton.click();
             const callback = (mutationList) => {
                 for (const mutation of mutationList) {
@@ -166,14 +167,16 @@ document.addEventListener('keydown', function(e) {
             };
             const observer = new MutationObserver(callback);
             observer.observe(interruptButton, {attributes: true});
-        } else {
+        } else if (generateButton) {
             generateButton.click();
         }
         e.preventDefault();
     }
 
     if (isAltKey && isEnter) {
-        skipButton.click();
+        if (skipButton) {
+            skipButton.click();
+        }
         e.preventDefault();
     }
 
@@ -182,7 +185,7 @@ document.addEventListener('keydown', function(e) {
         const lightboxModal = document.querySelector('#lightboxModal');
         if (!globalPopup || globalPopup.style.display === 'none') {
             if (document.activeElement === lightboxModal) return;
-            if (interruptButton.style.display === 'block') {
+            if (interruptButton && interruptButton.style.display === 'block') {
                 interruptButton.click();
                 e.preventDefault();
             }

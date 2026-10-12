@@ -136,7 +136,11 @@ def _preset_callback(preset_width: int, preset_height: int):
 
 def run_krea2_generation(prompt_text, negative_text, ref_files, steps, cfg, width, height, batch, seed_value, random_seed):
     """Generate (or reference-edit) with Krea 2 through the shared sidecar bridge."""
+    from modules import job_queue
     from modules.processing import strip_prompt_comments
+
+    # same contract as txt2img/img2img: manual Generate waits for queued jobs
+    job_queue.ensure_manual_generation_allowed(None)
 
     prompt_text = str(prompt_text or "")
     if not strip_prompt_comments(prompt_text).strip():
@@ -189,6 +193,44 @@ def run_krea2_generation(prompt_text, negative_text, ref_files, steps, cfg, widt
     )
     seed_update = gr.update(value=int(first_seed)) if first_seed is not None else gr.update()
     return gr.update(value=gallery), seed_update, status, ""
+
+
+def queue_krea2_generation(prompt_text, negative_text, ref_files, steps, cfg, width, height, batch, seed_value, random_seed):
+    """Add the current Krea 2 settings to the shared job queue (Queue tab)."""
+    from modules import job_queue
+    from modules.processing import strip_prompt_comments
+
+    prompt_text = str(prompt_text or "")
+    plain_prompt = strip_prompt_comments(prompt_text).strip()
+    if not plain_prompt:
+        return "⚠️ Nothing queued - the prompt is empty."
+
+    refs, skipped, extra = _collect_references(ref_files)
+    payload = {
+        "prompt": prompt_text,
+        "negative_prompt": str(negative_text or ""),
+        "steps": int(steps),
+        "cfg": float(cfg),
+        "width": int(width),
+        "height": int(height),
+        "batch": int(batch),
+        "seed": -1 if random_seed else int(seed_value if seed_value is not None else -1),
+        "refs": refs,
+    }
+    label = f"Krea 2 · {' '.join(plain_prompt.split())[:48]} · {int(width)}x{int(height)}"
+    if int(batch) > 1:
+        label += f" · {int(batch)} imgs"
+    if refs:
+        label += f" · {len(refs)} ref"
+    job = job_queue.add_krea2_job(payload, label=label)
+    queued = sum(1 for j in job_queue.queue_manager.get_snapshot() if j.status == "queued")
+    notes = ""
+    if skipped or extra:
+        notes = f"  \n⚠️ {skipped + extra} reference(s) skipped or over the {KREA2_REF_LIMIT} limit."
+    return (
+        f"✅ **Krea 2 queued** `{job.id}` ({queued} waiting) - manage it on the **Queue** tab.  \n"
+        f"Runs automatically when generation is free; results land in `outputs/krea2/`.{notes}"
+    )
 
 
 def clear_references():
@@ -504,7 +546,7 @@ def on_ui_tabs():
                 with gr.Row():
                     steps = gr.Slider(minimum=1, maximum=40, step=1, value=8, label="Steps (Turbo: 8)", elem_id="krea2_steps")
                     cfg = gr.Slider(minimum=0.0, maximum=10.0, step=0.1, value=1.0, label="CFG scale (Turbo: 1.0)", elem_id="krea2_cfg")
-                    batch = gr.Slider(minimum=1, maximum=4, step=1, value=1, label="Images", elem_id="krea2_batch")
+                    batch = gr.Slider(minimum=1, maximum=8, step=1, value=1, label="Images", elem_id="krea2_batch")
 
                 with gr.Row():
                     seed = gr.Number(value=-1, precision=0, label="Seed", elem_id="krea2_seed")
@@ -518,6 +560,7 @@ def on_ui_tabs():
 
                 with gr.Row():
                     generate_btn = gr.Button("Generate", variant="primary", elem_id="krea2_generate_btn")
+                    queue_btn = gr.Button("Queue", elem_id="krea2_queue_btn", tooltip="Add current settings to job queue")
                     cancel_btn = gr.Button("Cancel", elem_id="krea2_cancel_btn")
                     clear_refs_btn = gr.Button("Clear references", elem_id="krea2_clear_refs_btn")
 
@@ -543,6 +586,12 @@ def on_ui_tabs():
             fn=run_krea2_generation,
             inputs=[prompt, negative, refs, steps, cfg, width, height, batch, seed, random_seed],
             outputs=[results, seed, result_status, task_status],
+        )
+        queue_btn.click(
+            fn=queue_krea2_generation,
+            inputs=[prompt, negative, refs, steps, cfg, width, height, batch, seed, random_seed],
+            outputs=[result_status],
+            show_progress=False,
         )
         cancel_btn.click(fn=cancel_krea2_generation, inputs=[], outputs=[result_status], show_progress=False)
         clear_refs_btn.click(fn=clear_references, inputs=[], outputs=[refs], show_progress=False)

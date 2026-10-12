@@ -1739,7 +1739,7 @@ def _run_krea2_job(payload: dict) -> dict:
     cfg = _payload_number(payload, "cfg", 0.0, 30.0, 1.0, cast=float)
     width = _clamp_krea2_size(payload.get("width"), 1024)
     height = _clamp_krea2_size(payload.get("height"), 1024)
-    batch = _payload_number(payload, "batch", 1, 4, 1)
+    batch = _payload_number(payload, "batch", 1, 8, 1)
     seed = _clamp_int(payload.get("seed"), -1, 2 ** 31 - 1, -1)
 
     body = {

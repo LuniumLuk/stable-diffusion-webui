@@ -289,6 +289,17 @@
         return changed;
     }
 
+    // "To <mode>" copy buttons ("Copy image to" rows): map the button label to the
+    // target mode index ('inpaint sketch' must win over 'sketch' / 'inpaint').
+    function copyTargetIndex(label) {
+        var s = String(label || '').trim().toLowerCase();
+        if (s.indexOf('inpaint sketch') >= 0) return 3;
+        if (s.indexOf('inpaint') >= 0) return 2;
+        if (s.indexOf('sketch') >= 0) return 1;
+        if (s.indexOf('img2img') >= 0) return 0;
+        return -1;
+    }
+
     function currentModeIndex() {
         var a = app();
         if (!a) return currentMode;
@@ -411,6 +422,43 @@
             }
         }, true);
 
+        // "Copy image to <mode>" buttons carry the prompt + negative prompt into the
+        // target mode: the server fn copies the image, performSwitch swaps the
+        // per-mode state - afterwards push the SOURCE prompt/negative over (and into
+        // the target's store). Other parameters deliberately stay the target's own.
+        document.addEventListener('click', function (e) {
+            var t = e.target;
+            if (!t || !t.closest) return;
+            var btn = t.closest('#mode_img2img [id^="img2img_copy_to_"] button');
+            if (!btn) return;
+            var idx = copyTargetIndex(btn.textContent);
+            if (idx < 0 || idx === currentModeIndex()) return;
+            var prompt = readField(FIELDS[0]);
+            var negative = readField(FIELDS[1]);
+
+            var applyCarry = function () {
+                writeField(FIELDS[0], prompt === undefined ? '' : prompt);
+                writeField(FIELDS[1], negative === undefined ? '' : negative);
+                var params = store[String(idx)] || {};
+                if (prompt !== undefined) params[FIELDS[0].key] = prompt;
+                if (negative !== undefined) params[FIELDS[1].key] = negative;
+                store[String(idx)] = params;
+                persist();
+            };
+
+            // wait for the (async) mode switch and its 50 ms restore, then carry
+            var waited = 0;
+            var waitSwitch = function () {
+                waited += 100;
+                if (currentModeIndex() === idx || waited > 2500) {
+                    setTimeout(applyCarry, 140);
+                    return;
+                }
+                setTimeout(waitSwitch, 100);
+            };
+            setTimeout(waitSwitch, 80);
+        }, true);
+
         window.addEventListener('beforeunload', function () {
             var idx = currentModeIndex();
             if (idx >= 0) saveMode(idx);
@@ -448,5 +496,6 @@
         modeKeys: MODE_KEYS,
         fields: FIELDS,
         diffValues: diffValues,
+        copyTargetIndex: copyTargetIndex,
     };
 })();
