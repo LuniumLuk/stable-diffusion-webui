@@ -8,12 +8,14 @@ import { closeSheet, debounce, el, initViewer, openSheet, switchTab, toast } fro
 import * as screenCompose from './screen-compose.js';
 import * as screenGallery from './screen-gallery.js';
 import * as screenImage from './screen-image.js';
+import * as screenKrea2 from './screen-krea2.js';
 import * as screenQwen from './screen-qwen.js';
 import * as screenText from './screen-text.js';
 
 const SCREENS = {
   text: screenText,
   image: screenImage,
+  krea2: screenKrea2,
   qwen: screenQwen,
   gallery: screenGallery,
   compose: screenCompose,

@@ -1,6 +1,7 @@
 /* Qwen screen: Qwen-Image-2.1 (text to image + reference-image edits) via the sd-server. */
 
 import { api_, blobToDataUrl, fetchImageData, imageSize, randomTaskId } from './api.js';
+import { openCollectionPicker } from './collection.js';
 import { isJobActive, runJob } from './job.js';
 import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
@@ -124,6 +125,21 @@ export async function addImageAsQwenRef(item) {
     await new Promise((resolve) => setTimeout(resolve, 60));
   }
   await addRefFromResult({ path: item.path, url: item.url });
+}
+
+/** Open ./data/collection and add the picked pictures as references. */
+function openCollection() {
+  openCollectionPicker({
+    onPick: (entry) => {
+      if (refs.length >= REF_LIMIT) {
+        toast(`max ${REF_LIMIT} reference images`, 'warn');
+        return false;
+      }
+      addRefs([entry]);
+      toast('reference added', 'ok', 1600);
+      return true;
+    },
+  });
 }
 
 /* ---------------------------------------------------------------- status chip */
@@ -317,6 +333,13 @@ export function init(container) {
         type: 'button',
         text: '\uFF0B Add',
         onClick: () => upload.click(),
+      }),
+      el('button', {
+        class: 'btn tiny',
+        type: 'button',
+        text: '\u{1F4C1} Collection',
+        title: 'Pick from data/collection',
+        onClick: openCollection,
       }),
     ]),
     refsGrid,

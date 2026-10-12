@@ -4,7 +4,7 @@ import { api_ } from './api.js';
 import { hrFinalSize, hrStagePlan } from './hires.js';
 import { planInputResize, resolveInputSize, round8 } from './resize-plan.js';
 import { closeSheet, el, openSheet, toast } from './ui.js';
-import { emit, imageParams, on, qwenParams, resolveOutputSize, setParam, state } from './state.js';
+import { emit, imageParams, krea2Params, on, qwenParams, resolveOutputSize, setParam, state } from './state.js';
 
 const SIZE_PRESETS = [
   [512, 512],
@@ -86,7 +86,7 @@ export async function applyModel(title) {
   }
 }
 
-const QWEN_SIZES = [
+const SIDECAR_SIZES = [
   [384, 384],
   [512, 512],
   [512, 768],
@@ -101,7 +101,7 @@ const QWEN_SIZES = [
   [2528, 1696],
 ];
 
-/** Seed input + dice + lock, shared by the SDXL sheet and the Qwen sheet. */
+/** Seed input + dice + lock, shared by the SDXL sheet and the sidecar (Qwen / Krea 2) sheets. */
 function seedField(store) {
   const seedInput = el('input', { type: 'number', value: store.seed, min: -1, max: 2147483647, inputmode: 'numeric' });
   const lockButton = el('button', {
@@ -134,15 +134,8 @@ function seedField(store) {
   ]);
 }
 
-/** Qwen-Image-2.1 params: steps / CFG / images / 32px sizes / seed (no sampler or hires). */
-function openQwenParamsSheet() {
-  const params = qwenParams();
-  const body = el('div');
-
-  body.append(sliderRow(params, 'Sampling steps', 'steps', 1, 80, 1));
-  body.append(sliderRow(params, 'CFG scale', 'cfg', 1, 20, 0.5, { format: (value) => Number(value).toFixed(1) }));
-  body.append(sliderRow(params, 'Images', 'batch', 1, 4, 1));
-
+/** 32px-multiple size field shared by the Qwen-Image and Krea 2 sheets. */
+function sidecarSizeField(params, note) {
   const clampSize = (value, fallback) => {
     const number = Math.round(Number(value) / 32) * 32;
     return Math.min(4096, Math.max(64, Number.isFinite(number) && number > 0 ? number : fallback));
@@ -150,7 +143,7 @@ function openQwenParamsSheet() {
   const widthInput = el('input', { type: 'number', value: params.width, min: 64, max: 4096, step: 32, inputmode: 'numeric' });
   const heightInput = el('input', { type: 'number', value: params.height, min: 64, max: 4096, step: 32, inputmode: 'numeric' });
   const sizePreview = el('div', { class: 'size-preview' });
-  const sizeChips = QWEN_SIZES.map(([width, height]) => el('button', {
+  const sizeChips = SIDECAR_SIZES.map(([width, height]) => el('button', {
     class: 'chip',
     type: 'button',
     text: `${width}\u00D7${height}`,
@@ -159,7 +152,7 @@ function openQwenParamsSheet() {
   const refreshSize = () => {
     sizePreview.textContent = `${params.width}\u00D7${params.height}`;
     sizeChips.forEach((chip, index) => {
-      chip.classList.toggle('on', QWEN_SIZES[index][0] === params.width && QWEN_SIZES[index][1] === params.height);
+      chip.classList.toggle('on', SIDECAR_SIZES[index][0] === params.width && SIDECAR_SIZES[index][1] === params.height);
     });
   };
   const syncSize = () => {
@@ -175,14 +168,27 @@ function openQwenParamsSheet() {
   heightInput.addEventListener('change', syncSize);
   refreshSize();
 
-  const sizeField = el('div', { class: 'field' }, [
+  return el('div', { class: 'field' }, [
     el('label', { text: 'Size' }),
     sizePreview,
     el('div', { class: 'chips' }, sizeChips),
     el('div', { class: 'row tight' }, [widthInput, el('span', { text: '\u00D7' }), heightInput]),
-    el('div', { class: 'small muted', text: 'Qwen sizes round to multiples of 32. Low-res (384-512) is near-instant; 1024 is quick; the 2K sizes take minutes.' }),
+    el('div', { class: 'small muted', text: note }),
   ]);
-  body.append(sizeField);
+}
+
+/** Qwen-Image-2.1 params: steps / CFG / images / 32px sizes / seed (no sampler or hires). */
+function openQwenParamsSheet() {
+  const params = qwenParams();
+  const body = el('div');
+
+  body.append(sliderRow(params, 'Sampling steps', 'steps', 1, 80, 1));
+  body.append(sliderRow(params, 'CFG scale', 'cfg', 1, 20, 0.5, { format: (value) => Number(value).toFixed(1) }));
+  body.append(sliderRow(params, 'Images', 'batch', 1, 4, 1));
+  body.append(sidecarSizeField(
+    params,
+    'Qwen sizes round to multiples of 32. Low-res (384-512) is near-instant; 1024 is quick; the 2K sizes take minutes.',
+  ));
 
   body.append(seedField(params));
   body.append(el('div', {
@@ -193,9 +199,35 @@ function openQwenParamsSheet() {
   openSheet({ title: 'Qwen params', body });
 }
 
+/** Krea 2 (turbo) params: like the Qwen sheet with the turbo defaults (8 steps, CFG 1.0). */
+function openKrea2ParamsSheet() {
+  const params = krea2Params();
+  const body = el('div');
+
+  body.append(sliderRow(params, 'Sampling steps', 'steps', 1, 100, 1));
+  body.append(sliderRow(params, 'CFG scale', 'cfg', 0, 10, 0.5, { format: (value) => Number(value).toFixed(1) }));
+  body.append(sliderRow(params, 'Images', 'batch', 1, 8, 1));
+  body.append(sidecarSizeField(
+    params,
+    'Krea 2 sizes round to multiples of 32. 512-1024 is quick; the 2K sizes take minutes.',
+  ));
+
+  body.append(seedField(params));
+  body.append(el('div', {
+    class: 'small muted',
+    text: 'Runs on the Krea 2 (turbo) server: euler, 8 steps, CFG 1.0. Generating here unloads the SDXL checkpoint first.',
+  }));
+
+  openSheet({ title: 'Krea 2 params', body });
+}
+
 export function openParamsSheet(kind = 'text') {
   if (kind === 'qwen') {
     openQwenParamsSheet();
+    return;
+  }
+  if (kind === 'krea2') {
+    openKrea2ParamsSheet();
     return;
   }
   const body = el('div');

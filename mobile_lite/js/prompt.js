@@ -1043,7 +1043,7 @@ function createSuggestionsFold(field) {
 /* ------------------------------------------------------------------ public API */
 
 export function createPromptEditor(kind) {
-  const positiveKey = kind === 'text' ? 'text' : kind === 'qwen' ? 'qwen' : 'image';
+  const positiveKey = ['text', 'qwen', 'krea2'].includes(kind) ? kind : 'image';
   const negativeKey = `${positiveKey}Negative`;
 
   const positiveField = createChipsField(positiveKey, 'Prompt', 'Prompt');

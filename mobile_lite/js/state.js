@@ -45,6 +45,8 @@ export const state = {
     imageNegative: '',
     qwen: '',
     qwenNegative: '',
+    krea2: '',
+    krea2Negative: '',
   },
   image: {
     source: null, // { dataUrl, width, height, name, meta } - meta carries the prompt/params
@@ -58,9 +60,11 @@ export const state = {
   imageParams: { img2img: null, inpaint: null },
   // Qwen-Image-2.1 keeps its own set too (it has no sampler / hires and uses 32px sizes)
   qwenParams: null,
+  // Krea 2 keeps its own as well (turbo: 8 steps / CFG 1.0 / 32px sizes)
+  krea2Params: null,
   // recent parameter sets per scope (newest first, max 10) - browsed with the ▲/▼ buttons
-  // on the folded summary line; keyed like the stores: text / img2img / inpaint / qwen
-  paramHistory: { text: [], img2img: [], inpaint: [], qwen: [] },
+  // on the folded summary line; keyed like the stores: text / img2img / inpaint / qwen / krea2
+  paramHistory: { text: [], img2img: [], inpaint: [], qwen: [], krea2: [] },
   ui: {
     brush: 28,
     samCandidate: 0,
@@ -92,7 +96,7 @@ export function emit(name, detail = null) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams', 'paramHistory'];
+const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams', 'krea2Params', 'paramHistory'];
 
 export function loadPersisted() {
   try {
@@ -169,6 +173,14 @@ export function qwenParams() {
     state.qwenParams = { steps: 20, cfg: 6, width: 1024, height: 1024, batch: 1, seed: -1, seedLock: false };
   }
   return state.qwenParams;
+}
+
+/** Krea 2 (turbo) parameter set - like Qwen's, with the turbo defaults (8 steps, CFG 1.0). */
+export function krea2Params() {
+  if (!state.krea2Params) {
+    state.krea2Params = { steps: 8, cfg: 1, width: 1024, height: 1024, batch: 1, seed: -1, seedLock: false };
+  }
+  return state.krea2Params;
 }
 
 /** Apply a seed to the shared set and to every image mode set already in use ("Use seed"). */
@@ -282,6 +294,7 @@ const historyCursors = new Map(); // scope -> { index, draft }: transient browsi
 export function storeKey(store) {
   if (store === state.params) return 'text';
   if (store === state.qwenParams) return 'qwen';
+  if (store === state.krea2Params) return 'krea2';
   if (store === state.imageParams.img2img) return 'img2img';
   if (store === state.imageParams.inpaint) return 'inpaint';
   return null;

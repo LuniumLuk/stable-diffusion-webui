@@ -183,22 +183,90 @@ async function openViewerImage(result, mode, meta = undefined) {
   await useAsImage(result, { mode, meta });
 }
 
-/** Info block below the viewer image; `folded` renders it as a collapsed <details>. */
-export function makeMetaNode(text, { folded = false } = {}) {
-  const content = String(text).slice(0, 4000);
+/**
+ * Copy text to the clipboard. `navigator.clipboard` needs a secure context, so LAN
+ * phones on plain http fall back to the legacy execCommand path.
+ */
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_error) { /* fall through to the legacy path */ }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.left = '-9999px';
+    document.body.append(area);
+    area.select();
+    area.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  } catch (_error) {
+    return false;
+  }
+}
+
+/**
+ * Info block below the viewer image; `folded` renders it as a collapsed <details>.
+ * `content` is a plain string, or a list of {label, text, copy} sections - a truthy
+ * `copy` names the thing being copied ("prompt") and makes that section tap-to-copy.
+ */
+export function makeMetaNode(content, { folded = false } = {}) {
+  const buildBody = () => {
+    const host = document.createElement('div');
+    host.className = 'viewer-meta-body';
+    const sections = Array.isArray(content) ? content : [{ label: '', text: String(content) }];
+    for (const section of sections) {
+      if (!section || !section.text) continue;
+      const block = document.createElement('div');
+      block.className = 'viewer-meta-section';
+      if (section.label) {
+        const label = document.createElement('div');
+        label.className = 'viewer-meta-label';
+        label.textContent = section.label;
+        block.append(label);
+      }
+      const text = document.createElement('div');
+      text.className = 'viewer-meta-text';
+      text.textContent = String(section.text).slice(0, 4000);
+      block.append(text);
+      if (section.copy) {
+        block.classList.add('is-copy');
+        block.setAttribute('role', 'button');
+        block.tabIndex = 0;
+        block.title = `Tap to copy the ${section.copy}`;
+        const copy = async () => {
+          const ok = await copyText(String(section.text));
+          toast(ok ? `${section.copy} copied` : 'copy failed', ok ? 'ok' : 'err', 1600);
+        };
+        block.addEventListener('click', copy);
+        block.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            copy();
+          }
+        });
+      }
+      host.append(block);
+    }
+    return host;
+  };
+
   if (!folded) {
     const node = document.createElement('div');
     node.className = 'viewer-meta';
-    node.textContent = content;
+    node.append(buildBody());
     return node;
   }
   const details = document.createElement('details');
   details.className = 'viewer-meta viewer-meta-fold';
   const summary = document.createElement('summary');
   summary.textContent = 'prompt & details';
-  const body = document.createElement('div');
-  body.className = 'viewer-meta-text';
-  body.textContent = content;
-  details.append(summary, body);
+  details.append(summary, buildBody());
   return details;
 }

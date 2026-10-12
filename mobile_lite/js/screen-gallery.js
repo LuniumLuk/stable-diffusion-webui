@@ -58,20 +58,34 @@ export function metaFromItem(item) {
   };
 }
 
-function itemMetaText(item) {
-  if (item.qwen || item.krea2) {
-    return [item.qwen ? 'Qwen-Image 2.1' : 'Krea 2', item.path || ''].filter(Boolean).join('\n');
+/**
+ * Sections for the gallery viewer's "prompt & details" block. Prompt and negative
+ * prompt are separate tap-to-copy sections; image-only scans without recovered
+ * metadata keep the compact engine + path line.
+ */
+function itemMetaSections(item) {
+  const engine = item.qwen ? 'Qwen-Image 2.1' : item.krea2 ? 'Krea 2' : item.imagemaker ? 'Image Maker' : '';
+  const hasMeta = !!(item.infotext || item.prompt || item.negative_prompt);
+  if (engine && !hasMeta) {
+    return [{ label: '', text: [engine, item.path || ''].filter(Boolean).join('\n') }];
   }
-  if (item.imagemaker) {
-    return ['Image Maker', item.path || ''].filter(Boolean).join('\n');
-  }
-  return [
-    item.prompt || '(no prompt)',
-    item.negative_prompt ? `negative: ${item.negative_prompt}` : '',
-    `${item.width || '?'}\u00D7${item.height || '?'} \u00B7 seed ${item.seed ?? '?'} \u00B7 ${item.steps ?? '?'} steps \u00B7 ${item.sampler || '?'}`,
-    item.model ? `model: ${item.model}` : '',
-    item.path || '',
-  ].filter(Boolean).join('\n');
+
+  const prompt = String(item.prompt || '');
+  const negative = String(item.negative_prompt || '');
+  const sections = [
+    { label: 'Prompt', text: prompt || '(no prompt)', copy: prompt ? 'prompt' : '' },
+  ];
+  if (negative) sections.push({ label: 'Negative prompt', text: negative, copy: 'negative prompt' });
+  sections.push({
+    label: 'Settings',
+    text: [
+      `${item.width || '?'}\u00D7${item.height || '?'} \u00B7 seed ${item.seed ?? '?'} \u00B7 ${item.steps ?? '?'} steps \u00B7 ${item.sampler || '?'}`,
+      item.model ? `model: ${item.model}` : '',
+      engine ? `engine: ${engine}` : '',
+    ].filter(Boolean).join('\n'),
+  });
+  if (item.path) sections.push({ label: '', text: item.path });
+  return sections;
 }
 
 async function act(action, item) {
@@ -142,6 +156,12 @@ async function sendToQwenRef(item) {
   await addImageAsQwenRef({ path: item.path, url: item.url });
 }
 
+/** Load a gallery item as a Krea 2 edit reference. */
+async function sendToKrea2Ref(item) {
+  const { addImageAsKrea2Ref } = await import('./screen-krea2.js');
+  await addImageAsKrea2Ref({ path: item.path, url: item.url });
+}
+
 function cardNode(item, onTap, withActions) {
   const badges = badgesHtml(item);
   const thumb = el('div', {
@@ -183,12 +203,14 @@ function cardNode(item, onTap, withActions) {
     quickButton('\u{1F4DD}', 'Use in text (txt2img) - recovers the seed', () => useMetaInText(metaFromItem(item))),
     quickButton('\u{1F9E9}', 'Add to Compose (image only)', () => sendToCompose(item)),
     quickButton('\u{1F4CE}', 'To Qwen (reference image)', () => sendToQwenRef(item)),
+    quickButton('\u{1F4CE}', 'To Krea 2 (reference image)', () => sendToKrea2Ref(item)),
     quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
   ] : [
     quickButton('\u{1F5BC}', 'Use as image (image only)', () => useAsImage(item, { mode: 'img2img', meta: null })),
     quickButton('\u{1F3A8}', 'Use in inpaint (image only)', () => useAsImage(item, { mode: 'inpaint', meta: null })),
     quickButton('\u{1F9E9}', 'Add to Compose (image only)', () => sendToCompose(item)),
     quickButton('\u{1F4CE}', 'To Qwen (reference image)', () => sendToQwenRef(item)),
+    quickButton('\u{1F4CE}', 'To Krea 2 (reference image)', () => sendToKrea2Ref(item)),
     quickButton('\u{1F4E6}', item.archived ? 'Unarchive' : 'Archive', () => quickAction(item, item.archived ? 'unarchive' : 'archive'), item.archived),
   ];
   const actions = el('div', { class: 'card-actions' }, imageOnly ? imageOnlyActions : [
@@ -217,7 +239,7 @@ function openItemViewer(item) {
     openViewer({
       src: viewerSrc(current),
       title: current.seed !== undefined && current.seed !== null ? `seed ${current.seed}` : '',
-      meta: makeMetaNode(itemMetaText(current), { folded: true }),
+      meta: makeMetaNode(itemMetaSections(current), { folded: true }),
       actions: (current.imagemaker || current.qwen || current.krea2 || current.scan_only)
         ? ((current.infotext || current.prompt) ? [
           { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
@@ -225,6 +247,7 @@ function openItemViewer(item) {
           { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
           { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
+          { label: '\u{1F4CE} To Krea 2', onClick: () => sendToKrea2Ref(current) },
           { label: '\u2B07 Save', onClick: () => downloadItem(current) },
           current.archived
             ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
@@ -234,6 +257,7 @@ function openItemViewer(item) {
           { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint', meta: null }) },
           { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
+          { label: '\u{1F4CE} To Krea 2', onClick: () => sendToKrea2Ref(current) },
           { label: '\u2B07 Save', onClick: () => downloadItem(current) },
           current.archived
             ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }

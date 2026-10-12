@@ -1880,6 +1880,50 @@ def krea2_job_status() -> dict:
     }
 
 
+# --------------------------------------------------------------------------- collection
+
+
+_COLLECTION_DIR = os.path.join(_WEBUI_ROOT, "data", "collection")
+
+
+def _collection_items() -> dict:
+    """List the reference collection (``data/collection``) for the Qwen / Krea 2 pickers.
+
+    Recursively walks the folder (character subfolders + loose pictures), newest
+    first, and serves 192px webp thumbs from the shared gallery cache.
+    """
+    if not os.path.isdir(_COLLECTION_DIR):
+        return {"root": "data/collection", "folders": [], "images": []}
+
+    folders = set()
+    images = []
+    for dirpath, dirnames, filenames in os.walk(_COLLECTION_DIR):
+        dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
+        for filename in sorted(filenames):
+            if filename.startswith(".") or os.path.splitext(filename)[1].lower() not in _IMAGE_EXTS:
+                continue
+            path = os.path.join(dirpath, filename)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            relative = os.path.relpath(dirpath, _COLLECTION_DIR).replace(os.sep, "/")
+            folder = "" if relative == "." else relative
+            if folder:
+                folders.add(folder)
+            images.append({
+                "name": filename,
+                "folder": folder,
+                "path": path,
+                "url": _file_url(path),
+                "thumb": _cached_image_url(path, mtime, "thumb"),
+                "mtime": mtime,
+            })
+
+    images.sort(key=lambda item: item["mtime"], reverse=True)
+    return {"root": "data/collection", "folders": sorted(folders), "images": images}
+
+
 # --------------------------------------------------------------------------- gallery
 
 
@@ -2646,6 +2690,11 @@ def register_routes(app):
             {"id": int(a["id"]), "name": str(a["name"]), "count": int(a.get("count") or 0)}
             for a in rows
         ]}
+
+    @app.get("/mlite/api/collection")
+    def mlite_collection():
+        """Reference collection browser (``data/collection``) for the Qwen / Krea 2 screens."""
+        return _collection_items()
 
     @app.get("/mlite/api/suggestions")
     def mlite_suggestions():

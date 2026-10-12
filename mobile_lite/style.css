@@ -114,6 +114,7 @@ button { touch-action: manipulation; }
 
 body[data-tab="text"] #screen-text,
 body[data-tab="image"] #screen-image,
+body[data-tab="krea2"] #screen-krea2,
 body[data-tab="qwen"] #screen-qwen,
 body[data-tab="gallery"] #screen-gallery,
 body[data-tab="compose"] #screen-compose { display: flex; }
@@ -780,6 +781,23 @@ body.mask-editing { overflow: hidden; }
 .viewer-meta-fold[open] summary { color: var(--text); margin-bottom: 4px; }
 .viewer-meta-fold .viewer-meta-text { white-space: pre-wrap; word-break: break-word; }
 
+/* viewer meta sections: Prompt / Negative prompt are separate tap-to-copy targets */
+.viewer-meta-section + .viewer-meta-section { margin-top: 6px; }
+.viewer-meta-label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.viewer-meta-section.is-copy {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.viewer-meta-section.is-copy .viewer-meta-label::after { content: ' \00B7\00A0tap to copy'; text-transform: none; letter-spacing: 0; }
+.viewer-meta-section.is-copy:active { background: rgba(249, 115, 22, 0.16); border-color: var(--accent); }
+
 /* ---------------------------------------------------------------- toasts */
 
 #toasts {
@@ -1284,6 +1302,45 @@ body.text-editing { overflow: hidden; }
 .qwen-status.ok { color: var(--accent); border-color: var(--accent); }
 .qwen-status.warn { color: var(--warn); border-color: var(--warn); }
 .qwen-status.err { color: #f87171; border-color: #f87171; }
+
+/* Collection picker (data/collection) used by the Qwen / Krea 2 reference cards */
+.collection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.collection-item {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface2);
+  color: var(--text);
+  text-align: left;
+}
+.collection-item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #000; }
+.collection-item .name {
+  display: block;
+  padding: 2px 5px;
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.collection-item.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.collection-item .tick {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #08111f;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-weight: 700;
+}
 
 /* Viewer flip-book: 3D depth, start/end hint pill + edge flash */
 #viewerStage { perspective: 1100px; }

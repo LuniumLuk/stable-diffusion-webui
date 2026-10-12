@@ -25,6 +25,11 @@
  *                            CONSUMED here (no blank line) and left to the page's global
  *                            generate shortcut (desktop `script.js`).
  *
+ * `gestures: false` (Mobile Lite) switches the whole press/drag/tap + context-menu
+ * manipulation grammar OFF: the editor behaves like a plain text field with native
+ * caret placement and selection, which phone keyboards/users expect; the desktop mount
+ * keeps the full grammar (default true).
+ *
  * The vendored bundle (`../vendor/codemirror6.js`, built by `vendor/cm6build/build.bat`)
  * loads lazily on first use; when that fails the caller keeps its plain textarea.
  */
@@ -85,11 +90,14 @@ function el(tag, props = {}, children = []) {
  * @param {number|Function} [options.weightStep]  weight step (default 0.05)
  * @param {boolean} [options.desktopKeys]       enable Ctrl+↑/↓ and Ctrl+/
  * @param {'inline'|'full'} [options.variant]   structural styling variant
+ * @param {boolean} [options.gestures]          press/drag/tap + context-menu grammar
+ *                                              (default true); false = plain native
+ *                                              editing (Mobile Lite)
  * @returns {Promise<object>} instance { view, getText, setText, focus, requestMeasure, closePopups, destroy }
  */
 export async function createPromptCM({
   host, text = '', placeholder = '', getSuggestions, onChange, notify, onAccept,
-  weightStep, desktopKeys = false, variant = 'inline',
+  weightStep, desktopKeys = false, variant = 'inline', gestures = true,
 } = {}) {
   const {
     EditorState, StateEffect, StateField,
@@ -714,6 +722,7 @@ export async function createPromptCM({
         }),
         EditorView.domEventHandlers({
           contextmenu(event) {
+            if (!gestures) return false; // plain mode: leave the context menu native
             if (popup) {
               event.preventDefault();
               return true;
@@ -729,8 +738,6 @@ export async function createPromptCM({
     }),
   });
 
-  view.contentDOM.addEventListener('pointerdown', onPointerDown);
-  view.dom.addEventListener('touchmove', onTouchMove, { passive: false });
   // scrolling moves the anchor out from under the popup — keep it glued (positionPopup
   // closes the popup itself when the anchor scrolls out of view).  Capture phase, so
   // scrolling of any ancestor (including the mobile keyboard shifting the page) counts.
@@ -742,8 +749,14 @@ export async function createPromptCM({
       if (popup) positionPopup();
     });
   };
-  window.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
-  window.addEventListener('resize', onAnyScroll, { passive: true });
+  if (gestures) {
+    // gesture grammar: press / drag / tap + popup anchoring listeners.  Plain mode
+    // (Mobile Lite, gestures: false) leaves caret and selection handling to the browser.
+    view.contentDOM.addEventListener('pointerdown', onPointerDown);
+    view.dom.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
+    window.addEventListener('resize', onAnyScroll, { passive: true });
+  }
 
   Object.assign(instance, {
     view,
