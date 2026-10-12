@@ -272,16 +272,61 @@ export function toggleCommentAt(text, line) {
   const indent = /^\s*/.exec(lineText)[0];
   const trimmed = lineText.slice(indent.length);
   if (!trimmed) return null;
-  const insert = /^#(?!\()/.test(trimmed)
+  const insert = lineIsComment(trimmed)
     ? indent + trimmed.slice(1).replace(/^ /, '')
     : `${indent}# ${trimmed}`;
   return { changes: [{ from: bounds.start, to: bounds.end, insert }], caret: null, kind: 'line' };
 }
 
+/**
+ * Comment / uncomment every content line of the inclusive line range `[fromLine, toLine]`
+ * (desktop Ctrl+/ over a multi-line selection).
+ *
+ * Same converging contract as the block toggle: when every non-empty content line
+ * already is a comment, all of them are uncommented; otherwise every line that is not
+ * commented yet gets a `# ` prefix.  `# ---` marker lines are structure and stay
+ * untouched, indentation is preserved, disabled `#(...)` groups comment out like any
+ * other line (`# #(...)`), and the range is clamped to the document.  Returns null when
+ * the range holds nothing to toggle.
+ */
+export function toggleCommentLines(text, fromLine, toLine) {
+  const lines = text.split('\n');
+  const first = Math.max(0, Math.min(fromLine, lines.length - 1));
+  const last = Math.max(first, Math.min(toLine, lines.length - 1));
+  const togglable = [];
+  let off = true;
+  for (let index = first; index <= last; index += 1) {
+    const lineText = lines[index];
+    if (!lineText.trim() || isBlockMarker(lineText)) continue;
+    togglable.push(index);
+    if (!lineIsComment(lineText)) off = false;
+  }
+  if (!togglable.length) return null;
+  const changes = [];
+  for (const index of togglable) {
+    const bounds = lineBounds(text, index);
+    const lineText = lines[index];
+    const indent = /^\s*/.exec(lineText)[0];
+    const trimmed = lineText.slice(indent.length);
+    if (off) {
+      changes.push({ from: bounds.start, to: bounds.end, insert: indent + trimmed.slice(1).replace(/^ /, '') });
+    } else if (!lineIsComment(lineText)) {
+      changes.push({ from: bounds.start, to: bounds.end, insert: `${indent}# ${trimmed}` });
+    }
+  }
+  if (!changes.length) return null;
+  return { changes, caret: null, kind: 'lines' };
+}
+
+/** True when a line's first non-whitespace char is '#' (not a disabled `#(` group). */
+function lineIsComment(lineText) {
+  return /^\s*#(?!\()/.test(lineText);
+}
+
 /** True when the line reads as a comment (not a disabled `#(` group). */
 export function lineCommentState(text, line) {
   const { start, end } = lineBounds(text, line);
-  return /^\s*#(?!\()/.test(text.slice(start, end));
+  return lineIsComment(text.slice(start, end));
 }
 
 /** All keyword tokens intersecting `[from, to)`, in document order (empty when none). */

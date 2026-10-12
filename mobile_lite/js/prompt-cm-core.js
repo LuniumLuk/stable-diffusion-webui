@@ -10,7 +10,10 @@
  *                            `getSuggestions(query)` pool (MRU + endorsed + networks);
  *   - 💬 comments          — `# ...` lines and `# ---` markers are styled like the old
  *                            overlay; the token popup comments / uncomments a line, and
- *                            on a `# ---` marker it toggles the whole block;
+ *                            on a `# ---` marker it toggles the whole block; with
+ *                            `blockButtons` every block starter also shows a ▶/⏸ toggle
+ *                            at the end of its marker line (recovering the old
+ *                            textarea-overlay buttons on the desktop);
  *   - drag to rearrange    — TOUCH: press a keyword and move it (ghost + drop bar at the
  *                            top-level comma slots; separators repaired).  MOUSE: left
  *                            drags stay native SELECTION; Alt+drag rearranges instead;
@@ -21,7 +24,9 @@
  *                            ⛔/✅ disable, ⇦⇨ nudge, 💬 comment, 🗑 delete;
  *   - desktop hotkeys      — `desktopKeys: true` adds Ctrl+↑/↓ (weight of the tokens at
  *                            the cursor / selection, edit-attention parity) and Ctrl+/
- *                            (toggle the line comment).  Ctrl/Cmd+Enter is always
+ *                            (comment toggle: the cursor line — or its whole block on a
+ *                            `# ---` marker — when the selection is empty, every line
+ *                            the selection covers otherwise).  Ctrl/Cmd+Enter is always
  *                            CONSUMED here (no blank line) and left to the page's global
  *                            generate shortcut (desktop `script.js`).
  *
@@ -34,8 +39,14 @@
  * loads lazily on first use; when that fails the caller keeps its plain textarea.
  */
 
-import { classify, DEFAULT_WEIGHT, formatWeight, rebuild, splitSegments } from './prompt-parse.js';
-import { lineCommentState, moveToken, removeToken, replaceToken, snapSlot, tokenAt, toggleCommentAt, tokensInRange } from './prompt-cm-ops.js';
+import { blockIsOff, classify, DEFAULT_WEIGHT, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
+// Namespace import on purpose: a browser that still runs a CACHED older copy of this
+// module must not break the whole editor just because a recent op was not there yet —
+// the long-standing names are destructured (present in every CM-era copy) and only the
+// new operations are taken behind a runtime check.  See also the bundle guard below.
+import * as promptOps from './prompt-cm-ops.js';
+
+const { lineCommentState, moveToken, removeToken, replaceToken, snapSlot, tokenAt, toggleCommentAt, tokensInRange } = promptOps;
 
 const DRAG_THRESHOLD = 10;   // px of movement before a press becomes a drag
 const TAP_MAX_MS = 700;      // press longer than this is never treated as a tap
@@ -44,6 +55,8 @@ const WEIGHT_STEP = 0.05;    // fallback when the caller does not provide a step
 const MAX_WEIGHT = 10;
 
 let bundlePromise = null;
+let blockButtonsWarned = false;   // stale-bundle warning: once per page, not once per host
+let multiLineWarned = false;      // stale-ops warning: once per page
 
 /** Load the vendored CodeMirror bundle once (rejects keep the textarea fallback). */
 function loadBundle() {
@@ -89,6 +102,7 @@ function el(tag, props = {}, children = []) {
  * @param {Function} [options.onAccept]         (label) => void  suggestion accepted
  * @param {number|Function} [options.weightStep]  weight step (default 0.05)
  * @param {boolean} [options.desktopKeys]       enable Ctrl+↑/↓ and Ctrl+/
+ * @param {boolean} [options.blockButtons]      ▶/⏸ block toggles on `# ---` starters
  * @param {'inline'|'full'} [options.variant]   structural styling variant
  * @param {boolean} [options.gestures]          press/drag/tap + context-menu grammar
  *                                              (default true); false = plain native
@@ -97,11 +111,11 @@ function el(tag, props = {}, children = []) {
  */
 export async function createPromptCM({
   host, text = '', placeholder = '', getSuggestions, onChange, notify, onAccept,
-  weightStep, desktopKeys = false, variant = 'inline', gestures = true,
+  weightStep, desktopKeys = false, blockButtons = false, variant = 'inline', gestures = true,
 } = {}) {
   const {
     EditorState, StateEffect, StateField,
-    EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor,
+    EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor, WidgetType,
     autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
     history, historyKeymap, defaultKeymap,
   } = await loadBundle();
@@ -112,6 +126,61 @@ export async function createPromptCM({
     const value = Number(raw);
     return Number.isFinite(value) && value > 0 ? value : WEIGHT_STEP;
   };
+
+  /* ------------------------------------------------------------ block buttons */
+
+  /**
+   * ▶/⏸ toggle rendered at the end of each `# ---` starter line (`blockButtons`):
+   * one press comments / uncomments the whole block, matching the old textarea overlay
+   * (`javascript/promptComment.js`) and the chips-editor gutters.  The button swallows
+   * the press so the caret and text selection stay where the user left them.
+   *
+   * Conditional on purpose: a browser with a CACHED pre-upgrade bundle (no `WidgetType`
+   * export) keeps a fully working editor, just without the buttons, instead of falling
+   * back to the plain textarea.
+   */
+  const BlockToggleWidget = typeof WidgetType === 'function'
+    ? class extends WidgetType {
+      constructor(line, commented, onToggle) {
+        super();
+        this.line = line;
+        this.commented = commented;
+        this.onToggle = onToggle;
+      }
+
+      eq(other) {
+        return other instanceof BlockToggleWidget
+          && other.line === this.line
+          && other.commented === this.commented
+          && other.onToggle === this.onToggle;
+      }
+
+      toDOM() {
+        const button = el('span', {
+          class: `prompt-block-toggle pedit-cm-block-toggle${this.commented ? ' is-commented' : ''}`,
+          title: this.commented ? 'Uncomment block' : 'Comment block',
+          text: this.commented ? '\u23F8' : '\u25B6',
+        });
+        button.setAttribute('role', 'button');
+        button.setAttribute('aria-label', this.commented ? 'Uncomment block' : 'Comment block');
+        button.dataset.line = String(this.line);
+        button.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.onToggle(this.line);
+        });
+        return button;
+      }
+    }
+    : null;
+  if (blockButtons && !BlockToggleWidget && !blockButtonsWarned) {
+    blockButtonsWarned = true;
+    console.warn('promptCM: the cached CodeMirror bundle predates the block buttons - hard-reload (Ctrl+F5) to enable them');
+  }
 
   /* ------------------------------------------------------------ state plumbing */
 
@@ -133,16 +202,41 @@ export async function createPromptCM({
     provide: (field) => EditorView.decorations.from(field),
   });
 
-  /** Comment lines, `# ---` markers and disabled `#(...)` groups, from the document. */
+  /**
+   * Comment lines, `# ---` markers, disabled `#(...)` groups and the block buttons,
+   * all derived from the document text.
+   */
   function buildDecorations(state) {
     const marks = [];
+    const lineTexts = [];
+    for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+      lineTexts.push(state.doc.line(lineNumber).text);
+    }
+    // for every line, the index of the next `# ---` marker after it (or -1)
+    const nextMarker = new Array(lineTexts.length).fill(-1);
+    let lastMarker = -1;
+    for (let index = lineTexts.length - 1; index >= 0; index -= 1) {
+      nextMarker[index] = lastMarker;
+      if (isBlockMarker(lineTexts[index])) lastMarker = index;
+    }
+
     for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
       const line = state.doc.line(lineNumber);
       const lineText = line.text;
+      const lineIndex = lineNumber - 1;
       if (/^\s*#(?!\()/.test(lineText)) {
-        marks.push(Decoration.line({ class: /^\s*#\s*-{3,}/.test(lineText) ? 'pedit-cm-commentline pedit-cm-blockmark' : 'pedit-cm-commentline' }).range(line.from));
+        const marker = isBlockMarker(lineText);
+        marks.push(Decoration.line({ class: marker ? 'pedit-cm-commentline pedit-cm-blockmark' : 'pedit-cm-commentline' }).range(line.from));
         const hash = lineText.indexOf('#');
         if (hash >= 0) marks.push(Decoration.mark({ class: 'pedit-cm-comment-hash' }).range(line.from + hash, line.from + hash + 1));
+        // a `# ---` starter that has a following marker owns a block: the ▶/⏸ toggle
+        // sits at the END of the starter line, like the old textarea overlay did
+        if (blockButtons && BlockToggleWidget && marker && nextMarker[lineIndex] > lineIndex) {
+          const commented = blockIsOff(lineTexts, lineIndex + 1, nextMarker[lineIndex]);
+          marks.push(Decoration.widget({
+            widget: new BlockToggleWidget(lineIndex, commented, toggleBlockAtLine),
+          }).range(line.to));
+        }
         continue;
       }
       // disabled keyword groups (#(...) / #[...] / #<...>) get a struck-through mark;
@@ -486,25 +580,54 @@ export async function createPromptCM({
     return true;
   }
 
-  /** Ctrl+/ — toggle the comment on the line at the cursor. */
-  function toggleCommentAtCursor(view) {
-    const lineNumber = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
-    const plan = toggleCommentAt(view.state.doc.toString(), lineNumber);
+  /** Dispatch a plan built by the ops module under the self-edit guard. */
+  function dispatchPlan(plan, userEvent) {
     if (!plan || !plan.changes.length) return false;
     selfEdit = true;
     try {
-      view.dispatch({ changes: plan.changes, userEvent: 'pedit.comment' });
+      view.dispatch({ changes: plan.changes, userEvent });
     } finally {
       selfEdit = false;
     }
     return true;
   }
 
+  /** One press on a ▶/⏸ block button: comment / uncomment the whole block. */
+  function toggleBlockAtLine(lineNumber) {
+    return dispatchPlan(toggleCommentAt(view.state.doc.toString(), lineNumber), 'pedit.block');
+  }
+
+  /**
+   * Ctrl+/ — comment toggle. Empty / single-line selection: the line at the cursor
+   * (a `# ---` marker toggles its whole block). Multi-line selection: every line the
+   * selection covers, converging like the block toggle (markers stay untouched).
+   */
+  function toggleComment(viewA) {
+    const state = viewA.state;
+    const docText = state.doc.toString();
+    const selection = state.selection.main;
+    const fromLine = state.doc.lineAt(selection.from).number - 1;
+    const toLine = state.doc.lineAt(selection.to).number - 1;
+    if (fromLine === toLine) {
+      return dispatchPlan(toggleCommentAt(docText, fromLine), 'pedit.comment');
+    }
+    const toggleLines = promptOps.toggleCommentLines;
+    if (!toggleLines) {
+      // stale cached ops copy: degrade to the cursor line instead of failing
+      if (!multiLineWarned) {
+        multiLineWarned = true;
+        console.warn('promptCM: the cached prompt-cm-ops.js predates the multi-line comment toggle - hard-reload (Ctrl+F5) to enable it');
+      }
+      return dispatchPlan(toggleCommentAt(docText, fromLine), 'pedit.comment');
+    }
+    return dispatchPlan(toggleLines(docText, fromLine, toLine), 'pedit.comment');
+  }
+
   const hotkeyEntries = desktopKeys
     ? [
       { key: 'Ctrl-ArrowUp', run: (viewA) => adjustWeights(viewA, 1), preventDefault: true },
       { key: 'Ctrl-ArrowDown', run: (viewA) => adjustWeights(viewA, -1), preventDefault: true },
-      { key: 'Ctrl-/', run: toggleCommentAtCursor, preventDefault: true },
+      { key: 'Ctrl-/', run: toggleComment, preventDefault: true },
     ]
     : [];
 

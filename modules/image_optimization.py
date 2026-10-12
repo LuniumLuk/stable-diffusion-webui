@@ -595,6 +595,13 @@ class NoCacheHtmlMiddleware:
     requesting the old asset URLs, so CSS/JS changes look like they never landed ("the fix
     did nothing") until the user manually clears the cache. HTML is cheap to re-render, so
     it is served with ``no-store``; hashed/static assets keep their normal caching.
+
+    Live-edited JS/CSS (``/file=...`` - the javascript/ + mobile_lite module graph and
+    style.css) is additionally served with ``no-cache`` so the browser always revalidates:
+    a cached stale module running next to a fresh one (e.g. missing an export the fresh
+    module imports) made the prompt editor fall back to its plain textarea.  Validators
+    (ETag / Last-Modified) stay in place, so unchanged files still cost only a cheap 304.
+    (``/mlite/`` assets already carry ``no-store`` and are left alone.)
     """
 
     def __init__(self, app):
@@ -617,6 +624,16 @@ class NoCacheHtmlMiddleware:
                     headers[:] = [(k, v) for (k, v) in headers if k.lower() not in (b"cache-control", b"pragma", b"expires")]
                     headers.append((b"cache-control", b"no-store, must-revalidate"))
                     headers.append((b"pragma", b"no-cache"))
+                else:
+                    path = scope.get("path", "")
+                    # the fork's live-edited JS/CSS: /file= serves javascript/*.js, style.css
+                    # and the mobile_lite module graph; their ?<mtime> stamps are baked into
+                    # the HTML once at UI creation, so without a forced revalidation a
+                    # browser can keep stale (or version-MIXED) module copies for days.
+                    # (/mlite/ assets already carry no-store and are left alone.)
+                    if path.endswith((".js", ".mjs", ".css")) and path.startswith("/file="):
+                        headers[:] = [(k, v) for (k, v) in headers if k.lower() not in (b"cache-control", b"pragma", b"expires")]
+                        headers.append((b"cache-control", b"no-cache"))
             await send(message)
 
         await self.app(scope, receive, send_wrapper)

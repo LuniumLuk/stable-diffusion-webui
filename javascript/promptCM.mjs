@@ -11,7 +11,10 @@
  *   - left-click / left-drag stay NATIVE (caret + text selection) — the manipulation
  *     popup opens on RIGHT-CLICK only: on a keyword, or inside a selection to apply
  *     weight / ⛔ to every selected keyword at once; Alt+drag rearranges a keyword;
- *   - desktop hotkeys: Ctrl+↑/↓ weight (edit-attention parity), Ctrl+/ line comment.
+ *   - desktop hotkeys: Ctrl+↑/↓ weight (edit-attention parity), Ctrl+/ comment toggle
+ *     (cursor line, or every line in a multi-line selection);
+ *   - ▶/⏸ block toggles at the end of every `# ---` starter line comment / uncomment
+ *     the whole block in one click (recovered from the old textarea overlay).
  *
  * The gradio textarea stays the single source of truth and is only visually replaced
  * (the host gets `pedit-cm-mode`): every CM edit rewrites `textarea.value` and dispatches
@@ -116,6 +119,7 @@ function installHost(host) {
       placeholder: '',
       variant: 'inline',
       desktopKeys: true,
+      blockButtons: true,
       weightStep: readStep,
       getSuggestions: suggestionsFor,
       onAccept: (label) => {
@@ -203,4 +207,4 @@ onUiLoaded(installAll);
 onAfterUiUpdate(installAll);
 
 // small debug surface for tests / live probing
-window.promptCMDebug = { installAll, instances };
+window.promptCMDebug = { installAll, instances, version: 'r3-2026-10-12' };
