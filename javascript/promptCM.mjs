@@ -13,8 +13,9 @@
  *     weight / ⛔ to every selected keyword at once; Alt+drag rearranges a keyword;
  *   - desktop hotkeys: Ctrl+↑/↓ weight (edit-attention parity), Ctrl+/ comment toggle
  *     (cursor line, or every line in a multi-line selection);
- *   - ▶/⏸ block toggles at the end of every `# ---` starter line comment / uncomment
- *     the whole block in one click (recovered from the old textarea overlay).
+ *   - line-number gutter: the first column shows line numbers; hovering a line swaps its
+ *     number for the hover toggle — 💬 comments that single line, ▶/⏸ on a `# ---` section
+ *     starter comments / uncomments the whole section.
  *
  * The gradio textarea stays the single source of truth and is only visually replaced
  * (the host gets `pedit-cm-mode`): every CM edit rewrites `textarea.value` and dispatches
@@ -119,7 +120,7 @@ function installHost(host) {
       placeholder: '',
       variant: 'inline',
       desktopKeys: true,
-      blockButtons: true,
+      lineGutter: true,
       weightStep: readStep,
       getSuggestions: suggestionsFor,
       onAccept: (label) => {
@@ -207,4 +208,4 @@ onUiLoaded(installAll);
 onAfterUiUpdate(installAll);
 
 // small debug surface for tests / live probing
-window.promptCMDebug = { installAll, instances, version: 'r3-2026-10-12' };
+window.promptCMDebug = { installAll, instances, version: 'r4-2026-10-13' };

@@ -10,10 +10,12 @@
  *                            `getSuggestions(query)` pool (MRU + endorsed + networks);
  *   - 💬 comments          — `# ...` lines and `# ---` markers are styled like the old
  *                            overlay; the token popup comments / uncomments a line, and
- *                            on a `# ---` marker it toggles the whole block; with
- *                            `blockButtons` every block starter also shows a ▶/⏸ toggle
- *                            at the end of its marker line (recovering the old
- *                            textarea-overlay buttons on the desktop);
+ *                            on a `# ---` marker it toggles the whole block;
+ *   - 🔢 line gutter       — `lineGutter: true` (desktop) shows a line-number column in
+ *                            the first position; hovering a line swaps its number for the
+ *                            hover toggle: 💬 comments / uncomments that single line,
+ *                            while a `# ---` section starter shows the ▶/⏸ toggle for
+ *                            its whole block instead;
  *   - drag to rearrange    — TOUCH: press a keyword and move it (ghost + drop bar at the
  *                            top-level comma slots; separators repaired).  MOUSE: left
  *                            drags stay native SELECTION; Alt+drag rearranges instead;
@@ -55,7 +57,7 @@ const WEIGHT_STEP = 0.05;    // fallback when the caller does not provide a step
 const MAX_WEIGHT = 10;
 
 let bundlePromise = null;
-let blockButtonsWarned = false;   // stale-bundle warning: once per page, not once per host
+let gutterWarned = false;         // stale-bundle warning: once per page, not once per host
 let multiLineWarned = false;      // stale-ops warning: once per page
 
 /** Load the vendored CodeMirror bundle once (rejects keep the textarea fallback). */
@@ -102,7 +104,8 @@ function el(tag, props = {}, children = []) {
  * @param {Function} [options.onAccept]         (label) => void  suggestion accepted
  * @param {number|Function} [options.weightStep]  weight step (default 0.05)
  * @param {boolean} [options.desktopKeys]       enable Ctrl+↑/↓ and Ctrl+/
- * @param {boolean} [options.blockButtons]      ▶/⏸ block toggles on `# ---` starters
+ * @param {boolean} [options.lineGutter]        line-number gutter with hover comment /
+ *                                              block toggles (desktop)
  * @param {'inline'|'full'} [options.variant]   structural styling variant
  * @param {boolean} [options.gestures]          press/drag/tap + context-menu grammar
  *                                              (default true); false = plain native
@@ -111,11 +114,12 @@ function el(tag, props = {}, children = []) {
  */
 export async function createPromptCM({
   host, text = '', placeholder = '', getSuggestions, onChange, notify, onAccept,
-  weightStep, desktopKeys = false, blockButtons = false, variant = 'inline', gestures = true,
+  weightStep, desktopKeys = false, lineGutter = false, variant = 'inline', gestures = true,
 } = {}) {
   const {
     EditorState, StateEffect, StateField,
-    EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor, WidgetType,
+    EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor,
+    gutter: cmGutter, GutterMarker,
     autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
     history, historyKeymap, defaultKeymap,
   } = await loadBundle();
@@ -127,60 +131,110 @@ export async function createPromptCM({
     return Number.isFinite(value) && value > 0 ? value : WEIGHT_STEP;
   };
 
-  /* ------------------------------------------------------------ block buttons */
+  /* ------------------------------------------------------------ line gutter */
 
   /**
-   * ▶/⏸ toggle rendered at the end of each `# ---` starter line (`blockButtons`):
-   * one press comments / uncomments the whole block, matching the old textarea overlay
-   * (`javascript/promptComment.js`) and the chips-editor gutters.  The button swallows
-   * the press so the caret and text selection stay where the user left them.
+   * Line-number gutter (desktop `lineGutter: true`): the first column shows the line
+   * number; hovering the line (or its number) swaps it for a hover toggle —
+   *   - 💬 on a normal line comments / uncomments that single line (⏸ when commented);
+   *   - ▶/⏸ on a `# ---` section starter that opens a block comments / uncomments every
+   *     line of that section (same contract as the token popup and Ctrl+/).
+   * The buttons are plain DOM inside the gutter cell — CSS reveals them on hover and the
+   * gutter's mousedown handler runs the toggle, so no extra state is involved.
    *
-   * Conditional on purpose: a browser with a CACHED pre-upgrade bundle (no `WidgetType`
-   * export) keeps a fully working editor, just without the buttons, instead of falling
-   * back to the plain textarea.
+   * Conditional on purpose: a browser with a CACHED pre-upgrade bundle (no `gutter` /
+   * `GutterMarker` exports) keeps a fully working editor, just without the column,
+   * instead of falling back to the plain textarea.
    */
-  const BlockToggleWidget = typeof WidgetType === 'function'
-    ? class extends WidgetType {
-      constructor(line, commented, onToggle) {
+  const canUseGutter = typeof cmGutter === 'function' && typeof GutterMarker === 'function';
+  const PromptGutterMarker = canUseGutter
+    ? class extends GutterMarker {
+      constructor(number, kind, commented) {
         super();
-        this.line = line;
+        this.number = number;
+        this.kind = kind;             // 'plain' | 'line' | 'block'
         this.commented = commented;
-        this.onToggle = onToggle;
       }
 
       eq(other) {
-        return other instanceof BlockToggleWidget
-          && other.line === this.line
-          && other.commented === this.commented
-          && other.onToggle === this.onToggle;
+        return other instanceof PromptGutterMarker
+          && other.number === this.number
+          && other.kind === this.kind
+          && other.commented === this.commented;
       }
 
       toDOM() {
-        const button = el('span', {
-          class: `prompt-block-toggle pedit-cm-block-toggle${this.commented ? ' is-commented' : ''}`,
-          title: this.commented ? 'Uncomment block' : 'Comment block',
-          text: this.commented ? '\u23F8' : '\u25B6',
-        });
-        button.setAttribute('role', 'button');
-        button.setAttribute('aria-label', this.commented ? 'Uncomment block' : 'Comment block');
-        button.dataset.line = String(this.line);
-        button.addEventListener('mousedown', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        button.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          this.onToggle(this.line);
-        });
-        return button;
+        const cell = el('div', { class: 'pedit-cm-gutter-cell' });
+        cell.dataset.line = String(this.number);
+        cell.append(el('span', { class: 'pedit-cm-gutter-num', text: String(this.number) }));
+        if (this.kind === 'block') {
+          cell.append(el('span', {
+            class: `pedit-cm-gutter-btn pedit-cm-gutter-block${this.commented ? ' is-commented' : ''}`,
+            text: this.commented ? '\u23F8' : '\u25B6',
+            title: this.commented ? 'Uncomment this section' : 'Comment this section',
+          }));
+        } else if (this.kind === 'line') {
+          cell.append(el('span', {
+            class: `pedit-cm-gutter-btn pedit-cm-gutter-line${this.commented ? ' is-commented' : ''}`,
+            text: this.commented ? '\u23F8' : '\uD83D\uDCAC',
+            title: this.commented ? 'Uncomment this line' : 'Comment this line',
+          }));
+        }
+        return cell;
       }
     }
     : null;
-  if (blockButtons && !BlockToggleWidget && !blockButtonsWarned) {
-    blockButtonsWarned = true;
-    console.warn('promptCM: the cached CodeMirror bundle predates the block buttons - hard-reload (Ctrl+F5) to enable them');
+  if (lineGutter && !PromptGutterMarker && !gutterWarned) {
+    gutterWarned = true;
+    console.warn('promptCM: the cached CodeMirror bundle predates the line-number gutter - hard-reload (Ctrl+F5) to enable it');
   }
+
+  /** `{ off }` for the block opened at the `# ---` line `markerNumber`, or null. */
+  function blockStateAt(doc, markerNumber) {
+    let end = -1;
+    for (let number = markerNumber + 1; number <= doc.lines; number += 1) {
+      if (isBlockMarker(doc.line(number).text)) { end = number; break; }
+    }
+    if (end === -1) return null;
+    const lines = [];
+    for (let number = markerNumber + 1; number < end; number += 1) lines.push(doc.line(number).text);
+    return { off: blockIsOff(lines, 0, lines.length) };
+  }
+
+  /** One gutter marker per rendered line: the number, plus the hover toggle when useful. */
+  function gutterMarker(viewA, block) {
+    // this @codemirror/view version hands the callbacks a BlockInfo (positions only),
+    // so resolve the actual line through its start position
+    const line = viewA.state.doc.lineAt(block.from);
+    const text = line.text;
+    if (isBlockMarker(text)) {
+      const state = blockStateAt(viewA.state.doc, line.number);
+      return new PromptGutterMarker(line.number, state ? 'block' : 'plain', state ? state.off : false);
+    }
+    if (text.trim()) {
+      return new PromptGutterMarker(line.number, 'line', /^\s*#(?!\()/.test(text));
+    }
+    return new PromptGutterMarker(line.number, 'plain', false);
+  }
+
+  const lineGutterExt = PromptGutterMarker
+    ? cmGutter({
+      class: 'pedit-cm-gutters',
+      lineMarker: gutterMarker,
+      initialSpacer: () => new PromptGutterMarker(99, 'plain', false),
+      domEventHandlers: {
+        mousedown(viewA, block, event) {
+          const button = event.target.closest && event.target.closest('.pedit-cm-gutter-btn');
+          if (!button) return false;
+          event.preventDefault();
+          const lineNumber = viewA.state.doc.lineAt(block.from).number - 1;
+          if (button.classList.contains('pedit-cm-gutter-block')) toggleBlockAtLine(lineNumber);
+          else toggleLineAt(lineNumber);
+          return true;
+        },
+      },
+    })
+    : null;
 
   /* ------------------------------------------------------------ state plumbing */
 
@@ -202,41 +256,17 @@ export async function createPromptCM({
     provide: (field) => EditorView.decorations.from(field),
   });
 
-  /**
-   * Comment lines, `# ---` markers, disabled `#(...)` groups and the block buttons,
-   * all derived from the document text.
-   */
+  /** Comment lines, `# ---` markers and disabled `#(...)` groups, from the document. */
   function buildDecorations(state) {
     const marks = [];
-    const lineTexts = [];
-    for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-      lineTexts.push(state.doc.line(lineNumber).text);
-    }
-    // for every line, the index of the next `# ---` marker after it (or -1)
-    const nextMarker = new Array(lineTexts.length).fill(-1);
-    let lastMarker = -1;
-    for (let index = lineTexts.length - 1; index >= 0; index -= 1) {
-      nextMarker[index] = lastMarker;
-      if (isBlockMarker(lineTexts[index])) lastMarker = index;
-    }
-
     for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
       const line = state.doc.line(lineNumber);
       const lineText = line.text;
-      const lineIndex = lineNumber - 1;
       if (/^\s*#(?!\()/.test(lineText)) {
         const marker = isBlockMarker(lineText);
         marks.push(Decoration.line({ class: marker ? 'pedit-cm-commentline pedit-cm-blockmark' : 'pedit-cm-commentline' }).range(line.from));
         const hash = lineText.indexOf('#');
         if (hash >= 0) marks.push(Decoration.mark({ class: 'pedit-cm-comment-hash' }).range(line.from + hash, line.from + hash + 1));
-        // a `# ---` starter that has a following marker owns a block: the ▶/⏸ toggle
-        // sits at the END of the starter line, like the old textarea overlay did
-        if (blockButtons && BlockToggleWidget && marker && nextMarker[lineIndex] > lineIndex) {
-          const commented = blockIsOff(lineTexts, lineIndex + 1, nextMarker[lineIndex]);
-          marks.push(Decoration.widget({
-            widget: new BlockToggleWidget(lineIndex, commented, toggleBlockAtLine),
-          }).range(line.to));
-        }
         continue;
       }
       // disabled keyword groups (#(...) / #[...] / #<...>) get a struck-through mark;
@@ -592,9 +622,14 @@ export async function createPromptCM({
     return true;
   }
 
-  /** One press on a ▶/⏸ block button: comment / uncomment the whole block. */
+  /** One press on a gutter ▶/⏸: comment / uncomment the whole section. */
   function toggleBlockAtLine(lineNumber) {
     return dispatchPlan(toggleCommentAt(view.state.doc.toString(), lineNumber), 'pedit.block');
+  }
+
+  /** One press on a gutter 💬: comment / uncomment that single line. */
+  function toggleLineAt(lineNumber) {
+    return dispatchPlan(toggleCommentAt(view.state.doc.toString(), lineNumber), 'pedit.comment');
   }
 
   /**
@@ -829,6 +864,7 @@ export async function createPromptCM({
         }),
         placeholderExt(placeholder),
         EditorView.lineWrapping,
+        ...(lineGutterExt ? [lineGutterExt] : []),
         EditorView.contentAttributes.of({
           autocapitalize: 'off',
           autocorrect: 'off',
@@ -881,6 +917,46 @@ export async function createPromptCM({
     window.addEventListener('resize', onAnyScroll, { passive: true });
   }
 
+  // gutter hover: swap the number for the toggle when the pointer is over the LINE —
+  // hovering the gutter cell itself is covered by the CSS :hover rule, so the button
+  // stays put while the pointer travels from the line onto it.
+  let gutterHoverLine = -1;
+  function gutterCell(lineNumber) {
+    return view.dom.querySelector(`.pedit-cm-gutter-cell[data-line="${lineNumber}"]`);
+  }
+  function clearGutterHover() {
+    if (gutterHoverLine < 0) return;
+    const cell = gutterCell(gutterHoverLine);
+    if (cell) cell.classList.remove('is-hover');
+    gutterHoverLine = -1;
+  }
+  function setGutterHover(lineNumber) {
+    if (lineNumber === gutterHoverLine) return;
+    clearGutterHover();
+    const cell = gutterCell(lineNumber);
+    if (cell) {
+      cell.classList.add('is-hover');
+      gutterHoverLine = lineNumber;
+    }
+  }
+  function onGutterHoverMove(event) {
+    const lineEl = event.target.closest ? event.target.closest('.cm-line') : null;
+    if (lineEl && view.contentDOM.contains(lineEl)) {
+      try {
+        setGutterHover(view.state.doc.lineAt(view.posAtDOM(lineEl, 0)).number);
+      } catch (error) {
+        clearGutterHover();
+      }
+    } else {
+      clearGutterHover();
+    }
+  }
+  if (lineGutterExt) {
+    view.dom.addEventListener('mousemove', onGutterHoverMove);
+    view.dom.addEventListener('mouseleave', clearGutterHover);
+    view.scrollDOM.addEventListener('scroll', clearGutterHover, { passive: true });
+  }
+
   Object.assign(instance, {
     view,
     getText: () => view.state.doc.toString(),
@@ -902,6 +978,11 @@ export async function createPromptCM({
       closePopup();
       window.removeEventListener('scroll', onAnyScroll, { capture: true });
       window.removeEventListener('resize', onAnyScroll);
+      if (lineGutterExt) {
+        view.dom.removeEventListener('mousemove', onGutterHoverMove);
+        view.dom.removeEventListener('mouseleave', clearGutterHover);
+        view.scrollDOM.removeEventListener('scroll', clearGutterHover);
+      }
       view.destroy();
       dom.remove();
     },

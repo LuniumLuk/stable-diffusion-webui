@@ -4747,6 +4747,67 @@ body.resizing .resize-handle {
     padding: 0 1px;
 }
 
+/* line-number gutter: the number, swapped for a hover toggle over the line */
+.pedit-cm-wrap .cm-gutters {
+    background: transparent;
+    border: none;
+    color: inherit;
+}
+
+.pedit-cm-wrap .cm-gutterElement {
+    padding: 0;
+}
+
+.pedit-cm-wrap .pedit-cm-gutter-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 24px; /* fixed: swapping the number for the hover toggle must not resize the column */
+    height: 100%;
+    padding: 0 2px;
+    user-select: none;
+}
+
+.pedit-cm-wrap .pedit-cm-gutter-num {
+    font-size: 11px;
+    color: #6b7280;
+    opacity: 0.85;
+}
+
+.pedit-cm-wrap .pedit-cm-gutter-btn {
+    display: none;
+    box-sizing: border-box;
+    width: 100%;
+    overflow: hidden;
+    text-align: center;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    color: #22c55e;
+}
+
+.pedit-cm-wrap .pedit-cm-gutter-btn:hover {
+    opacity: 0.7;
+}
+
+.pedit-cm-wrap .pedit-cm-gutter-block.is-commented,
+.pedit-cm-wrap .pedit-cm-gutter-line.is-commented {
+    color: #6b7280;
+}
+
+/* swap the number for the hover toggle - only on cells that actually have one,
+   otherwise hovering a plain line (empty or trailing "# ---") would blank it */
+.pedit-cm-wrap .pedit-cm-gutter-cell:has(.pedit-cm-gutter-btn):hover .pedit-cm-gutter-num,
+.pedit-cm-wrap .pedit-cm-gutter-cell:has(.pedit-cm-gutter-btn).is-hover .pedit-cm-gutter-num {
+    display: none;
+}
+
+.pedit-cm-wrap .pedit-cm-gutter-cell:has(.pedit-cm-gutter-btn):hover .pedit-cm-gutter-btn,
+.pedit-cm-wrap .pedit-cm-gutter-cell:has(.pedit-cm-gutter-btn).is-hover .pedit-cm-gutter-btn {
+    display: inline-block;
+}
+
 .pedit-cm-wrap .cm-content ::selection {
     background: rgba(89, 161, 240, 0.28);
 }
