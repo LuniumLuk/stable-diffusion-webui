@@ -302,6 +302,8 @@ def create_ui():
                     stack.enter_context(gr.Accordion("Open for Settings", open=False))
                 stack.enter_context(gr.Column(variant='compact', elem_id="txt2img_settings"))
 
+                gr.Row(elem_id="txt2img_checkpoint_host", elem_classes=["checkpoint-host"])
+
                 scripts.scripts_txt2img.prepare_ui()
 
                 for category in ordered_ui_categories():
@@ -563,6 +565,8 @@ def create_ui():
                 if shared.opts.img2img_settings_accordion:
                     stack.enter_context(gr.Accordion("Open for Settings", open=False))
                 stack.enter_context(gr.Column(variant='compact', elem_id="img2img_settings"))
+
+                gr.Row(elem_id="img2img_checkpoint_host", elem_classes=["checkpoint-host"])
 
                 copy_image_buttons = []
                 copy_image_destinations = {}

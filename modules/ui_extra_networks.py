@@ -277,18 +277,42 @@ class ExtraNetworksPage:
         background_image = f'<img src="{html.escape(preview)}" class="preview" loading="lazy">' if preview else ''
 
         onclick = item.get("onclick", None)
-        if onclick is None:
-            # Don't quote prompt/neg_prompt since they are stored as js strings already.
-            onclick_js_tpl = "cardClicked('{tabname}', {prompt}, {neg_prompt}, {allow_neg});"
-            onclick = onclick_js_tpl.format(
+        # Don't quote prompt/neg_prompt since they are stored as js strings already.
+        onclick_js_tpl = "cardClicked('{tabname}', {prompt}, {neg_prompt}, {allow_neg});"
+
+        def format_onclick(source_item):
+            return onclick_js_tpl.format(
                 **{
                     "tabname": tabname,
-                    "prompt": item["prompt"],
-                    "neg_prompt": item.get("negative_prompt", "''"),
+                    "prompt": source_item["prompt"],
+                    "neg_prompt": source_item.get("negative_prompt", "''"),
                     "allow_neg": str(self.allow_negative_prompt).lower(),
                 }
             )
-            onclick = html.escape(onclick)
+
+        if onclick is None:
+            onclick = html.escape(format_onclick(item))
+
+        variations = item.get("variations") or []
+        variations_html = ""
+        if variations:
+            options = []
+            for variation in variations:
+                selected = " selected" if variation.get("name") == item.get("default_variation") else ""
+                options.append(
+                    f'<option value="{html.escape(str(variation["name"]), quote=True)}"'
+                    f' data-onclick="{html.escape(format_onclick(variation), quote=True)}"'
+                    f' data-preview="{html.escape(variation.get("preview") or "", quote=True)}"'
+                    f'{selected}>{html.escape(str(variation["label"]))}</option>'
+                )
+            variations_html = (
+                '<div class="lora-variations">'
+                '<select class="lora-variation-select" title="LoRA variation"'
+                ' onclick="event.stopPropagation()" onmousedown="event.stopPropagation()"'
+                ' onchange="loraVariationChanged(this, event)">'
+                + "".join(options)
+                + '</select></div>'
+            )
 
         btn_copy_path = self.btn_copy_path_tpl.format(**{"filename": item["filename"]})
         btn_metadata = ""
@@ -363,6 +387,7 @@ class ExtraNetworksPage:
             "style": card_style,
             "tabname": tabname,
             "extra_networks_tabname": self.extra_networks_tabname,
+            "variations": variations_html,
         }
 
         if template:

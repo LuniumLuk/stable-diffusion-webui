@@ -153,6 +153,16 @@ def checkpoint_tiles(use_short=False):
     return [x.short_title if use_short else x.title for x in checkpoints_list.values()]
 
 
+DIFFUSERS_COMPONENT_DIRS = {"unet", "vae", "text_encoder", "text_encoder_2", "safety_checker", "feature_extractor", "scheduler", "tokenizer"}
+DIFFUSERS_COMPONENT_FILES = {"diffusion_pytorch_model.safetensors", "model.safetensors"}
+
+
+def is_diffusers_component_file(filename):
+    """True for files that belong to a diffusers folder (unet/, vae/, text_encoder/, ...)."""
+    parts = [p.lower() for p in os.path.normpath(filename).split(os.sep)]
+    return len(parts) >= 2 and parts[-1] in DIFFUSERS_COMPONENT_FILES and parts[-2] in DIFFUSERS_COMPONENT_DIRS
+
+
 def list_models():
     checkpoints_list.clear()
     checkpoint_aliases.clear()
@@ -166,6 +176,7 @@ def list_models():
         expected_sha256 = '6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa'
 
     model_list = modelloader.load_models(model_path=model_path, model_url=model_url, command_path=shared.cmd_opts.ckpt_dir, ext_filter=[".ckpt", ".safetensors"], download_name="v1-5-pruned-emaonly.safetensors", ext_blacklist=[".vae.ckpt", ".vae.safetensors"], hash_prefix=expected_sha256)
+    model_list = [filename for filename in model_list if not is_diffusers_component_file(filename)]
 
     if os.path.exists(cmd_ckpt):
         checkpoint_info = CheckpointInfo(cmd_ckpt)

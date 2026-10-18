@@ -1915,6 +1915,22 @@ footer {
     text-shadow: 0 0 0.2em black;
 }
 
+/* Selector for LoRA training-checkpoint variations (name-000002, ...). */
+.extra-network-pane .card .lora-variations {
+    margin-bottom: 0.4em;
+}
+
+.extra-network-pane .card .lora-variations select {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 0.9em;
+    padding: 0.2em 0.35em;
+    border-radius: 0.25em;
+    border: 1px solid var(--border-color-primary);
+    background: rgba(20, 20, 20, 0.85);
+    color: white;
+}
+
 .extra-network-pane .card .actions *{
     color: white;
 }
@@ -2039,6 +2055,45 @@ div.accordions > div.input-accordion.input-accordion-open{
 #img2img_results, #txt2img_results, #extras_results {
     position: sticky;
     top: 0.5em;
+}
+
+/* Keep the txt2img prompt / Generate / Quick Generate row visible while the
+   long parameter list below it scrolls. */
+#txt2img_toprow {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    /* Gradio's `.compact { background: transparent !important }` rule would
+       otherwise let the parameter list show through the pinned row. */
+    background: var(--background-fill-primary, #0b0f19) !important;
+}
+
+/* The result panel pins just below the sticky top row. The offset is measured
+   by javascript/desktopLayout.js. */
+#txt2img_results {
+    top: var(--txt2img-results-top, 0.5em);
+    max-height: calc(100vh - var(--txt2img-results-top, 0.5em) - 0.5em);
+    overflow-y: auto;
+}
+
+/* Checkpoint selector host inside the Generation parameters column. */
+.checkpoint-host {
+    gap: 0 !important;
+    min-width: 0 !important;
+}
+
+.checkpoint-host #quicksettings {
+    width: 100%;
+    margin: 0;
+}
+
+.checkpoint-host #quicksettings > div {
+    max-width: none;
+}
+
+.checkpoint-host #quicksettings > div.gradio-dropdown {
+    min-width: 0 !important;
+    flex: 1 1 auto;
 }
 
 body.resizing {

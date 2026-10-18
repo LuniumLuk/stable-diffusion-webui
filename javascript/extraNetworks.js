@@ -263,6 +263,39 @@ function cardClicked(tabname, textToAdd, textToAddNegative, allowNegativePrompt)
     }
 }
 
+function loraVariationChanged(select, event) {
+    if (event) {
+        event.stopPropagation();
+    }
+
+    var option = select && select.options[select.selectedIndex];
+    var card = select && select.closest ? select.closest('.card') : null;
+    if (!option || !card) {
+        return;
+    }
+
+    var onclick = option.dataset.onclick;
+    if (onclick) {
+        card.setAttribute('onclick', onclick);
+    }
+
+    var preview = option.dataset.preview;
+    var img = card.querySelector('img.preview');
+    if (preview) {
+        if (!img) {
+            img = document.createElement('img');
+            img.className = 'preview';
+            img.loading = 'lazy';
+            card.insertBefore(img, card.firstChild);
+        }
+        if (img.getAttribute('src') !== preview) {
+            img.setAttribute('src', preview);
+        }
+    } else if (img) {
+        img.removeAttribute('src');
+    }
+}
+
 function saveCardPreview(event, tabname, filename) {
     var textarea = gradioApp().querySelector("#" + tabname + '_preview_filename  > label > textarea');
     var button = gradioApp().getElementById(tabname + '_save_preview');
@@ -587,7 +620,7 @@ function extraNetworksShowMetadata(text) {
     return;
 }
 
-function requestGet(url, data, handler, errorHandler) {
+function extraNetworksRequestGet(url, data, handler, errorHandler) {
     var xhr = new XMLHttpRequest();
     var args = Object.keys(data).map(function(k) {
         return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]);
@@ -625,7 +658,7 @@ function extraNetworksRequestMetadata(event, extraPage) {
 
     var cardName = event.target.parentElement.parentElement.getAttribute("data-name");
 
-    requestGet("./sd_extra_networks/metadata", {page: extraPage, item: cardName}, function(data) {
+    extraNetworksRequestGet("./sd_extra_networks/metadata", {page: extraPage, item: cardName}, function(data) {
         if (data && data.metadata) {
             extraNetworksShowMetadata(data.metadata);
         } else {
@@ -662,7 +695,7 @@ function extraNetworksEditUserMetadata(event, tabname, extraPage) {
 }
 
 function extraNetworksRefreshSingleCard(page, tabname, name) {
-    requestGet("./sd_extra_networks/get-single-card", {page: page, tabname: tabname, name: name}, function(data) {
+    extraNetworksRequestGet("./sd_extra_networks/get-single-card", {page: page, tabname: tabname, name: name}, function(data) {
         if (data && data.html) {
             var card = gradioApp().querySelector(`#${tabname}_${page.replace(" ", "_")}_cards > .card[data-name="${name}"]`);
 

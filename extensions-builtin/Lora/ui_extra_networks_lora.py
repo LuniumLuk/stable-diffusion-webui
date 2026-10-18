@@ -1,4 +1,5 @@
 import os
+import re
 
 import network
 import networks
@@ -8,6 +9,28 @@ from modules.ui_extra_networks import quote_js
 from ui_edit_user_metadata import LoraUserMetadataEditor
 
 
+re_lora_variant = re.compile(r"^(?P<base>.+?)-\d{5,}$")
+
+
+def lora_variant_group(name):
+    match = re_lora_variant.match(name)
+    return match.group("base") if match else name
+
+
+def lora_variant_sort_key(name, item):
+    metadata = item.get("metadata") or {}
+    try:
+        epoch = int(metadata.get("ss_epoch"))
+    except (TypeError, ValueError):
+        epoch = None
+
+    if epoch is not None:
+        return (0, epoch)
+
+    match = re_lora_variant.match(name)
+    return (1, int(match.group(0).rsplit("-", 1)[1]) if match else float("inf"))
+
+
 class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
     def __init__(self):
         super().__init__('Lora')
@@ -15,7 +38,77 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
     def refresh(self):
         networks.list_available_networks()
 
+    def _grouped_network_names(self):
+        groups = {}
+        for name in networks.available_networks:
+            groups.setdefault(lora_variant_group(name), []).append(name)
+        return groups
+
+    def _variation_label(self, name, item):
+        metadata = item.get("metadata") or {}
+        epoch = metadata.get("ss_epoch")
+        is_variant = bool(re_lora_variant.match(name))
+        if epoch not in (None, "", "None"):
+            return f"epoch {epoch}" + ("" if is_variant else " (final)")
+        return name.rsplit("-", 1)[-1] if is_variant else "final"
+
     def create_item(self, name, index=None, enable_filter=True):
+        groups = self._grouped_network_names()
+        members = groups.get(name)
+        if members is None:
+            members = [name]
+
+        items = []
+        for member in members:
+            item = self._create_single_item(member, index, enable_filter)
+            if item is not None:
+                items.append((member, item))
+
+        if not items:
+            return None
+
+        items.sort(key=lambda pair: lora_variant_sort_key(pair[0], pair[1]))
+        default_name, default_item = items[-1]
+        group_item = default_item
+
+        if len(items) > 1:
+            group_item = default_item.copy()
+            group_item["name"] = name
+            group_item["default_variation"] = default_name
+            group_item["variations"] = [
+                {
+                    "name": member,
+                    "label": self._variation_label(member, item),
+                    "prompt": item["prompt"],
+                    "negative_prompt": item.get("negative_prompt", "''"),
+                    "preview": item.get("preview"),
+                }
+                for member, item in items
+            ]
+
+            search_terms = []
+            for _, item in items:
+                for term in item.get("search_terms", []):
+                    if term not in search_terms:
+                        search_terms.append(term)
+
+            group_item["search_terms"] = search_terms
+            group_item["filename"] = default_item["filename"]
+            group_item["preview"] = default_item.get("preview")
+            group_item["prompt"] = default_item["prompt"]
+            group_item["negative_prompt"] = default_item.get("negative_prompt", "''")
+            group_item["local_preview"] = default_item.get("local_preview")
+            group_item["shorthash"] = default_item.get("shorthash")
+            group_item["metadata"] = default_item.get("metadata")
+            group_item["sort_keys"] = default_item.get("sort_keys")
+            group_item["sd_version"] = default_item.get("sd_version")
+        elif name not in networks.available_networks:
+            group_item = default_item.copy()
+            group_item["name"] = default_name
+
+        return group_item
+
+    def _create_single_item(self, name, index=None, enable_filter=True):
         lora_on_disk = networks.available_networks.get(name)
         if lora_on_disk is None:
             return
@@ -76,9 +169,9 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
         return item
 
     def list_items(self):
-        # instantiate a list to protect against concurrent modification
-        names = list(networks.available_networks)
-        for index, name in enumerate(names):
+        # Group training checkpoints (name-000002, name-000004, ...) into one card.
+        groups = self._grouped_network_names()
+        for index, name in enumerate(groups):
             item = self.create_item(name, index)
             if item is not None:
                 yield item

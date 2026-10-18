@@ -2,7 +2,7 @@ import gradio as gr
 import html
 import json
 
-from modules import shared, ui_prompt_styles, prompt_presets
+from modules import shared, ui_prompt_styles
 import modules.images
 
 from modules.ui_components import ToolButton
@@ -139,6 +139,7 @@ class Toprow:
     submit = None
     queue_btn = None
     queue_status = None
+    quick_generate = None
 
     paste = None
     clear_prompt_button = None
@@ -206,71 +207,14 @@ class Toprow:
             return
 
         self.submit_box.render()
+
+        if not self.is_img2img and self.quick_generate is None:
+            self.quick_generate = gr.Button("Quick Generate", elem_id="txt2img_quick_generate", variant='secondary', elem_classes=["quick-generate-button"])
+
         self.create_staging_panel()
 
     def create_prompts(self):
-        def preset_choices():
-            choices = prompt_presets.prompt_presets.get_presets()
-            return choices if choices else ["(No presets)"]
-
-        def save_preset_from_payload(payload):
-            try:
-                data = json.loads(payload or "{}")
-            except Exception:
-                return gr.update()
-
-            name = str(data.get("name", "")).strip()
-            content = str(data.get("content", "")).strip()
-            if not name or not content:
-                return gr.update()
-
-            prompt_presets.prompt_presets.save_preset(name, content)
-            return gr.update(choices=preset_choices(), value=name)
-
-        def edit_preset_from_payload(payload):
-            try:
-                data = json.loads(payload or "{}")
-            except Exception:
-                return gr.update()
-
-            name = str(data.get("name", "")).strip()
-            content = data.get("content", None)
-            if not name or name == "(No presets)" or content is None:
-                return gr.update()
-
-            prompt_presets.prompt_presets.save_preset(name, str(content))
-            return gr.update(choices=preset_choices(), value=name)
-
-        def delete_preset_by_name(name):
-            selected = str(name or "").strip()
-            if not selected or selected == "(No presets)":
-                return gr.update()
-
-            prompt_presets.prompt_presets.delete_preset(selected)
-            return gr.update(choices=preset_choices(), value="")
-
-        def keep_dropdown_selection_after_copy(name):
-            selected = str(name or "")
-            return gr.update(value=selected)
-
         with gr.Column(elem_id=f"{self.id_part}_prompt_container", elem_classes=["prompt-container-compact"] if self.is_compact else [], scale=6):
-            # Prompt presets row
-            with gr.Row(elem_id=f"{self.id_part}_presets_row", scale=1):
-                preset_list = preset_choices()
-                self.preset_dropdown = gr.Dropdown(
-                    choices=preset_list,
-                    value="",
-                    label="Prompt Presets",
-                    elem_id=f"{self.id_part}_preset_dropdown",
-                    scale=5,
-                    interactive=True,
-                )
-                with gr.Row(scale=1, min_width=150):
-                    self.preset_add_btn = ToolButton(value="➕", elem_id=f"{self.id_part}_preset_add", tooltip="Save selected text as preset")
-                    self.preset_edit_btn = ToolButton(value="✏️", elem_id=f"{self.id_part}_preset_edit", tooltip="Edit selected preset")
-                    self.preset_delete_btn = ToolButton(value="🗑️", elem_id=f"{self.id_part}_preset_delete", tooltip="Delete selected preset")
-                self.preset_payload = gr.Textbox(value="", visible=False, elem_id=f"{self.id_part}_preset_payload")
-            
             with gr.Row(elem_id=f"{self.id_part}_prompt_row", elem_classes=["prompt-row"]):
                 self.prompt = gr.Textbox(label="Prompt", elem_id=f"{self.id_part}_prompt", show_label=False, lines=3, placeholder="Prompt\n(Press Ctrl+Enter to generate, Alt+Enter to skip, Esc to interrupt)", elem_classes=["prompt"])
                 self.prompt_img = gr.File(label="", elem_id=f"{self.id_part}_prompt_image", file_count="single", type="binary", visible=False)
@@ -283,35 +227,6 @@ class Toprow:
             inputs=[self.prompt_img],
             outputs=[self.prompt, self.prompt_img],
             show_progress=False,
-        )
-        
-        # Setup preset button handlers with backend persistence and dropdown updates.
-        self.preset_add_btn.click(
-            fn=save_preset_from_payload,
-            inputs=[self.preset_payload],
-            outputs=[self.preset_dropdown],
-            _js=f'function(){{ return [window.buildPromptPresetAddPayload("{self.id_part}")]; }}'
-        )
-        
-        self.preset_edit_btn.click(
-            fn=edit_preset_from_payload,
-            inputs=[self.preset_payload],
-            outputs=[self.preset_dropdown],
-            _js=f'function(){{ return [window.buildPromptPresetEditPayload("{self.id_part}")]; }}'
-        )
-        
-        self.preset_delete_btn.click(
-            fn=delete_preset_by_name,
-            inputs=[self.preset_dropdown],
-            outputs=[self.preset_dropdown],
-            _js='function(name){ return [window.confirmDeletePromptPreset(name) ? name : ""]; }'
-        )
-
-        self.preset_dropdown.change(
-            fn=keep_dropdown_selection_after_copy,
-            inputs=[self.preset_dropdown],
-            outputs=[self.preset_dropdown],
-            _js='function(name){ window.copyPromptPresetByName(name); return [name]; }'
         )
 
     def create_submit_box(self):
@@ -334,13 +249,11 @@ class Toprow:
             self.interrupt.click(fn=interrupt_function, _js='function(){ showSubmitInterruptingPlaceholder("' + self.id_part + '"); }')
             self.interrupting.click(fn=interrupt_function)
 
+        if not self.is_compact and not self.is_img2img:
+            self.quick_generate = gr.Button("Quick Generate", elem_id="txt2img_quick_generate", variant='secondary', elem_classes=["quick-generate-button"])
+
         if not self.is_compact:
             self.create_staging_panel()
-
-            gr.HTML(
-                value=f"<div id=\"{self.id_part}_compare_dropzone\" class=\"prompt-compare-dropzone\" data-tabname=\"{self.id_part}\">Drop .txt or image here to compare against current prompt/settings</div>",
-                elem_id=f"{self.id_part}_compare_dropzone_wrap",
-            )
 
     def create_staging_panel(self):
         """Stage panel below the Generate button (img2img only). Wiring happens in modules/ui.py."""

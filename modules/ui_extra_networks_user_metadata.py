@@ -5,6 +5,8 @@ import os.path
 
 import gradio as gr
 
+from PIL import Image
+
 from modules import infotext_utils, images, sysinfo, errors, ui_extra_networks
 
 
@@ -31,6 +33,8 @@ class UserMetadataEditor:
         self.button_cancel = None
         self.button_replace_preview = None
         self.button_save = None
+        self.preview_file = None
+        self.button_set_preview = None
 
     def get_user_metadata(self, name):
         item = self.page.items.get(name, {})
@@ -56,6 +60,8 @@ class UserMetadataEditor:
 
             with gr.Column(scale=1, min_width=0):
                 self.html_preview = gr.HTML()
+                self.preview_file = gr.File(label="Choose a thumbnail image", file_types=["image"], type="file", elem_id=f"{self.id_part}_preview_file")
+                self.button_set_preview = gr.Button("Save as thumbnail", variant="secondary")
 
     def create_default_buttons(self):
 
@@ -191,11 +197,48 @@ class UserMetadataEditor:
         item['preview'] = self.page.find_preview(item["local_preview"])
         return self.get_card_html(name), ''
 
+    def save_preview_from_file(self, name, file):
+        """Save a user-selected image as the extra network thumbnail."""
+        item = self.page.items.get(name, {})
+        if not item:
+            return self.get_card_html(name), "Unknown item."
+
+        path = getattr(file, "name", file)
+        if isinstance(path, (list, tuple)):
+            path = path[0] if path else None
+        if not path or not os.path.isfile(str(path)):
+            return self.get_card_html(name), "Choose an image file first."
+
+        target = item.get("local_preview") or os.path.splitext(item["filename"])[0] + ".preview.png"
+        try:
+            with Image.open(str(path)) as image:
+                image.seek(0)
+                image = image.convert("RGB")
+                image.thumbnail((1024, 1024), Image.LANCZOS)
+                image.save(target)
+            self.page.lister.update_file_entry(target)
+            item['preview'] = self.page.find_preview(os.path.splitext(item["filename"])[0])
+            return self.get_card_html(name), "Thumbnail saved."
+        except Exception as e:
+            errors.display(e, f"saving thumbnail for {name}")
+            return self.get_card_html(name), f"Could not save thumbnail: {e}"
+
     def setup_ui(self, gallery):
         self.button_replace_preview.click(
             fn=self.save_preview,
             _js=f"function(x, y, z){{return [selected_gallery_index_id('{self.tabname + '_gallery_container'}'), y, z]}}",
             inputs=[self.edit_name_input, gallery, self.edit_name_input],
+            outputs=[self.html_preview, self.html_status]
+        ).then(
+            fn=None,
+            _js="function(name){extraNetworksRefreshSingleCard(" + json.dumps(self.page.name) + "," + json.dumps(self.tabname) + ", name);}",
+            inputs=[self.edit_name_input],
+            outputs=[]
+        )
+
+        self.button_set_preview.click(
+            fn=self.save_preview_from_file,
+            inputs=[self.edit_name_input, self.preview_file],
             outputs=[self.html_preview, self.html_status]
         ).then(
             fn=None,
