@@ -2062,7 +2062,9 @@ div.accordions > div.input-accordion.input-accordion-open{
 #txt2img_toprow {
     position: sticky;
     top: 0;
-    z-index: 40;
+    /* Gradio block labels are positioned with z-index: var(--layer-4) (40), so
+       the pinned row must outrank them instead of tying. */
+    z-index: 41;
     /* Gradio's `.compact { background: transparent !important }` rule would
        otherwise let the parameter list show through the pinned row. */
     background: var(--background-fill-primary, #0b0f19) !important;
