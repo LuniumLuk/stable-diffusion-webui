@@ -1,6 +1,22 @@
 (function () {
     var host = null;
     var activeTimers = {};
+    var headerObserver = null;
+
+    // Must match the --webui-top-header-height default in style.css.
+    var HEADER_BASE_HEIGHT = 72;
+    var HEADER_BANNER_GAP = 6;
+
+    function updateHeaderSpace() {
+        var appHost = ensureHost();
+        var height = HEADER_BASE_HEIGHT;
+        if (appHost.childElementCount) {
+            // The host is fixed below the global progress bar; keep the app
+            // content below the last banner so hints never cover the main tabs.
+            height = Math.max(height, Math.ceil(appHost.getBoundingClientRect().bottom + HEADER_BANNER_GAP));
+        }
+        document.documentElement.style.setProperty('--webui-top-header-height', height + 'px');
+    }
 
     function ensureHost() {
         if (host && document.body.contains(host)) {
@@ -10,6 +26,12 @@
         host = document.createElement('div');
         host.id = 'global_banner_host';
         document.body.appendChild(host);
+
+        if (!headerObserver && window.ResizeObserver) {
+            headerObserver = new ResizeObserver(updateHeaderSpace);
+            headerObserver.observe(host);
+        }
+
         return host;
     }
 
@@ -26,6 +48,7 @@
             if (banner.parentNode) {
                 banner.parentNode.removeChild(banner);
             }
+            updateHeaderSpace();
         }, 220);
     }
 
@@ -47,6 +70,7 @@
         banner.setAttribute('data-banner-key', key);
         banner.textContent = String(message || '');
         appHost.appendChild(banner);
+        updateHeaderSpace();
 
         window.requestAnimationFrame(function () {
             banner.classList.add('show');

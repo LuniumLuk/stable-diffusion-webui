@@ -442,9 +442,21 @@ div.gradio-html.min{
     text-decoration: none;
 }
 
+/* Reserved strip above the main tabs for the global progress bar and the
+   transient hint banners. Both are fixed, so without this space they paint over
+   the tab buttons. globalBanner.js raises the variable when banners stack. */
+:root {
+    --webui-top-header-height: 72px;
+}
+
+gradio-app > .gradio-container {
+    padding-top: var(--webui-top-header-height) !important;
+}
+
 #global_banner_host {
     position: fixed;
-    top: 12px;
+    /* Below the 24px global progress bar. */
+    top: 28px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 10020;
@@ -456,7 +468,7 @@ div.gradio-html.min{
 
 .global-banner {
     pointer-events: none;
-    padding: 12px 16px;
+    padding: 8px 14px;
     border-radius: 10px;
     border: 1px solid var(--block-border-color);
     background: rgba(15, 23, 42, 0.94);
