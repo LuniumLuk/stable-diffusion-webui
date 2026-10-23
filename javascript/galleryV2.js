@@ -120,8 +120,8 @@
 
   var SEND_ACTIONS = [
     ['txt2img', '\u270E  txt2img', 'Apply the prompt + parameters to txt2img'],
-    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send only the image to img2img (right-click: prompt-only / send all)'],
-    ['inpaint', '\u{1F3A8}  Inpaint', 'Send only the image to inpaint (right-click: prompt-only / send all)'],
+    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send only the image to img2img (right-click: prompt-only / image + prompt / send all)'],
+    ['inpaint', '\u{1F3A8}  Inpaint', 'Send only the image to inpaint (right-click: prompt-only / image + prompt / send all)'],
     ['composer', '\u{1F9E9}  Composer', 'Open the image in the Composer tab'],
     ['censor', '\u{1F58A}\uFE0F  Censor', 'Open the image in the Censor panel']
   ];
@@ -298,6 +298,10 @@
         if (!applyPromptOnly(item)) return;
         goToImg2ImgSub('img2img');
         toast('To img2img \u2014 prompt + negative only');
+      } else if (only === 'image_prompt') {
+        if (!applyPromptOnly(item)) return;
+        goToImg2ImgSub('img2img', item);
+        toast('To img2img \u2014 image + prompt');
       } else if (only === 'all') {
         if (text && !applyInfotext(text, 'img2img')) return;
         goToImg2ImgSub('img2img', item);
@@ -311,6 +315,10 @@
         if (!applyPromptOnly(item)) return;
         goToImg2ImgSub('inpaint');
         toast('To inpaint \u2014 prompt + negative only');
+      } else if (only === 'image_prompt') {
+        if (!applyPromptOnly(item)) return;
+        goToImg2ImgSub('inpaint', item);
+        toast('To inpaint \u2014 image + prompt');
       } else if (only === 'all') {
         if (text && !applyInfotext(text, 'img2img')) return;
         goToImg2ImgSub('inpaint', item);
@@ -387,8 +395,9 @@
   }
 
   // Right-click options for a send-to-img2img / send-to-inpaint entry: either
-  // inject ONLY the image (keep prompt + parameters) or apply ONLY the item's
-  // prompt + negative prompt (no image, no other settings).
+  // inject ONLY the image (keep prompt + parameters), send the image with the
+  // item's prompt + negative prompt (no other settings), or apply ONLY the
+  // item's prompt + negative prompt (no image, no other settings).
   function makeSendOptions(makeRun) {
     return [
       {
@@ -396,6 +405,12 @@
         label: '\u270E  Send prompt + negative only',
         title: 'Apply only the prompt and negative prompt \u2014 no image, no other settings',
         run: makeRun('prompt'),
+      },
+      {
+        id: 'image_prompt',
+        label: '\u{1F5BC}  Send image + prompt (no settings)',
+        title: 'Send the image AND apply the prompt + negative prompt \u2014 no other settings',
+        run: makeRun('image_prompt'),
       },
       {
         id: 'all',
@@ -580,7 +595,7 @@
           '<button id="gv2-empty-trash" class="gv2-btn gv2-btn-danger" title="Permanently delete all trashed metadata rows">Empty Trash</button>' +
           '<button id="gv2-trash-disliked" class="gv2-btn gv2-btn-danger" title="Move every disliked item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Disliked</button>' +
           '<button id="gv2-trash-archived" class="gv2-btn gv2-btn-danger" title="Move every archived item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Archived</button>' +
-          '<button id="gv2-archive-unrated" class="gv2-btn gv2-btn-danger" title="Archive every unrated item, including albumed ones (leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Unrated</button>' +
+          '<button id="gv2-archive-unrated" class="gv2-btn gv2-btn-danger" title="Archive every unrated active item, including albumed ones (staged items are kept; leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Unrated</button>' +
           '<button id="gv2-archive-current" class="gv2-btn gv2-btn-danger" title="Archive all items matching the current filter (leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Current</button>' +
         '</div>' +
         '<div class="gv2-row gv2-row-adv">' +
@@ -688,7 +703,7 @@
     });
     el('gv2-archive-unrated').addEventListener('click', function () {
       confirmMaintenance('archive_unrated', 'Archive unrated', function (n) {
-        return 'Archive ' + n + ' unrated item(s) (all sources, albumed included)?\n\n' +
+        return 'Archive ' + n + ' unrated active item(s) (all sources, albumed included; staged kept)?\n\n' +
           'Archived items leave the active view; the sweeper auto-trashes them after 24 h unless endorsed.';
       });
     });

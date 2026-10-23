@@ -1224,7 +1224,7 @@ def unarchive_item(item_key: str) -> None:
 
 
 def archive_all_unrated() -> int:
-    """Archive all generated images not yet endorsed, disliked, archived, or trashed. Returns count added."""
+    """Archive all generated images not yet endorsed, disliked, archived, staged, or trashed. Returns count added."""
     now = datetime.now().isoformat(timespec="seconds")
     select_sql = """
         SELECT item_key
@@ -1233,6 +1233,7 @@ def archive_all_unrated() -> int:
           AND item_key NOT IN (SELECT item_key FROM endorsements WHERE item_key IS NOT NULL AND item_key != '')
           AND item_key NOT IN (SELECT item_key FROM dislikes WHERE item_key IS NOT NULL AND item_key != '')
           AND item_key NOT IN (SELECT item_key FROM archived WHERE item_key IS NOT NULL AND item_key != '')
+          AND item_key NOT IN (SELECT item_key FROM staged WHERE item_key IS NOT NULL AND item_key != '')
           AND item_key NOT IN (SELECT item_key FROM trash WHERE item_key IS NOT NULL AND item_key != '')
     """
     with _get_conn() as conn:

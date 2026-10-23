@@ -164,7 +164,7 @@ save of a recycled filename passes `""` and does clear it, and a path reprocesse
 *different* image (different source prompt) also drops the old value instead of pairing
 it with the new source text. The gallery detail drawer has a Source / Compiled switch
 (remembered in `gv2.prefs.v1`), and the "Send to" actions
-(txt2img, img2img/inpaint prompt-only and send-all) use the selected variant; for the
+(txt2img, img2img/inpaint prompt-only, image + prompt, and send-all) use the selected variant; for the
 infotext payload the prompt/negative block is swapped while `Steps: …` and the rest are
 kept. SD Lite mirrors the toggle (`ui.galleryPromptVariant`) in the gallery viewer and
 uses it for "Use as image / inpaint / text".

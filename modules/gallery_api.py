@@ -524,13 +524,16 @@ def _maintenance_count(fs: dict) -> int:
 
 def _archive_filterset(op: str, payload: dict) -> dict:
     """FilterSet for bulk archive. Only active/staged items can be archived; an empty
-    state intersection means nothing matches (never fall back to all states)."""
+    state intersection means nothing matches (never fall back to all states).
+    archive_unrated only targets active items: staged items are explicitly kept."""
     from modules import gallery_query
     if op == "archive_unrated":
         fs = gallery_query.parse_filters({"rating": "none"})
         # global maintenance: album membership never excludes items (matches the legacy
         # desktop + mobile "Archive Unrated" which have no album concept)
         fs["show_albumed"] = True
+        # staged items were explicitly picked to keep, so bulk-archiving must skip them
+        fs["states"] = ["active"]
     else:
         fs = gallery_query.parse_filters(payload.get("filters") or payload)
     states = fs.get("states") or []
