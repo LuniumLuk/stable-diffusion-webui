@@ -16,7 +16,7 @@ def report_exception(c, job):
 
 
 class ImageSaveParams:
-    def __init__(self, image, p, filename, pnginfo):
+    def __init__(self, image, p, filename, pnginfo, compiled_prompt=None, compiled_negative_prompt=None):
         self.image = image
         """the PIL image itself"""
 
@@ -28,6 +28,13 @@ class ImageSaveParams:
 
         self.pnginfo = pnginfo
         """dictionary with parameters for image's PNG info data; infotext will have the key 'parameters'"""
+
+        self.compiled_prompt = compiled_prompt
+        """prompt actually sent to the model for this image (comments stripped, @PICK groups
+        resolved), or None when the caller does not know it - e.g. Extras/upscale saves"""
+
+        self.compiled_negative_prompt = compiled_negative_prompt
+        """same as compiled_prompt, for the negative prompt"""
 
 
 class ExtraNoiseParams:

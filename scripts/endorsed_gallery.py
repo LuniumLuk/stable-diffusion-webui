@@ -2365,6 +2365,10 @@ def on_image_saved(params):
             model_name=parsed.get("Model", ""),
             model_hash=parsed.get("Model hash", ""),
             infotext=infotext,
+            # what the model was conditioned on; None keeps whatever is stored
+            # (Extras / other extension saves cannot know it)
+            compiled_prompt=getattr(params, "compiled_prompt", None),
+            compiled_negative_prompt=getattr(params, "compiled_negative_prompt", None),
         )
     except Exception:
         pass

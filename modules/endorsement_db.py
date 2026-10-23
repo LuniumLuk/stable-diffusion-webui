@@ -101,6 +101,46 @@ def _ensure_endorsement_origin_column(conn):
         conn.execute("ALTER TABLE endorsements ADD COLUMN original_path TEXT")
 
 
+def _ensure_compiled_prompt_columns(conn):
+    """Compiled prompt = what the model saw (comments stripped, @PICK drawn).
+
+    Added after the fact so existing DBs keep working: rows indexed before the
+    column existed simply carry no compiled prompt.
+    """
+    for table in ("generated_images", "endorsements", "dislikes"):
+        for column in ("compiled_prompt", "compiled_negative_prompt"):
+            if not _column_exists(conn, table, column):
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+
+
+def _compiled_prompts_for_item(conn, item_key: str | None, image_path: str | None = None,
+                              source_prompt: str | None = None) -> tuple[str, str] | None:
+    """Compiled prompt recorded when the image was indexed, or None when nothing is on file.
+
+    Endorsing / disliking copies the metadata into its own table; the compiled
+    prompt lives in generated_images (written at save time), so carry it over.
+    Pass `source_prompt` to only accept the row when it describes that same
+    image - A1111 recycles filename sequence numbers, so a path can be reused.
+    """
+    row = None
+    if item_key:
+        row = conn.execute(
+            "SELECT prompt, compiled_prompt, compiled_negative_prompt FROM generated_images WHERE item_key=? LIMIT 1",
+            (item_key,),
+        ).fetchone()
+    if row is None and image_path:
+        row = conn.execute(
+            "SELECT prompt, compiled_prompt, compiled_negative_prompt FROM generated_images WHERE path=? LIMIT 1",
+            (image_path,),
+        ).fetchone()
+    if row is None:
+        return None
+    if source_prompt is not None and str(row[0] or "") != str(source_prompt or ""):
+        # different image reusing the same path: its compiled prompt is not ours
+        return None
+    return str(row[1] or ""), str(row[2] or "")
+
+
 def _backfill_item_keys(conn):
     for table, path_col in (("endorsements", "image_path"), ("dislikes", "image_path"), ("generated_images", "path")):
         rows = conn.execute(
@@ -185,6 +225,8 @@ def init_db():
                 file_mtime      REAL,
                 prompt          TEXT,
                 negative_prompt TEXT,
+                compiled_prompt TEXT,
+                compiled_negative_prompt TEXT,
                 seed            TEXT,
                 steps           INTEGER,
                 sampler         TEXT,
@@ -202,6 +244,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dislikes_path ON dislikes(image_path)")
         _ensure_item_key_columns(conn)
         _ensure_endorsement_origin_column(conn)
+        _ensure_compiled_prompt_columns(conn)
         _backfill_item_keys(conn)
         _dedupe_table_by_item_key(conn, "generated_images", "file_mtime")
         _dedupe_table_by_item_key(conn, "endorsements", "endorsed_at")
@@ -789,6 +832,7 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
     endorsed_copy_path, original_path = _move_into_endorsed(image_path, endorsed_at)
 
     with _get_conn() as conn:
+        compiled_prompt, compiled_negative = _compiled_prompts_for_item(conn, item_key, image_path) or ("", "")
         if item_key:
             # Endorse/dislike are mutually exclusive for the same item.
             conn.execute("DELETE FROM dislikes WHERE item_key=?", (item_key,))
@@ -801,8 +845,9 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
             """
             INSERT INTO endorsements
                 (endorsed_at, image_path, original_path, prompt, negative_prompt, seed, steps,
-                 sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key,
+                 compiled_prompt, compiled_negative_prompt)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 endorsed_at.isoformat(timespec="seconds"),
@@ -820,6 +865,8 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
                 model_hash,
                 infotext,
                 item_key,
+                compiled_prompt,
+                compiled_negative,
             ),
         )
         conn.commit()
@@ -828,6 +875,8 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
         item_key, endorsed_copy_path, original_path,
         {
             "prompt": prompt, "negative_prompt": negative_prompt,
+            "compiled_prompt": compiled_prompt,
+            "compiled_negative_prompt": compiled_negative,
             "seed": seed, "steps": steps, "sampler": sampler, "cfg_scale": cfg_scale,
             "width": width, "height": height,
             "model_name": model_name, "model_hash": model_hash,
@@ -917,6 +966,7 @@ def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
     unstage_item(item_key)
 
     with _get_conn() as conn:
+        compiled_prompt, compiled_negative = _compiled_prompts_for_item(conn, item_key, image_path) or ("", "")
         if item_key:
             # Endorse/dislike are mutually exclusive for the same item.
             conn.execute("DELETE FROM endorsements WHERE item_key=?", (item_key,))
@@ -928,8 +978,9 @@ def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
             """
             INSERT OR REPLACE INTO dislikes
                 (disliked_at, image_path, prompt, negative_prompt, seed, steps,
-                 sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key,
+                 compiled_prompt, compiled_negative_prompt)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 datetime.now().isoformat(timespec="seconds"),
@@ -946,6 +997,8 @@ def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
                 model_hash,
                 infotext,
                 item_key,
+                compiled_prompt,
+                compiled_negative,
             ),
         )
         conn.commit()
@@ -954,6 +1007,8 @@ def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
         item_key, image_path,
         {
             "prompt": prompt, "negative_prompt": negative_prompt,
+            "compiled_prompt": compiled_prompt,
+            "compiled_negative_prompt": compiled_negative,
             "seed": seed, "steps": steps, "sampler": sampler, "cfg_scale": cfg_scale,
             "width": width, "height": height,
             "model_name": model_name, "model_hash": model_hash,
@@ -1355,12 +1410,25 @@ def search_staged(query: str = "", limit: int = 48, offset: int = 0,
 def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
                 seed: str, steps: int, sampler: str, cfg_scale: float,
                 width: int, height: int, model_name: str, model_hash: str,
-                infotext: str):
+                infotext: str, compiled_prompt: str | None = None,
+                compiled_negative_prompt: str | None = None):
+    """Index a saved image.
+
+    `compiled_prompt` is what the model was actually conditioned on (comments
+    stripped, @PICK groups drawn); `prompt` stays the source prompt. Pass None
+    to keep whatever was recorded before (re-indexing a file cannot re-derive
+    the draw), "" to record "none".
+    """
     if is_removebg_attachment_path(path):
         return
 
     item_key = _item_key_from_path(path)
     with _get_conn() as conn:
+        # re-indexing cannot re-derive the draw, so keep the compiled prompt recorded
+        # before - the helper only returns it for the same image (A1111 recycles
+        # filename sequence numbers, so a path can be reused by a new picture)
+        previous = _compiled_prompts_for_item(conn, item_key, path, source_prompt=prompt)
+        known = compiled_prompt is not None
         if item_key:
             conn.execute("DELETE FROM generated_images WHERE item_key=?", (item_key,))
             # A1111 recycles filename sequence numbers after originals are
@@ -1368,12 +1436,19 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
             # has a stale trash row. Clear it so the new image isn't hidden by
             # the trash exclusion in gallery queries.
             conn.execute("DELETE FROM trash WHERE item_key=?", (item_key,))
+        if compiled_prompt is None:
+            compiled_prompt = previous[0] if previous else ""
+        if compiled_negative_prompt is None:
+            compiled_negative_prompt = previous[1] if previous else ""
+        # nothing known about this image -> leave gallery.db's columns alone
+        carried = known or bool(previous and any(previous))
         conn.execute(
             """
             INSERT OR REPLACE INTO generated_images
                 (path, indexed_at, file_mtime, prompt, negative_prompt, seed, steps,
-                 sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 sampler, cfg_scale, width, height, model_name, model_hash, infotext, item_key,
+                 compiled_prompt, compiled_negative_prompt)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 path,
@@ -1391,12 +1466,17 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
                 model_hash,
                 infotext,
                 item_key,
+                compiled_prompt,
+                compiled_negative_prompt,
             ),
         )
         conn.commit()
     gallery_bridge.on_index_image(
         path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
         cfg_scale, width, height, model_name, model_hash, infotext,
+        # None (nothing known about this image) keeps whatever gallery.db recorded
+        compiled_prompt=compiled_prompt if carried else None,
+        compiled_negative_prompt=compiled_negative_prompt if carried else None,
     )
 
 

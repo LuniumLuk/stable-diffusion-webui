@@ -621,7 +621,7 @@ def save_image_with_geninfo(image, geninfo, filename, extension=None, existing_p
         image.save(filename, format=image_format, quality=opts.jpeg_quality)
 
 
-def save_image(image, path, basename, seed=None, prompt=None, extension='png', info=None, short_filename=False, no_prompt=False, grid=False, pnginfo_section_name='parameters', p=None, existing_info=None, forced_filename=None, suffix="", save_to_dirs=None):
+def save_image(image, path, basename, seed=None, prompt=None, extension='png', info=None, short_filename=False, no_prompt=False, grid=False, pnginfo_section_name='parameters', p=None, existing_info=None, forced_filename=None, suffix="", save_to_dirs=None, compiled_prompt=None, compiled_negative_prompt=None):
     """Save an image.
 
     Args:
@@ -647,6 +647,11 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
             If specified, `basename` and filename pattern will be ignored.
         save_to_dirs (bool):
             If true, the image will be saved into a subdirectory of `path`.
+        compiled_prompt, compiled_negative_prompt (`str`):
+            The prompt actually sent to the model for this image (comments stripped,
+            @PICK groups resolved). Kept out of the PNG metadata; handed to the
+            image_saved callbacks so the gallery can store it next to the source
+            prompt. None when unknown (Extras and other non-generation saves).
 
     Returns: (fullfn, txt_fullfn)
         fullfn (`str`):
@@ -702,7 +707,11 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
     if info is not None:
         pnginfo[pnginfo_section_name] = info
 
-    params = script_callbacks.ImageSaveParams(image, p, fullfn, pnginfo)
+    params = script_callbacks.ImageSaveParams(
+        image, p, fullfn, pnginfo,
+        compiled_prompt=compiled_prompt,
+        compiled_negative_prompt=compiled_negative_prompt,
+    )
     script_callbacks.before_image_saved_callback(params)
 
     image = params.image

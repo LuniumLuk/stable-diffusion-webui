@@ -44,9 +44,12 @@ function badgesHtml(item) {
 }
 
 export function metaFromItem(item) {
+  // the remembered gallery toggle decides which prompt "Use as image / inpaint" carries:
+  // source = as typed (comments, @PICK intact); compiled = what the model was fed
+  const useCompiled = state.ui.galleryPromptVariant === 'compiled' && !!(item && item.compiled_prompt);
   return {
-    prompt: item.prompt,
-    negative_prompt: item.negative_prompt,
+    prompt: useCompiled ? item.compiled_prompt : item.prompt,
+    negative_prompt: useCompiled ? item.compiled_negative_prompt : item.negative_prompt,
     seed: item.seed,
     steps: item.steps,
     sampler: item.sampler,
@@ -56,6 +59,22 @@ export function metaFromItem(item) {
     model: item.model,
     infotext: '',
   };
+}
+
+function galleryPromptActive(item) {
+  return state.ui.galleryPromptVariant === 'compiled' && item.compiled_prompt
+    ? item.compiled_prompt
+    : (item.prompt || '');
+}
+
+function galleryNegativeActive(item) {
+  return state.ui.galleryPromptVariant === 'compiled' && item.compiled_prompt
+    ? (item.compiled_negative_prompt || '')
+    : (item.negative_prompt || '');
+}
+
+function galleryHasCompiled(item) {
+  return !!(item && item.compiled_prompt);
 }
 
 /**
@@ -70,10 +89,11 @@ function itemMetaSections(item) {
     return [{ label: '', text: [engine, item.path || ''].filter(Boolean).join('\n') }];
   }
 
-  const prompt = String(item.prompt || '');
-  const negative = String(item.negative_prompt || '');
+  const prompt = galleryPromptActive(item);
+  const negative = galleryNegativeActive(item);
+  const compiledOn = galleryHasCompiled(item) && state.ui.galleryPromptVariant === 'compiled';
   const sections = [
-    { label: 'Prompt', text: prompt || '(no prompt)', copy: prompt ? 'prompt' : '' },
+    { label: compiledOn ? 'Prompt (compiled)' : 'Prompt', text: prompt || '(no prompt)', copy: prompt ? 'prompt' : '' },
   ];
   if (negative) sections.push({ label: 'Negative prompt', text: negative, copy: 'negative prompt' });
   sections.push({
@@ -88,8 +108,28 @@ function itemMetaSections(item) {
   return sections;
 }
 
+/**
+ * Row metadata for DB writes (endorse/dislike): always the SOURCE prompt.
+ * What the model was sent is carried over by the backend from generated_images,
+ * so a remembered "compiled" toggle must not overwrite the source text here.
+ */
+function actionMeta(item) {
+  return {
+    prompt: item.prompt,
+    negative_prompt: item.negative_prompt,
+    seed: item.seed,
+    steps: item.steps,
+    sampler: item.sampler,
+    cfg: item.cfg,
+    width: item.width,
+    height: item.height,
+    model: item.model,
+    infotext: '',
+  };
+}
+
 async function act(action, item) {
-  const ok = await galleryAction(action, { key: item.key, path: item.path, meta: metaFromItem(item) });
+  const ok = await galleryAction(action, { key: item.key, path: item.path, meta: actionMeta(item) });
   if (ok) {
     closeViewer();
     loadPage({ reset: true });
@@ -98,7 +138,7 @@ async function act(action, item) {
 
 /** Quick action button on a card; actions run without opening the viewer. */
 function quickAction(item, action) {
-  return galleryAction(action, { key: item.key, path: item.path, meta: metaFromItem(item) });
+  return galleryAction(action, { key: item.key, path: item.path, meta: actionMeta(item) });
 }
 
 function quickButton(label, title, onClick, on = false) {
@@ -234,6 +274,23 @@ function openItemViewer(item) {
   let position = items.indexOf(item);
   if (position < 0) position = 0;
 
+  // source <-> compiled prompt toggle (remembered); re-renders the viewer so the meta
+  // block and the send actions below both follow the choice
+  const promptVariantAction = (current) => ({
+    label: state.ui.galleryPromptVariant === 'compiled' ? 'Prompt: Compiled' : 'Prompt: Source',
+    title: galleryHasCompiled(current)
+      ? 'Switch between the prompt as typed (source) and what the model was sent (compiled)'
+      : 'No compiled prompt recorded for this image - it predates the feature',
+    onClick: () => {
+      state.ui.galleryPromptVariant = state.ui.galleryPromptVariant === 'compiled' ? 'source' : 'compiled';
+      persist();
+      if (state.ui.galleryPromptVariant === 'compiled' && !galleryHasCompiled(current)) {
+        toast('No compiled prompt recorded for this image', 'warn', 2000);
+      }
+      show();
+    },
+  });
+
   const show = () => {
     const current = items[position];
     openViewer({
@@ -245,6 +302,7 @@ function openItemViewer(item) {
           { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
           { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
           { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
+          promptVariantAction(current),
           { label: '\u{1F9E9} Compose', onClick: () => sendToCompose(current) },
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
           { label: '\u{1F4CE} To Krea 2', onClick: () => sendToKrea2Ref(current) },
@@ -267,6 +325,7 @@ function openItemViewer(item) {
         { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img' }) },
         { label: 'Inpaint', onClick: () => useAsImage(current, { mode: 'inpaint' }) },
         { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
+        promptVariantAction(current),
         { label: '\u2B07 Save', onClick: () => downloadItem(current) },
         current.endorsed
           ? { label: '\u2B50 Un-endorse', onClick: () => act('unendorse', current) }

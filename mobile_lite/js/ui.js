@@ -346,6 +346,7 @@ export function openViewer({ src, title = '', meta = null, actions = [], tag = '
       class: `btn tiny ${action.accent ? 'accent' : ''} ${action.danger ? 'danger' : ''}`,
       type: 'button',
       text: action.label,
+      title: action.title || '',
       onClick: () => action.onClick(),
     }));
   }

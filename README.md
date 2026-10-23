@@ -64,6 +64,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - every image of a batch draws again: batch count 16 means 16 draws
      - the draw is tied to the image seed, so reloading an image's parameters brings back the same keywords
      - keywords starting with `@` are checked and highlighted; right-click a directive (tap it in the mobile UI) for a hint with the N-of-M preview, broken syntax is marked in red with the reason
+     - the gallery keeps both the source prompt and the compiled prompt (comments stripped, picks drawn); its info panel switches between them (remembered) and the send actions follow the choice
 - Batch Processing, process a group of files using img2img
 - Img2img Alternative, reverse Euler method of cross attention control
 - Highres Fix, a convenience option to produce high resolution pictures in one click without usual distortions

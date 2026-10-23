@@ -143,6 +143,32 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   drawer, and prev/next navigation plus wheel zoom and drag panning work in both modes.
   Up/Down still endorse/dislike the open item instead of scrolling the page.
 
+## Source vs compiled prompt
+
+Every generated image stores two prompts in both stores (`items` and `generated_images`,
+plus the `endorsements` / `dislikes` copies):
+
+- **source** — what was typed, with `#` comments and `@PICK` groups intact; this is what
+  the PNG infotext carries (and what older rows have).
+- **compiled** — what the model was actually conditioned on: comments stripped by
+  `strip_prompt_comments`, `@PICK` groups drawn by `apply_random_picks`, styles applied.
+  Produced by `StableDiffusionProcessing.compiled_prompts_for_image()` at save time and
+  handed to the `image_saved` callbacks through `ImageSaveParams.compiled_prompt`;
+  `index_image` writes it to `generated_images` and mirrors it into `items`
+  (`compiled_prompt` / `compiled_negative_prompt`). Empty for images indexed before the
+  columns existed — the UI then falls back to the source prompt.
+
+A re-index (`index_image(compiled_prompt=None)`, `gallery_sources.index_item`) never
+clears a stored compiled prompt: the draw cannot be re-derived from the file. A fresh
+save of a recycled filename passes `""` and does clear it, and a path reprocessed into a
+*different* image (different source prompt) also drops the old value instead of pairing
+it with the new source text. The gallery detail drawer has a Source / Compiled switch
+(remembered in `gv2.prefs.v1`), and the "Send to" actions
+(txt2img, img2img/inpaint prompt-only and send-all) use the selected variant; for the
+infotext payload the prompt/negative block is swapped while `Steps: …` and the rest are
+kept. SD Lite mirrors the toggle (`ui.galleryPromptVariant`) in the gallery viewer and
+uses it for "Use as image / inpaint / text".
+
 ## Deferred by design (plan phases)
 
 - **G3 soak** (1 week, dual-write keeps both stores fresh) — no action needed.
@@ -160,6 +186,7 @@ python tmp/gallery_v2_test.py            # core schema/tags/FTS/lifecycle   (62)
 python tmp/gallery_migrate_test.py       # M0-M3 fixture                      (26)
 python tmp/gallery_bridge_test.py        # dual-write mirrors                 (25)
 python tmp/gallery_api_test.py           # HTTP API: blob ETag, groups/views/actions, albums, engine keys (112)
+python test/test_gallery_compiled_prompt.py   # source vs compiled prompt persistence (no fixtures needed)
 
 # migration
 python -m modules.gallery_migrate m0|m1|m2|m3|gates|all

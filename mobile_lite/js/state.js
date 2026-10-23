@@ -71,6 +71,7 @@ export const state = {
     galleryView: 'all',
     galleryQuery: '',
     galleryAlbum: 0,
+    galleryPromptVariant: 'source', // 'source' | 'compiled' - remembered
     lastTab: 'text',
     peditMode: 'chips',
     suggestionsOpen: false,

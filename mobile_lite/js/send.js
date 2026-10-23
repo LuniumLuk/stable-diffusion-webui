@@ -16,9 +16,12 @@ export function useSourceAsImage({ dataUrl, width, height, name = 'image', meta 
 /** Prompt/parameter snapshot of a gallery item (travels with it to the Image screen). */
 export function metaFromItem(item) {
   if (!item) return null;
+  // the remembered gallery toggle decides source (as typed) vs compiled (what the
+  // model was sent: comments stripped, @PICK drawn)
+  const useCompiled = !!(state.ui && state.ui.galleryPromptVariant === 'compiled' && item.compiled_prompt);
   return {
-    prompt: item.prompt || '',
-    negative_prompt: item.negative_prompt || '',
+    prompt: useCompiled ? item.compiled_prompt : (item.prompt || ''),
+    negative_prompt: useCompiled ? (item.compiled_negative_prompt || '') : (item.negative_prompt || ''),
     seed: item.seed,
     steps: item.steps,
     sampler: item.sampler,

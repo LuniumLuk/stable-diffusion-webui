@@ -144,6 +144,7 @@ def init_db() -> None:
               parent_id INTEGER REFERENCES items(id),
               variant TEXT,
               prompt TEXT, negative_prompt TEXT, infotext TEXT,
+              compiled_prompt TEXT, compiled_negative_prompt TEXT,
               tags_text TEXT DEFAULT '',
               meta_json TEXT DEFAULT '{}',
               sha256 TEXT,
@@ -212,6 +213,12 @@ def init_db() -> None:
         item_cols = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
         if "album_id" not in item_cols:
             conn.execute("ALTER TABLE items ADD COLUMN album_id INTEGER")
+        # compiled prompt = what the model was conditioned on (comments stripped, @PICK
+        # drawn); the prompt column keeps the source. Empty for images indexed before
+        # this column existed.
+        for column in ("compiled_prompt", "compiled_negative_prompt"):
+            if column not in item_cols:
+                conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_items_album ON items(album_id)")
         album_cols = {row[1] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
         if "cover_uid" not in album_cols:
@@ -324,7 +331,8 @@ def get_categories() -> list:
 
 _UPSERT_FIELDS = (
     "source", "kind", "path", "rel_path", "alias_path", "mtime", "file_size",
-    "width", "height", "prompt", "negative_prompt", "infotext", "sha256", "variant",
+    "width", "height", "prompt", "negative_prompt", "compiled_prompt",
+    "compiled_negative_prompt", "infotext", "sha256", "variant",
 )
 
 

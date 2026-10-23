@@ -73,6 +73,7 @@
     lastIndex: -1,
     detailKey: null,
     detailMediaLeft: false, // detail drawer: preview on the left stage instead of in the panel
+    promptVariant: 'source', // 'source' or 'compiled' - which prompt the info panel shows / sends
     busy: false,
     loadedOnce: false
   };
@@ -165,6 +166,53 @@
     return true;
   }
 
+  // ---------------------------------------------------------------- prompt variant
+  //
+  // Every item stores the source prompt (as typed, comments and @PICK groups intact)
+  // and, for images generated after the feature landed, the compiled prompt that was
+  // actually conditioned on. The detail panel toggles between them; the choice is
+  // remembered and the send actions use it too.
+
+  function hasCompiledPrompt(item) {
+    return !!(item && item.compiled_prompt);
+  }
+
+  function activePrompt(item) {
+    if (state.promptVariant === 'compiled' && hasCompiledPrompt(item)) return item.compiled_prompt;
+    return (item && item.prompt) || '';
+  }
+
+  function activeNegativePrompt(item) {
+    if (state.promptVariant === 'compiled' && hasCompiledPrompt(item)) {
+      return item.compiled_negative_prompt || '';
+    }
+    return (item && item.negative_prompt) || '';
+  }
+
+  /** Split an A1111 infotext into prompt block, negative prompt and the parameter lines. */
+  function splitInfotext(text) {
+    var body = String(text || '');
+    var stepsAt = body.lastIndexOf('\nSteps: ');
+    var head = stepsAt >= 0 ? body.slice(0, stepsAt) : body;
+    var params = stepsAt >= 0 ? body.slice(stepsAt + 1) : '';
+    var negAt = head.lastIndexOf('\nNegative prompt: ');
+    var prompt = negAt >= 0 ? head.slice(0, negAt) : head;
+    var negative = negAt >= 0 ? head.slice(negAt + '\nNegative prompt: '.length) : null;
+    return { prompt: prompt, negative: negative, params: params };
+  }
+
+  /** The item's infotext with its prompt/negative replaced by the remembered variant. */
+  function variantInfotext(item) {
+    var infotext = item.infotext || '';
+    if (state.promptVariant !== 'compiled' || !hasCompiledPrompt(item)) return infotext;
+    var parts = splitInfotext(infotext);
+    if (!parts.params) return activePrompt(item);
+    var negative = activeNegativePrompt(item);
+    return activePrompt(item)
+      + (negative ? '\nNegative prompt: ' + negative : '')
+      + '\n' + parts.params;
+  }
+
   // "Send prompt + negative only": write JUST the item's prompt / negative
   // prompt into the img2img prompt boxes (the inpaint sub-tab shares them).
   // Deliberately NOT via the paste bridge: parse_generation_parameters always
@@ -172,8 +220,8 @@
   // ...) and paste_func applies every present key, so the bridge cannot
   // express "prompt + negative only". Fields the item lacks stay untouched.
   function applyPromptOnly(item) {
-    var prompt = item.prompt || '';
-    var negative = item.negative_prompt || '';
+    var prompt = activePrompt(item);
+    var negative = activeNegativePrompt(item);
     if (!prompt && !negative) { toast('No prompt / negative prompt to send', true); return false; }
     if (prompt) setGradioTextbox('img2img_prompt', prompt);
     if (negative) setGradioTextbox('img2img_neg_prompt', negative);
@@ -228,9 +276,10 @@
   function sendableText(item) {
     // A1111-style infotext (prompt + Steps: parameters) is the ideal payload;
     // for other sources (comic manifests, caption txt, ...) prefer the prompt.
+    // The prompt part follows the source / compiled toggle.
     var infotext = item.infotext || '';
-    var prompt = item.prompt || '';
-    if (infotext && /(^|\n)Steps:\s*\d+/.test(infotext)) return infotext;
+    var prompt = activePrompt(item);
+    if (infotext && /(^|\n)Steps:\s*\d+/.test(infotext)) return variantInfotext(item);
     if (prompt) return prompt;
     return infotext;
   }
@@ -1285,6 +1334,7 @@
       if (size >= 12 && size <= 500) state.pageSize = size;
       if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
       if (prefs.detailMediaLeft === true) state.detailMediaLeft = true;
+      if (prefs.promptVariant === 'compiled') state.promptVariant = 'compiled';
     } catch (err) { /* ignore bad prefs */ }
   }
 
@@ -1294,7 +1344,8 @@
         pageMode: state.pageMode,
         pageSize: state.pageSize,
         thumbSize: state.thumbSize,
-        detailMediaLeft: !!state.detailMediaLeft
+        detailMediaLeft: !!state.detailMediaLeft,
+        promptVariant: state.promptVariant === 'compiled' ? 'compiled' : 'source'
       }));
     } catch (err) { /* ignore */ }
   }
@@ -2002,6 +2053,30 @@
     }
   }
 
+  function promptToggleHtml(item) {
+    var compiled = hasCompiledPrompt(item);
+    var tab = function (value, label, title) {
+      var on = state.promptVariant === value ? ' is-on' : '';
+      return '<button class="gv2-prompt-tab' + on + '" data-prompt-variant="' + value + '" ' +
+        'title="' + esc(title) + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + label + '</button>';
+    };
+    return '<span class="gv2-prompt-toggle" role="group" aria-label="Prompt variant">' +
+      tab('source', 'Source', 'The prompt as typed, with comments and @PICK groups intact') +
+      tab('compiled', 'Compiled',
+        compiled
+          ? 'The prompt that was actually sent to the model (comments stripped, @PICK groups drawn)'
+          : 'No compiled prompt recorded for this image - it was generated before this was stored') +
+      '</span>';
+  }
+
+  function promptVariantHint(item) {
+    if (state.promptVariant !== 'compiled') return '';
+    if (!hasCompiledPrompt(item)) {
+      return '<div class="gv2-row-hint">No compiled prompt recorded for this image - showing the source prompt.</div>';
+    }
+    return '<div class="gv2-row-hint">Compiled prompt: comments stripped, @PICK groups resolved.</div>';
+  }
+
   function renderDetail(item) {
     var box = el('gv2-detail');
     if (!box) return;
@@ -2064,7 +2139,8 @@
             '<span><kbd>A</kbd> archive</span>' +
             '<span><kbd>Esc</kbd> close</span>' +
           '</div>' +
-          '<div class="gv2-detail-section"><div class="gv2-detail-label">Send to</div>' +
+          '<div class="gv2-detail-section"><div class="gv2-detail-label"><span>Send to</span>' +
+            '<span class="gv2-row-hint">prompt: ' + (state.promptVariant === 'compiled' && hasCompiledPrompt(item) ? 'compiled' : 'source') + '</span></div>' +
             '<div class="gv2-detail-send">' +
               SEND_ACTIONS.map(function (def) {
                 return '<button class="gv2-btn gv2-btn-quiet" data-send-act="' + def[0] + '" title="' + esc(def[2]) + '">' + def[1] + '</button>';
@@ -2079,11 +2155,13 @@
             '<div class="gv2-detail-tagadd"><input id="gv2-detail-taginput" placeholder="add tag\u2026">' +
             '<button class="gv2-btn" id="gv2-detail-tagadd">+</button></div>' +
           '</div>' +
-          '<div class="gv2-detail-section"><div class="gv2-detail-label">Prompt</div>' +
-            '<div class="gv2-detail-prompt">' + esc(item.prompt || '') + '</div>' +
+          '<div class="gv2-detail-section"><div class="gv2-detail-label"><span>Prompt</span>' +
+            promptToggleHtml(item) + '</div>' +
+            '<div class="gv2-detail-prompt">' + esc(activePrompt(item)) + '</div>' +
+            promptVariantHint(item) +
             '<button class="gv2-btn gv2-btn-quiet" id="gv2-copy-prompt">Copy prompt</button></div>' +
           '<div class="gv2-detail-section"><div class="gv2-detail-label">Negative</div>' +
-            '<div class="gv2-detail-prompt">' + esc(item.negative_prompt || '') + '</div></div>' +
+            '<div class="gv2-detail-prompt">' + esc(activeNegativePrompt(item)) + '</div></div>' +
           '<div class="gv2-detail-section"><div class="gv2-detail-label">Parameters</div>' +
             rows.filter(function (r) { return r[1] !== '' && r[1] !== null && r[1] !== undefined; })
               .map(function (r) { return '<div class="gv2-detail-row"><span>' + esc(r[0]) + '</span><b>' + esc(r[1]) + '</b></div>'; }).join('') +
@@ -2170,10 +2248,26 @@
     var copyBtn = el('gv2-copy-prompt');
     if (copyBtn) {
       copyBtn.addEventListener('click', function () {
-        if (navigator.clipboard) navigator.clipboard.writeText(item.prompt || '');
-        toast('Prompt copied');
+        if (navigator.clipboard) navigator.clipboard.writeText(activePrompt(item));
+        toast(state.promptVariant === 'compiled' && hasCompiledPrompt(item) ? 'Compiled prompt copied' : 'Prompt copied');
       });
     }
+    box.querySelectorAll('[data-prompt-variant]').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var next = btn.getAttribute('data-prompt-variant');
+        if (next !== 'source' && next !== 'compiled') return;
+        if (state.promptVariant === next) return;
+        state.promptVariant = next;
+        savePrefs();
+        // re-render in place, keeping the drawer where the user was reading
+        var panel = box.querySelector('.gv2-detail-panel');
+        var scroll = panel ? panel.scrollTop : 0;
+        renderDetail(item);
+        var nextPanel = box.querySelector('.gv2-detail-panel');
+        if (nextPanel) nextPanel.scrollTop = scroll;
+      });
+    });
     var albumSetBtn = el('gv2-detail-album-set');
     if (albumSetBtn) {
       albumSetBtn.addEventListener('click', function () {

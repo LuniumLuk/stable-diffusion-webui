@@ -142,7 +142,14 @@ def _meta_fields(fields: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def on_index_image(path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
-                   cfg_scale, width, height, model_name, model_hash, infotext) -> None:
+                   cfg_scale, width, height, model_name, model_hash, infotext,
+                   compiled_prompt=None, compiled_negative_prompt=None) -> None:
+    """Mirror a saved image into gallery.db.
+
+    `compiled_prompt` is what the model was conditioned on (comments stripped,
+    @PICK drawn). None means "unknown" - the column is left as it was, so a
+    re-index of an old file cannot wipe a recorded compiled prompt.
+    """
     if not v2_enabled() or not path:
         return
     try:
@@ -159,6 +166,10 @@ def on_index_image(path, file_mtime, prompt, negative_prompt, seed, steps, sampl
                 "model_name": model_name, "model_hash": model_hash,
             }),
         )
+        if compiled_prompt is not None:
+            fields["compiled_prompt"] = compiled_prompt or ""
+        if compiled_negative_prompt is not None:
+            fields["compiled_negative_prompt"] = compiled_negative_prompt or ""
         if file_mtime:
             fields["mtime"] = float(file_mtime)
         if os.path.isfile(path):

@@ -6763,11 +6763,49 @@ body.resizing .resize-handle {
 }
 
 .gv2-detail-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--gv2-muted);
     margin-bottom: 4px;
+}
+
+/* source / compiled prompt switch in the info panel (choice is remembered) */
+.gv2-prompt-toggle {
+    display: inline-flex;
+    gap: 2px;
+    padding: 1px;
+    border: 1px solid var(--gv2-line);
+    border-radius: 7px;
+    background: var(--gv2-panel);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.gv2-prompt-tab {
+    min-height: 20px;
+    padding: 1px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--gv2-muted);
+    font-size: 10.5px;
+    letter-spacing: 0;
+    cursor: pointer;
+}
+
+.gv2-prompt-tab:hover {
+    color: var(--gv2-text);
+}
+
+.gv2-prompt-tab.is-on {
+    background: var(--gv2-accent, #59a1f0);
+    color: #0b0f19;
+    font-weight: 600;
 }
 
 .gv2-detail-prompt {

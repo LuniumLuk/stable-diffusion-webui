@@ -493,6 +493,26 @@ class StableDiffusionProcessing:
         if hr_negative_prompts:
             self.all_hr_negative_prompts = expand(hr_negative_prompts, 'neg')
 
+    def compiled_prompts_for_image(self, batch_index: int):
+        """(prompt, negative prompt) actually sent to the model for one image.
+
+        `all_prompts` / `all_negative_prompts` hold the compiled prompts (styles
+        applied, comments stripped, @PICK groups resolved); the per-batch
+        `prompts` list keeps the source. Returns (None, None) when the lists do
+        not line up, so the gallery simply records nothing.
+        """
+        prompts = self.all_prompts if isinstance(self.all_prompts, (list, tuple)) else None
+        if not prompts:
+            return None, None
+
+        index = getattr(self, 'iteration', 0) * self.batch_size + int(batch_index)
+        if not 0 <= index < len(prompts):
+            return None, None
+
+        negatives = self.all_negative_prompts if isinstance(self.all_negative_prompts, (list, tuple)) else None
+        negative = negatives[index] if negatives and index < len(negatives) else None
+        return prompts[index], negative
+
     def cached_params(self, required_prompts, steps, extra_network_data, hires_steps=None, use_old_scheduling=False):
         """Returns parameters that invalidate the cond cache if changed"""
 
@@ -1203,13 +1223,16 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             for i, x_sample in enumerate(x_samples_ddim):
                 p.batch_index = i
+                # what the model was conditioned on for this image (source prompt lives
+                # in the infotext; this one is stored by the gallery alongside it)
+                compiled_prompt, compiled_negative_prompt = p.compiled_prompts_for_image(i)
 
                 x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
                 x_sample = x_sample.astype(np.uint8)
 
                 if p.restore_faces:
                     if save_samples and opts.save_images_before_face_restoration:
-                        images.save_image(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration")
+                        images.save_image(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration", compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
 
                     devices.torch_gc()
 
@@ -1240,7 +1263,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 if p.color_corrections is not None and i < len(p.color_corrections):
                     if save_samples and opts.save_images_before_color_correction:
                         image_without_cc, _ = apply_overlay(image, p.paste_to, overlay_image)
-                        images.save_image(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction")
+                        images.save_image(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction", compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
                     image = apply_color_correction(p.color_corrections[i], image)
 
                 # If the intention is to show the output from the model
@@ -1255,7 +1278,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     image = pp.image
 
                 if save_samples:
-                    fullfn, _ = images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                    fullfn, _ = images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
                     _print_save_result(fullfn, time.perf_counter() - getattr(p, '_iter_start_time', p._start_time), image)
 
                 text = infotext(i)
@@ -1268,14 +1291,14 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     if opts.return_mask or opts.save_mask:
                         image_mask = mask_for_overlay.convert('RGB')
                         if save_samples and opts.save_mask:
-                            images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
+                            images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask", compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
                         if opts.return_mask:
                             output_images.append(image_mask)
 
                     if opts.return_mask_composite or opts.save_mask_composite:
                         image_mask_composite = Image.composite(original_denoised_image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
                         if save_samples and opts.save_mask_composite:
-                            images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
+                            images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite", compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
                         if opts.return_mask_composite:
                             output_images.append(image_mask_composite)
 
@@ -1701,7 +1724,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 image = sd_samplers.sample_to_image(image, index, approximation=0)
 
             info = create_infotext(self, self.all_prompts, self.all_seeds, self.all_subseeds, [], iteration=self.iteration, position_in_batch=index)
-            images.save_image(image, self.outpath_samples, "", seeds[index], prompts[index], opts.samples_format, info=info, p=self, suffix="-before-highres-fix")
+            compiled_prompt, compiled_negative_prompt = self.compiled_prompts_for_image(index)
+            images.save_image(image, self.outpath_samples, "", seeds[index], prompts[index], opts.samples_format, info=info, p=self, suffix="-before-highres-fix", compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
 
         img2img_sampler_name = self.hr_sampler_name or self.sampler_name
         self.sampler = sd_samplers.create_sampler(img2img_sampler_name, self.sd_model)

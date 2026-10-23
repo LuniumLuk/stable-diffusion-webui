@@ -114,6 +114,12 @@ def save_files(js_data, images, do_make_zip, index):
             if at_start:
                 writer.writerow(fields)
 
+        # compiled prompts (comments stripped, @PICK drawn) kept in the Processed object;
+        # indexed next to the source prompt by the gallery
+        compiled_prompts = getattr(p, 'all_prompts', None) or []
+        compiled_negative_prompts = getattr(p, 'all_negative_prompts', None) or []
+        first_image_index = int(getattr(p, 'index_of_first_image', 0) or 0)
+
         for image_index, filedata in enumerate(images, start_index):
             image = image_from_url_text(filedata)
 
@@ -121,9 +127,13 @@ def save_files(js_data, images, do_make_zip, index):
 
             p.batch_index = image_index-1
 
+            compiled_index = image_index - first_image_index
+            compiled_prompt = compiled_prompts[compiled_index] if 0 <= compiled_index < len(compiled_prompts) else None
+            compiled_negative_prompt = compiled_negative_prompts[compiled_index] if 0 <= compiled_index < len(compiled_negative_prompts) else None
+
             parameters = parameters_copypaste.parse_generation_parameters(data["infotexts"][image_index], [])
             parsed_infotexts.append(parameters)
-            fullfn, txt_fullfn = modules.images.save_image(image, path, "", seed=parameters['Seed'], prompt=parameters['Prompt'], extension=extension, info=p.infotexts[image_index], grid=is_grid, p=p, save_to_dirs=save_to_dirs)
+            fullfn, txt_fullfn = modules.images.save_image(image, path, "", seed=parameters['Seed'], prompt=parameters['Prompt'], extension=extension, info=p.infotexts[image_index], grid=is_grid, p=p, save_to_dirs=save_to_dirs, compiled_prompt=compiled_prompt, compiled_negative_prompt=compiled_negative_prompt)
 
             filename = os.path.relpath(fullfn, path)
             filenames.append(filename)
