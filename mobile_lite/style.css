@@ -1128,6 +1128,47 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .cm-placeholder { color: var(--muted); }
 .pedit-cm .cm-content ::selection { background: rgba(249, 115, 22, 0.28); }
 
+/* line-number gutter (shared prompt core): the CM default theme paints it #f5f5f5,
+   which showed up as a white strip in dark mode - keep it on the app surface */
+.pedit-cm .cm-gutters {
+  background: transparent;
+  border: none;
+  color: inherit;
+}
+.pedit-cm .cm-gutterElement { padding: 0; }
+.pedit-cm .pedit-cm-gutter-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  min-width: 36px;
+  height: 100%;
+  padding: 0 2px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pedit-cm .pedit-cm-gutter-num {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.pedit-cm .pedit-cm-gutter-btn {
+  padding: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pedit-cm .pedit-cm-gutter-block.is-commented,
+.pedit-cm .pedit-cm-gutter-line.is-commented {
+  color: var(--muted);
+}
+
 /* Ctrl+D: drawSelection paints one background + one caret per selection range */
 .pedit-cm .cm-editor .cm-selectionBackground { background: rgba(249, 115, 22, 0.28); }
 .pedit-cm .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: rgba(249, 115, 22, 0.34); }
