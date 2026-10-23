@@ -1504,6 +1504,12 @@ table.popup-table .link{
     flex-direction: column;
 }
 
+/* Gallery v2: leave the detail drawer visible while previewing fullscreen. */
+#lightboxModal.gv2-lightbox-split {
+    right: var(--gv2-detail-offset, 680px);
+    width: auto;
+}
+
 .modalControls {
     display: flex;
     position: absolute;
@@ -6274,6 +6280,11 @@ body.resizing .resize-handle {
     border-color: rgba(192, 132, 252, 0.5);
 }
 
+.gv2-batch .gv2-btn[data-batch="copy-censored"] {
+    color: #5eead4;
+    border-color: rgba(45, 212, 191, 0.5);
+}
+
 .gv2-batch .gv2-btn[data-batch="trash"] {
     color: #fca5a5;
     border-color: rgba(239, 68, 68, 0.6);
@@ -6291,6 +6302,17 @@ body.resizing .resize-handle {
 
 .gv2-detail-hidden {
     display: none;
+}
+
+.gv2-detail.gv2-detail-split {
+    z-index: 1002;
+    background: transparent;
+    pointer-events: none;
+}
+
+.gv2-detail.gv2-detail-split .gv2-detail-panel {
+    pointer-events: auto;
+    box-shadow: -18px 0 40px rgba(0, 0, 0, 0.6);
 }
 
 .gv2-detail-panel {

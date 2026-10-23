@@ -7,6 +7,8 @@ gallery.db (and the blob store); mutations route through the legacy facade
 
 import json
 import os
+import shutil
+import zipfile
 
 
 def register_routes(app):
@@ -223,6 +225,14 @@ def register_routes(app):
         except Exception as exc:
             raise HTTPException(status_code=500, detail="failed to open the file manager: %s" % exc)
         return {"ok": True, "path": path}
+
+    @app.post("/gallery/api/copy-censored")
+    def gallery_copy_censored(payload: dict = Body(default={})):
+        """Copy selected original images into outputs/censored for publishing."""
+        keys = payload.get("keys") or ([payload.get("key")] if payload.get("key") else [])
+        if isinstance(keys, str):
+            keys = [keys]
+        return _copy_to_censored(list(keys))
 
     @app.get("/gallery/api/composer")
     def gallery_composer(id: str = ""):
@@ -655,3 +665,155 @@ def _rating_action(action: str, item_id: int, item: dict, item_key: str, params:
         )
         return {}
     return {"error": f"unknown rating action: {action}"}
+
+
+def censored_dir() -> str:
+    """Publish staging folder (<repo>/outputs/censored; GALLERY_CENSORED_DIR overrides)."""
+    override = os.environ.get("GALLERY_CENSORED_DIR")
+    if override:
+        return os.path.abspath(override)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "outputs", "censored")
+
+
+def _copy_to_censored(keys: list) -> dict:
+    """Copy each selected item's original image into the publish staging folder."""
+    from modules import gallery_db
+
+    target = censored_dir()
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        return {
+            "ok": False, "copied": 0, "skipped": 0, "target": target,
+            "errors": [{"key": str(key), "error": f"cannot create {target}: {exc}"} for key in keys],
+        }
+
+    copied = 0
+    skipped = 0
+    errors = []
+    for key in keys:
+        try:
+            item_id = gallery_db.resolve_item_id(key)
+            if not item_id:
+                errors.append({"key": str(key), "error": "not_found"})
+                continue
+            item = gallery_db.get_item(item_id)
+            if not item:
+                errors.append({"key": str(key), "error": "not_found"})
+                continue
+            outcome = _copy_item_to_dir(item, target)
+            if outcome.get("error"):
+                errors.append({"key": str(key), "error": outcome["error"]})
+            elif outcome.get("skipped"):
+                skipped += 1
+            else:
+                copied += 1
+        except Exception as exc:
+            errors.append({"key": str(key), "error": str(exc)})
+    return {"ok": not errors, "copied": copied, "skipped": skipped, "errors": errors, "target": target}
+
+
+def _copy_item_to_dir(item: dict, target_dir: str) -> dict:
+    """Copy one item's original image into target_dir (bundled albums included)."""
+    from modules import gallery_sources
+
+    source = str(item.get("path") or "")
+    if not source or not os.path.isfile(source):
+        source = str(item.get("alias_path") or "")
+    if source and os.path.isfile(source):
+        if not source.lower().endswith(gallery_sources.IMAGE_EXTS):
+            return {"error": "not an image file"}
+        dest = _unique_copy_target(target_dir, os.path.basename(source), source)
+        if not dest:
+            return {"skipped": True}
+        shutil.copy2(source, dest)
+        return {"path": dest}
+
+    bundled = _bundled_original(item)
+    if not bundled:
+        return {"error": "original file missing"}
+    data, filename, mtime = bundled
+    if not filename.lower().endswith(gallery_sources.IMAGE_EXTS):
+        return {"error": "not an image file"}
+    dest = _unique_copy_target(target_dir, filename, data)
+    if not dest:
+        return {"skipped": True}
+    tmp = dest + ".part"
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+        if mtime:
+            os.utime(tmp, (mtime, mtime))
+        os.replace(tmp, dest)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return {"path": dest}
+
+
+def _unique_copy_target(target_dir: str, filename: str, source) -> str:
+    """First free path in target_dir, or "" when an identical copy is already there.
+
+    Content is compared only against same-name, same-size candidates, so
+    re-copying is idempotent without hashing every image up front. The numeric
+    suffix keeps flattened same-name files from different sources apart.
+    """
+    size = os.path.getsize(source) if isinstance(source, str) else len(source)
+    base, ext = os.path.splitext(os.path.basename(filename) or "image")
+    index = 0
+    while index <= 10000:
+        name = base + ("" if index == 0 else "_%d" % index) + ext
+        dest = os.path.join(target_dir, name)
+        if not os.path.exists(dest):
+            return dest
+        try:
+            if os.path.getsize(dest) == size and _same_content(dest, source):
+                return ""
+        except OSError:
+            pass
+        index += 1
+    return ""
+
+
+def _same_content(dest: str, source) -> bool:
+    if isinstance(source, bytes):
+        with open(dest, "rb") as handle:
+            return handle.read() == source
+    with open(source, "rb") as left, open(dest, "rb") as right:
+        while True:
+            chunk = left.read(1024 * 1024)
+            if chunk != right.read(1024 * 1024):
+                return False
+            if not chunk:
+                return True
+
+
+def _bundled_original(item: dict) -> tuple[bytes, str, float] | None:
+    """Bytes, original filename and mtime for an item stored inside an album zip."""
+    from modules import gallery_albums, gallery_db
+
+    album_id = item.get("album_id")
+    if not album_id:
+        return None
+    album = gallery_db.get_album(int(album_id))
+    zip_path = str((album or {}).get("bundle_path") or "")
+    if not zip_path or not os.path.isfile(zip_path):
+        return None
+    with zipfile.ZipFile(zip_path) as archive:
+        try:
+            manifest = json.loads(archive.read(gallery_albums.MANIFEST_NAME).decode("utf-8"))
+        except (KeyError, ValueError):
+            return None
+        for entry in manifest.get("entries") or []:
+            if int(entry.get("item") or 0) != int(item.get("id") or 0):
+                continue
+            arc = str(entry.get("arc") or "")
+            if not arc:
+                return None
+            filename = os.path.basename(str(entry.get("path") or arc).replace("\\", "/"))
+            return archive.read(arc), filename, float(entry.get("mtime") or 0)
+    return None

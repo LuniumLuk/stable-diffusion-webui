@@ -15,7 +15,7 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
 | Migration | `modules/gallery_migrate.py` | M0 snapshot → M1 schema → M2 rows (resumable cursors) → M3 files/blobs (cache webp import, sidecar absorb, composer absorb, orphan quarantine, sha256-verified hardlinks) → G1/G2 gates; `python -m modules.gallery_migrate all` |
 | Dual-write facade | `modules/gallery_bridge.py` + hooks in `modules/endorsement_db.py` | every legacy mutation mirrors into gallery.db (ratings, states, captions, index, trash); `read_sidecar_metadata` falls back to the DB; endorse now hardlinks (`GALLERY_ENDORSE_MODE=link|copy|flag`) |
 | Single-item trash | `endorsement_db.trash_item_by_key` / `remove_trash_row` | used by the v2 action bar; deletes original + hardlink alias + cached media, keeps metadata |
-| HTTP API | `modules/gallery_api.py` | `/gallery/api/query · action · blob · facets · item · similar · composer · maintenance` (registered in `webui.py`) |
+| HTTP API | `modules/gallery_api.py` | `/gallery/api/query · action · copy-censored · blob · facets · item · similar · composer · maintenance` (registered in `webui.py`) |
 | UI v2 | `scripts/gallery_v2_tab.py` + `javascript/galleryV2.js` + `.gv2-*` CSS | Gradio tab "Gallery v2": multi-chip filters, FTS search box, sort picker, live state counts, incremental cards, hover actions, selection + batch bar, detail drawer (preview, meta, workflow tags, history), Load more + infinite scroll, toasts |
 | Rollback | env `GALLERY_V2=0` (or Settings → Gallery v2) | old DB + old caches untouched by v2 reads |
 
@@ -113,8 +113,13 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   (infinite scroll may have loaded more than one page), and the batch bar stays visible with a live
   "N selected" count (dimmed at 0).
 - **Batch operations**: Endorse, Dislike, Archive, Unarchive, Stage, Unstage, Album… (add/remove),
-  Trash, Clear. The selection is KEPT after each operation so ops can be chained; it is pruned only
-  when cards are removed (trash/purge).
+  Copy to Censored, Trash, Clear. The selection is KEPT after each operation so ops can be chained; it
+  is pruned only when cards are removed (trash/purge).
+- **Copy to Censored** (`POST /gallery/api/copy-censored`): copies the selected originals into
+  `<repo>/outputs/censored` for publishing (flat names; same-name files get `_1`, `_2`, … suffixes).
+  Re-copying an unchanged image is reported as "already there" instead of duplicating it, bundled
+  album originals are extracted from the album zip, and missing originals are reported per key.
+  `GALLERY_CENSORED_DIR` overrides the target folder.
 - **Stage semantics**: rated items (endorse/dislike) cannot be staged — the API now reports that as a
   per-key error (previously a silent no-op reported as success).
 - **Engine-key alignment (bug fix)**: the desktop gallery + SD Lite key qwen/krea2 outputs as
@@ -126,6 +131,16 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   guard) — totals 62+26+25+108 = 221. Live probe: select mode on/off + drawer stays closed,
   "2 selected" and select-shown, staged badges appear on the selected cards then unstage clears them,
   shift-range (6), Escape exit — plus the full albums/views/groups/trash suite.
+
+## Detail fullscreen split viewer
+
+- Clicking the detail drawer preview opens the app-wide lightbox as before. On viewports
+  with at least 520 px of room beside the drawer, the lightbox is constrained to that left
+  stage (`gv2-lightbox-split`) and the drawer is raised above it (`gv2-detail-split`), so
+  the image can be inspected fullscreen while metadata and actions stay visible and usable.
+- Narrow viewports keep the classic full-screen lightbox. Resizing while the viewer is open
+  switches modes live; Escape/close returns to the drawer, a second Escape closes the
+  drawer, and prev/next navigation plus wheel zoom and drag panning work in both modes.
 
 ## Deferred by design (plan phases)
 

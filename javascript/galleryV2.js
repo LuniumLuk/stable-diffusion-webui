@@ -586,6 +586,7 @@
         '<button class="gv2-btn" data-batch="stage">Stage</button>' +
         '<button class="gv2-btn" data-batch="unstage">Unstage</button>' +
         '<button class="gv2-btn" data-batch="album">Album\u2026</button>' +
+        '<button class="gv2-btn" data-batch="copy-censored" title="Copy the selected original images to outputs/censored for publishing">\u{1F4E4} Copy to Censored</button>' +
         '<button class="gv2-btn gv2-btn-danger" data-batch="trash">Trash</button>' +
         '<button class="gv2-btn gv2-btn-quiet" data-batch="clear">Clear</button>' +
       '</div>' +
@@ -682,6 +683,7 @@
       if (!action) return;
       if (action === 'clear') { setSelection([]); return; }
       if (action === 'selectpage') { selectPage(); return; }
+      if (action === 'copy-censored') { copySelectedToCensored(); return; }
       if (action === 'album') {
         if (!state.selected.size) { toast('Select items first', true); return; }
         openAlbumForm();
@@ -1620,6 +1622,29 @@
     return act;
   }
 
+  function copySelectedToCensored() {
+    var keys = Array.from(state.selected);
+    if (!keys.length) { toast('Select items first', true); return; }
+    api('/gallery/api/copy-censored', { keys: keys })
+      .then(function (data) {
+        var copied = (data && data.copied) || 0;
+        var skipped = (data && data.skipped) || 0;
+        var errors = (data && data.errors) || [];
+        if (errors.length) {
+          toast('Copied ' + copied + ', failed ' + errors.length + ': ' + errors[0].error, true);
+          return;
+        }
+        var message = 'Copied ' + copied + ' image(s) to ' + ((data && data.target) || 'outputs/censored');
+        if (skipped) message += ' \u00b7 ' + skipped + ' already there';
+        toast(message);
+      })
+      .catch(function (err) {
+        var reason = (err && err.message) || 'unknown error';
+        if (reason === 'Not Found') reason = 'copy endpoint missing \u2014 restart webui';
+        toast('Copy failed: ' + reason, true);
+      });
+  }
+
   function runAction(action, keys, params) {
     if (!keys.length) return Promise.resolve();
     return api('/gallery/api/action', { action: action, keys: keys, params: params || {} })
@@ -1777,15 +1802,46 @@
     probe.src = url;
   }
 
+  // Keep the fullscreen viewer on the left of the detail panel while the
+  // drawer is open, so its metadata/actions stay reachable. Narrow viewports
+  // fall back to the classic full-screen lightbox.
+  var DETAIL_SPLIT_MIN_STAGE = 520;
+
+  function detailPanelWidth() {
+    var box = el('gv2-detail');
+    var panel = box ? box.querySelector('.gv2-detail-panel') : null;
+    return panel ? panel.getBoundingClientRect().width : Math.min(680, window.innerWidth * 0.92);
+  }
+
+  function detailSplitEnabled() {
+    var viewport = document.documentElement.clientWidth || window.innerWidth;
+    return viewport - detailPanelWidth() >= DETAIL_SPLIT_MIN_STAGE;
+  }
+
+  function applyDetailSplit(split) {
+    var box = el('gv2-detail');
+    if (!box) return;
+    box.classList.toggle('gv2-detail-split', !!split);
+    document.documentElement.style.setProperty(
+      '--gv2-detail-offset', (split ? detailPanelWidth() : 0) + 'px'
+    );
+  }
+
   function openDetailViewer(item) {
     if (typeof window.openLightbox !== 'function') { toast('Image viewer unavailable', true); return; }
     var box = el('gv2-detail');
     var detailImg = box ? box.querySelector('.gv2-detail-img') : null;
     if (!detailImg) return;
     var previewSrc = detailImg.src;
-    window.gv2LightboxNav = { nav: function (offset) { navDetailViewer(offset); } };
+    var split = detailSplitEnabled();
+    applyDetailSplit(split);
+    window.gv2LightboxNav = {
+      nav: function (offset) { navDetailViewer(offset); },
+      split: split,
+      cleanup: function () { applyDetailSplit(false); }
+    };
     detailViewerSrc(item, previewSrc, function (src) {
-      if (window.gv2LightboxNav) window.openLightbox(src);
+      if (window.gv2LightboxNav) window.openLightbox(src, { split: window.gv2LightboxNav.split });
     });
   }
 
@@ -1805,7 +1861,9 @@
       if (!window.gv2LightboxNav) return; // viewer was closed while loading
       renderDetail(item);
       detailViewerSrc(item, blobUrl(row, 'preview'), function (src) {
-        if (window.gv2LightboxNav) window.openLightbox(src);
+        if (window.gv2LightboxNav) {
+          window.openLightbox(src, { split: window.gv2LightboxNav.split });
+        }
       });
     }).catch(function () {});
   }
@@ -2103,8 +2161,19 @@
   }
 
   function closeDetail() {
+    if (window.gv2LightboxNav) {
+      if (typeof window.closeModal === 'function') {
+        window.closeModal();
+      } else {
+        window.gv2LightboxNav = null;
+        applyDetailSplit(false);
+      }
+    }
     var box = el('gv2-detail');
-    if (box) box.classList.add('gv2-detail-hidden');
+    if (box) {
+      box.classList.add('gv2-detail-hidden');
+      box.classList.remove('gv2-detail-split');
+    }
     state.detailKey = null;
     markDetailCard(false);
   }
@@ -2258,6 +2327,18 @@
         if (ev.target === detailBox) closeDetail();
       });
     }
+    // The split viewer is width-dependent: switching between the split stage
+    // and the classic fullscreen lightbox must also work after a resize.
+    window.addEventListener('resize', function () {
+      var nav = window.gv2LightboxNav;
+      if (!nav) return;
+      var split = detailSplitEnabled();
+      if (split === nav.split) return;
+      nav.split = split;
+      applyDetailSplit(split);
+      var lb = el('lightboxModal');
+      if (lb) lb.classList.toggle('gv2-lightbox-split', split);
+    });
   }
 
   function isTypingTarget(node) {

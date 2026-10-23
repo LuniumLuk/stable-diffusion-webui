@@ -96,18 +96,33 @@ function _prepareModalCompare() {
 }
 
 function closeModal() {
-    gradioApp().getElementById("lightboxModal").style.display = "none";
+    const lightbox = gradioApp().getElementById("lightboxModal");
+    if (lightbox) {
+        lightbox.style.display = "none";
+        lightbox.classList.remove('gv2-lightbox-split');
+    }
     _modalDragging = false;
+    const nav = window.gv2LightboxNav;
     window.gv2LightboxNav = null; // release external (Gallery v2) key routing
+    if (nav && typeof nav.cleanup === 'function') {
+        try {
+            nav.cleanup();
+        } catch (error) {
+            console.error('lightbox cleanup failed', error);
+        }
+    }
 }
 
 // Open the fullscreen lightbox for an arbitrary image src (used by output
 // galleries via showModal(s) and by other views, e.g. Gallery v2's drawer).
-function openLightbox(src) {
+// options.split keeps a right-hand gap for Gallery v2's detail panel so the
+// drawer stays readable while the image is being previewed.
+function openLightbox(src, options) {
     if (!src) return;
     const modalImage = gradioApp().getElementById("modalImage");
     const lb = gradioApp().getElementById("lightboxModal");
     if (!modalImage || !lb) return;
+    lb.classList.toggle('gv2-lightbox-split', !!(options && options.split));
     const modalToggleLivePreviewBtn = gradioApp().getElementById("modal_toggle_live_preview");
     if (modalToggleLivePreviewBtn) {
         // Live preview only applies to the output galleries - hide it for
