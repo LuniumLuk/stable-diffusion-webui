@@ -443,7 +443,9 @@
                 children.push(`<span class="pedit-chip-w" title="weight">×${escapeHtml(formatWeight(token.weight))}</span>`);
             }
             if (token.disabled) children.push('<span class="pedit-chip-off" title="disabled">⛔</span>');
-            return `<span class="${cls.join(' ')}" data-line="${line}" data-seg="${seg}" title="${escapeHtml(syntaxHint(syntax) || token.text)}">`
+            // no syntax hint in the title: the explanation opens on right-click so a
+            // hover never covers the prompt (the chip text itself still shows when truncated)
+            return `<span class="${cls.join(' ')}" data-line="${line}" data-seg="${seg}" title="${escapeHtml(token.text)}">`
                 + children.join('')
                 + '</span>';
         }
@@ -531,6 +533,7 @@
         }
 
         function render() {
+            closeSyntaxPop();
             const lines = state.text.split('\n');
             const body = lines.map((l, i) => lineHtml(l, i, lines) + inputHtml(i)).join('');
             const disabledCount = countDisabled();
@@ -575,6 +578,67 @@
             });
             return n;
         }
+
+        // ── '@' directive hint (right-click only) ───────────────────────────
+        // Hovering must not cover the prompt, so the explanation of a directive (what
+        // it does, the N-of-M preview, or the grammar error) opens on right-click.
+
+        let syntaxPop = null;
+
+        function closeSyntaxPop() {
+            if (!syntaxPop) return;
+            syntaxPop.remove();
+            syntaxPop = null;
+            document.removeEventListener('pointerdown', onSyntaxPopOutside, true);
+            document.removeEventListener('keydown', onSyntaxPopKey, true);
+            window.removeEventListener('scroll', closeSyntaxPop, true);
+        }
+
+        function onSyntaxPopOutside(event) {
+            if (syntaxPop && syntaxPop.contains(event.target)) return;
+            closeSyntaxPop();
+        }
+
+        function onSyntaxPopKey(event) {
+            if (event.key === 'Escape') closeSyntaxPop();
+        }
+
+        function openSyntaxPop(token, x, y) {
+            closeSyntaxPop();
+            const syntax = token.syntax;
+            syntaxPop = document.createElement('div');
+            syntaxPop.className = 'pedit-syntax-pop' + (syntax.ok ? '' : ' is-error');
+            syntaxPop.innerHTML = `<div class="pedit-syntax-pop-raw">${escapeHtml(token.text)}</div>`
+                + `<div class="pedit-syntax-pop-head">${escapeHtml(syntax.headline)}</div>`
+                + syntax.details.map((line) => `<div class="pedit-syntax-pop-line">${escapeHtml(line)}</div>`).join('');
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'pedit-syntax-pop-close';
+            close.textContent = '✕';
+            close.title = 'Close';
+            close.addEventListener('click', closeSyntaxPop);
+            syntaxPop.appendChild(close);
+            document.body.appendChild(syntaxPop);
+            const rect = syntaxPop.getBoundingClientRect();
+            const left = Math.min(Math.max(8, x - 12), Math.max(8, window.innerWidth - rect.width - 8));
+            const top = Math.min(Math.max(8, y + 12), Math.max(8, window.innerHeight - rect.height - 8));
+            syntaxPop.style.left = `${Math.round(left)}px`;
+            syntaxPop.style.top = `${Math.round(top)}px`;
+            document.addEventListener('pointerdown', onSyntaxPopOutside, true);
+            document.addEventListener('keydown', onSyntaxPopKey, true);
+            window.addEventListener('scroll', closeSyntaxPop, true);
+        }
+
+        // right-click (or long-press) on a directive chip opens its hint; every other
+        // right-click keeps the browser menu (paste, spellcheck, …)
+        root.addEventListener('contextmenu', (event) => {
+            const chip = event.target.closest ? event.target.closest('.pedit-chip') : null;
+            if (!chip || !root.contains(chip)) return;
+            const token = tokenAt(Number(chip.dataset.line), Number(chip.dataset.seg));
+            if (!token || !token.syntax) return;
+            event.preventDefault();
+            openSyntaxPop(token, event.clientX, event.clientY);
+        });
 
         // ── editing operations ──────────────────────────────────────────────
 

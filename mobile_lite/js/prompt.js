@@ -352,7 +352,8 @@ function createChipsField(key, placeholder, title) {
       class: classes.join(' '),
       type: 'button',
       dataset: { act: 'chip', line: String(line), seg: String(seg) },
-      title: syntaxHint(syntax, token.text),
+      // no syntax hint in the title: tapping the chip shows the note instead
+      title: token.text,
     }, children);
   }
 

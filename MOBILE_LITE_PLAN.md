@@ -434,10 +434,11 @@ as pure functions (`splitSegments`/`joinSegments`/`classify`/`rebuild`/`formatWe
 
 Prompt directives (`@PICK{…}` / `@PICK(2){…}`) live in `mobile_lite/js/prompt-syntax.js`:
 every keyword starting with `@` is grammar-checked, chips and CodeMirror marks style it
-(`is-syntax` / `is-syntax-error`), broken directives raise a `⚠ N syntax` badge and the hover /
-selected hint explains the directive and previews the draw ("2 of 3 keywords are chosen at
-random for every image"). `prompt-parse.js` classifies a valid directive as `pick` and a broken
-one as `at`; `rebuild()` never wraps either in `(…)` or `#(…)`. The desktop chips editor
+(`is-syntax` / `is-syntax-error`), broken directives raise a `⚠ N syntax` badge. The hint
+(what the directive does, "2 of 3 keywords are chosen at random for every image", or the
+grammar error) opens on demand only — right-click on desktop, tap on Mobile Lite — so it never
+covers the prompt while typing. `prompt-parse.js` classifies a valid directive as `pick` and a
+broken one as `at`; `rebuild()` never wraps either in `(…)` or `#(…)`. The desktop chips editor
 (`javascript/promptEditor.js`) keeps a compact mirror of the analyzer, the same way it mirrors
 the token parser.
 

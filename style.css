@@ -4693,6 +4693,64 @@ body.resizing .resize-handle {
     color: #fca5a5;
 }
 
+/* '@' directive hint: right-click only, so hovering never covers the prompt */
+.pedit-syntax-pop {
+    position: fixed;
+    z-index: 2401;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: min(92vw, 360px);
+    padding: 10px 28px 10px 12px;
+    border: 1px solid var(--input-border-color, #374151);
+    border-radius: 12px;
+    background: var(--background-fill-primary, #1f2937);
+    color: var(--body-text-color, #e5e7eb);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.pedit-syntax-pop-raw {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: rgba(240, 184, 89, 0.95);
+    overflow-wrap: anywhere;
+}
+
+.pedit-syntax-pop-head {
+    font-weight: 600;
+}
+
+.pedit-syntax-pop.is-error .pedit-syntax-pop-head {
+    color: #fca5a5;
+}
+
+.pedit-syntax-pop-line {
+    opacity: 0.8;
+    overflow-wrap: anywhere;
+}
+
+.pedit-syntax-pop-close {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    opacity: 0.7;
+    cursor: pointer;
+}
+
+.pedit-syntax-pop-close:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+}
+
 .pedit-act {
     min-width: 30px;
     min-height: 26px;
@@ -4971,33 +5029,22 @@ body.resizing .resize-handle {
     border-radius: 3px;
 }
 
-.pedit-cm-wrap .pedit-cm-syntax-tip {
-    max-width: 360px;
-    padding: 8px 10px;
-    font-size: 12px;
-    line-height: 1.45;
-}
-
-.pedit-cm-wrap .pedit-cm-syntax-tip-raw {
-    margin-bottom: 3px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 11px;
-    color: rgba(240, 184, 89, 0.95);
-    word-break: break-all;
-}
-
-.pedit-cm-wrap .pedit-cm-syntax-tip-head {
+/* '@' directive hint inside the right-click popup (the popup lives on <body>) */
+.pedit-cm-pop .pedit-cm-syntax-tip-head {
     font-weight: 600;
 }
 
-.pedit-cm-wrap .pedit-cm-syntax-tip-head.is-error,
-.pedit-cm-wrap .pedit-cm-syntax-tip.is-error .pedit-cm-syntax-tip-head {
+.pedit-cm-pop .pedit-cm-syntax-tip-head.is-error {
     color: #fca5a5;
 }
 
-.pedit-cm-wrap .pedit-cm-syntax-tip-line {
+.pedit-cm-pop .pedit-cm-syntax-tip-line {
     margin-top: 3px;
+    font-size: 12px;
+    line-height: 1.4;
     opacity: 0.8;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 /* autocomplete (inline suggestions) */
@@ -5145,6 +5192,9 @@ body.resizing .resize-handle {
     border: 1px solid var(--input-border-color, #374151);
     border-radius: 12px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    /* the popup lives on <body>, outside the theme wrapper: without this it inherits
+       body's black text and the hint / weight rows vanish on the dark surface */
+    color: var(--body-text-color, #e5e7eb);
 }
 
 .pedit-cm-pop-title {

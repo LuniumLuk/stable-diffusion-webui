@@ -127,7 +127,7 @@ export async function createPromptCM({
   const {
     EditorState, StateEffect, StateField,
     EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor,
-    gutter: cmGutter, GutterMarker, drawSelection, hoverTooltip,
+    gutter: cmGutter, GutterMarker, drawSelection,
     autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
     history, historyKeymap, defaultKeymap,
     search: searchExt, searchKeymap, openSearchPanel, closeSearchPanel,
@@ -327,39 +327,6 @@ export async function createPromptCM({
     provide: (field) => EditorView.decorations.from(field),
   });
 
-  /* ------------------------------------------------------------ @ syntax hint */
-
-  /**
-   * Hover hint for an '@' keyword: what the directive does and what it will produce
-   * (for @PICK: "N of M keywords are chosen at random for every image"), or the
-   * grammar error when the keyword is broken.
-   */
-  function syntaxTooltipSource(viewA, pos) {
-    const token = tokenAt(viewA.state.doc.toString(), pos);
-    const syntax = token && token.token ? token.token.syntax : null;
-    if (!syntax) return null;
-    return {
-      pos: token.from,
-      end: token.to,
-      above: true,
-      create() {
-        const tip = el('div', { class: `pedit-cm-syntax-tip${syntax.ok ? '' : ' is-error'}` });
-        tip.append(el('div', { class: 'pedit-cm-syntax-tip-raw', text: syntax.raw }));
-        tip.append(el('div', { class: 'pedit-cm-syntax-tip-head', text: syntax.headline }));
-        for (const line of syntax.details) {
-          tip.append(el('div', { class: 'pedit-cm-syntax-tip-line', text: line }));
-        }
-        return { dom: tip };
-      },
-    };
-  }
-
-  // Conditional like the other bundle features: a browser still running a cached
-  // pre-hover bundle keeps a working editor, just without the syntax hint.
-  const syntaxHoverExt = typeof hoverTooltip === 'function'
-    ? hoverTooltip(syntaxTooltipSource, { hoverTime: 250 })
-    : null;
-
   /* ------------------------------------------------------------ completion */
 
   function completionSource(context) {
@@ -473,6 +440,25 @@ export async function createPromptCM({
       dataset: { act },
     });
     const label = t.text;
+    const syntaxNodes = (syntax) => {
+      const nodes = [el('div', {
+        class: `pedit-cm-syntax-tip-head${syntax.ok ? '' : ' is-error'}`,
+        text: syntax.headline,
+      })];
+      for (const line of syntax.details) {
+        nodes.push(el('div', { class: 'pedit-cm-syntax-tip-line', text: line }));
+      }
+      return nodes;
+    };
+    // @-directive hint (Mobile Lite tap): the explanation only, no edit buttons
+    if (active.hintOnly && t.token.syntax) {
+      popup.replaceChildren(
+        el('div', { class: 'pedit-cm-pop-title', text: label }),
+        ...syntaxNodes(t.token.syntax),
+        el('div', { class: 'pedit-cm-pop-row' }, button('\u2715', 'Close', 'close')),
+      );
+      return;
+    }
     const actionRow = [];
     if (!anySyntax) {
       actionRow.push(button(allDisabled ? '\u2705' : '\u26D4',
@@ -491,12 +477,9 @@ export async function createPromptCM({
     }
     actionRow.push(button('\u2715', 'Close', 'close'));
     const content = [el('div', { class: 'pedit-cm-pop-title', text: multi ? `${tokens.length} keywords selected` : label })];
-    // same hint as the hover: what the directive does / what is wrong with it
+    // right-click hint: what the directive does and what it will produce
     if (!multi && t.token.syntax) {
-      content.push(el('div', {
-        class: `pedit-cm-syntax-tip-head${t.token.syntax.ok ? '' : ' is-error'}`,
-        text: t.token.syntax.headline,
-      }));
+      content.push(...syntaxNodes(t.token.syntax));
     }
     // an '@' directive has no weight of its own, so the weight rows are left out
     if (!anySyntax) {
@@ -537,10 +520,10 @@ export async function createPromptCM({
     popup.style.top = `${Math.round(top)}px`;
   }
 
-  function openTokenPopup(tokens) {
+  function openTokenPopup(tokens, { hintOnly = false } = {}) {
     closePopup();
     lastClosed = null;
-    active = { tokens: tokens.slice(), multi: tokens.length > 1 };
+    active = { tokens: tokens.slice(), multi: tokens.length > 1, hintOnly };
     view.dispatch({ effects: setActiveToken.of(active.tokens.map((t) => ({ from: t.from, to: t.to }))) });
     popup = el('div', { class: 'pedit-cm-pop' });
     renderPopupContent();
@@ -979,7 +962,6 @@ export async function createPromptCM({
         }),
         activeTokenField,
         decorationField,
-        ...(syntaxHoverExt ? [syntaxHoverExt] : []),
         dropCursor(),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged || applying) return;
@@ -998,6 +980,16 @@ export async function createPromptCM({
             event.preventDefault();
             openTokenPopup(targets);
             return true;
+          },
+          // plain mode (Mobile Lite) has no right-click: a tap on an '@' directive
+          // opens its hint, any other tap keeps editing the text natively
+          click(event) {
+            if (gestures || !event.isTrusted) return false;
+            if (!view.state.selection.main.empty) return false;
+            const token = tokenFromPoint(event.clientX, event.clientY);
+            if (!token || !token.token.syntax) return false;
+            openTokenPopup([token], { hintOnly: true });
+            return false; // never swallow the tap: the caret still lands where tapped
           },
         }),
       ],
@@ -1020,9 +1012,11 @@ export async function createPromptCM({
     // (Mobile Lite, gestures: false) leaves caret and selection handling to the browser.
     view.contentDOM.addEventListener('pointerdown', onPointerDown);
     view.dom.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
-    window.addEventListener('resize', onAnyScroll, { passive: true });
   }
+  // keep the quick-action / syntax hint popup glued to its keyword while the page
+  // scrolls (the Mobile Lite hint popup needs this too)
+  window.addEventListener('scroll', onAnyScroll, { capture: true, passive: true });
+  window.addEventListener('resize', onAnyScroll, { passive: true });
 
   // gutter hover: swap the number for the toggle when the pointer is over the LINE —
   // hovering the gutter cell itself is covered by the CSS :hover rule, so the button

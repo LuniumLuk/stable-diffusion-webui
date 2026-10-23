@@ -1045,6 +1045,10 @@ body.mask-editing { overflow: hidden; }
   white-space: pre-line;
 }
 .pedit-mode-text .pedit-syntax-note { display: none; }
+.pedit-syntax-note.is-error {
+  border-left-color: #ef4444;
+  color: #f87171;
+}
 
 /* text mode: a real editing area (40vh floor, grows with the content) + fullscreen escape hatch */
 .pedit-textarea-wrap { position: relative; }
@@ -1217,19 +1221,16 @@ body.text-editing { overflow: hidden; }
   text-underline-offset: 3px;
   border-radius: 3px;
 }
-.pedit-cm .pedit-cm-syntax-tip { max-width: 88vw; padding: 8px 10px; font-size: 12px; line-height: 1.45; }
-.pedit-cm .pedit-cm-syntax-tip-raw {
-  margin-bottom: 3px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  word-break: break-all;
+.pedit-cm-pop .pedit-cm-syntax-tip-head { font-weight: 600; }
+.pedit-cm-pop .pedit-cm-syntax-tip-head.is-error { color: #f87171; }
+.pedit-cm-pop .pedit-cm-syntax-tip-line {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.8;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
-.pedit-cm .pedit-cm-syntax-tip-head,
-.pedit-syntax-note .pedit-cm-syntax-tip-head { font-weight: 600; }
-.pedit-cm .pedit-cm-syntax-tip-head.is-error,
-.pedit-cm .pedit-cm-syntax-tip.is-error .pedit-cm-syntax-tip-head,
-.pedit-syntax-note.is-error { color: #f87171; }
-.pedit-cm .pedit-cm-syntax-tip-line { margin-top: 3px; opacity: 0.8; }
 
 /* autocomplete (inline suggestions) */
 .pedit-cm .cm-tooltip {
