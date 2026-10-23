@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import re
 from collections import namedtuple
 import lark
@@ -24,6 +25,171 @@ WHITESPACE: /\s+/
 plain: /([^\\\[\]():|]|\\.)+/
 %import common.SIGNED_NUMBER -> NUMBER
 """)
+
+# ── random pick ──────────────────────────────────────────────────────────────
+#
+# @PICK{a, b, c}     - one of the keywords, drawn at random
+# @PICK(2){a, b, c}  - two of the keywords, drawn at random
+#
+# The count must be 1 or more.  A malformed group (unknown tag, bad count, missing
+# brace, empty list) is left as typed, so the prompt editor can flag it in place.
+# The groups are resolved once per generated image (see StableDiffusionProcessing.
+# apply_random_picks), so a batch count of 16 spends 16 independent draws.
+
+re_pick = re.compile(r"@pick[ \t]*(?:\([ \t]*(0*[1-9]\d*)[ \t]*\)[ \t]*)?\{", re.IGNORECASE)
+
+_OPENING = "([{<"
+_CLOSING = ")]}>"
+
+
+def split_pick_items(text: str) -> list[str]:
+    """Splits the inside of an @PICK group at top level commas and drops empty keywords.
+
+    Commas inside (), [], {} or <> stay part of the keyword, so weighted and
+    nested constructs survive:
+
+    >>> split_pick_items("a, b (x, y), c")
+    ['a', 'b (x, y)', 'c']
+    >>> split_pick_items(" , a, , b, ")
+    ['a', 'b']
+    """
+    items = []
+    current = []
+    depth = 0
+
+    for ch in text:
+        if ch in _OPENING:
+            depth += 1
+        elif ch in _CLOSING:
+            depth = max(0, depth - 1)
+
+        if ch == ',' and depth == 0:
+            items.append(''.join(current))
+            current = []
+        else:
+            current.append(ch)
+
+    items.append(''.join(current))
+    return [item.strip() for item in items if item.strip()]
+
+
+def pick_items(items, count, rng) -> str:
+    """Returns `count` distinct keywords joined with ', ' in their original order.
+
+    `count` is clamped to the number of keywords; a group of one keyword (or a
+    count that covers them all) resolves to every keyword, without a draw.
+    """
+    if not items:
+        return ''
+
+    count = min(max(int(count), 1), len(items))
+    if count >= len(items):
+        return ', '.join(items)
+
+    return ', '.join(items[i] for i in sorted(rng.sample(range(len(items)), count)))
+
+
+def find_pick_group(text: str, start: int):
+    """Locates the @PICK group starting at `start`.
+
+    Returns (keywords start, keywords end, count) - both indexes into `text`, the
+    end being exclusive - or None when the tag does not open a closed group.
+    """
+    match = re_pick.match(text, start)
+    if match is None:
+        return None
+
+    depth = 1
+    index = match.end()
+    while index < len(text):
+        ch = text[index]
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return match.end(), index, int(match.group(1) or 1)
+        index += 1
+
+    return None
+
+
+def expand_prompt_picks(prompt: str, rng=None) -> str:
+    """Replaces every @PICK group in `prompt` with the keywords drawn from it.
+
+    Groups are expanded inside out, so a @PICK may contain another @PICK. Groups
+    that are not properly closed, or that have no keywords, are left untouched.
+
+    >>> import random
+    >>> expand_prompt_picks("@PICK(3){a, b, c}", random.Random(0))
+    'a, b, c'
+    >>> expand_prompt_picks("@PICK(9){a, b}", random.Random(0))
+    'a, b'
+    >>> expand_prompt_picks("@PICK ( 2 ) {a, b, c}", random.Random(4)).count(', ')
+    1
+    >>> expand_prompt_picks("@PICK{a, b, c}", random.Random(3)) in ('a', 'b', 'c')
+    True
+    >>> expand_prompt_picks("@pick{a (x, y), b, c}", random.Random(3)).count(', ') >= 1
+    True
+    >>> expand_prompt_picks("@PICK{a, b, c}", random.Random(3)) == expand_prompt_picks("@PICK{a, b, c}", random.Random(3))
+    True
+    >>> expand_prompt_picks("no picks, here (x:1.2)", random.Random(3))
+    'no picks, here (x:1.2)'
+    >>> expand_prompt_picks("@PICK{a, b", random.Random(3))
+    '@PICK{a, b'
+    >>> expand_prompt_picks("@PICK{}", random.Random(3))
+    '@PICK{}'
+    """
+    if not prompt or '@' not in prompt:
+        return prompt
+
+    rng = random if rng is None else rng
+
+    parts = []
+    position = 0
+    while position < len(prompt):
+        match = re_pick.search(prompt, position)
+        if match is None:
+            break
+
+        group = find_pick_group(prompt, match.start())
+        if group is None:
+            parts.append(prompt[position:match.end()])
+            position = match.end()
+            continue
+
+        keywords_start, keywords_end, count = group
+        keywords = expand_prompt_picks(prompt[keywords_start:keywords_end], rng)
+        items = split_pick_items(keywords)
+
+        parts.append(prompt[position:match.start()])
+        if items:
+            parts.append(pick_items(items, count, rng))
+        else:
+            parts.append(prompt[match.start():keywords_end + 1])
+        position = keywords_end + 1
+
+    parts.append(prompt[position:])
+    return ''.join(parts)
+
+
+def get_pick_rng(seed, index=0, kind="prompt"):
+    """Random generator for the picks of a single batch item.
+
+    Seeding from the item seed keeps a generation reproducible, while the index
+    keeps every batch item independent from the others - including batches where
+    all items share one seed (variation seed strength > 0).
+    """
+    try:
+        seed = int(seed)
+    except (TypeError, ValueError):
+        seed = None
+
+    if seed is None or seed == -1:
+        return random.Random()
+
+    return random.Random(f"{kind}:{seed}:{index}")
+
 
 def get_learned_conditioning_prompt_schedules(prompts, base_steps, hires_steps=None, use_old_scheduling=False):
     """

@@ -9,11 +9,12 @@ prompt is plain text: the editor document *is* the value, so the chips editors, 
 payload and every other integration keep working unchanged, while we get official autocomplete
 and a decoration pipeline for comments / disabled keywords / drag and quick actions.
 
-- **Bundle:** `codemirror6.js` (~305 KB minified ESM), built with esbuild from:
+- **Bundle:** `codemirror6.js` (~337 KB minified ESM), built with esbuild from:
   - `@codemirror/state` 6.7.6
   - `@codemirror/view` 6.43.14
   - `@codemirror/autocomplete` 6.20.3
   - `@codemirror/commands` 6.11.1
+  - `@codemirror/search` 6.7.2 (Ctrl+F find / replace panel, Ctrl+D multi-select)
   (plus transitive `@codemirror/language` 6.13.1, `@codemirror/streamparser` 6.0.0, `@lezer/*`)
 - **License:** MIT — © Marijn Haverbeke and others, https://codemirror.net
 - **Rebuild:** run `mobile_lite/vendor/cm6build/build.bat` (npm install + esbuild; add

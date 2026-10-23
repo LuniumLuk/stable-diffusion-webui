@@ -2,14 +2,18 @@
  * Prompt token model for the Mobile Lite prompt editor.
  *
  * Faithful port of the pure parser in `javascript/promptEditor.js` (the desktop chips
- * editor): a line is split into segments at *top level* commas (commas inside (), [] or
- * <> are not separators), each segment keeps its raw lead/body/tail so an untouched line
- * re-serialises byte-identically.  `classify()` reports the *effective* A1111 weight
- * ('((x))' -> 1.21, '[x]' -> 0.909) and `rebuild()` writes a token back with a new
- * weight / disabled flag - every user edit goes through it.
+ * editor): a line is split into segments at *top level* commas (commas inside (), [], <>
+ * or an @PICK{...} group are not separators), each segment keeps its raw lead/body/tail
+ * so an untouched line re-serialises byte-identically.  `classify()` reports the
+ * *effective* A1111 weight ('((x))' -> 1.21, '[x]' -> 0.909) and `rebuild()` writes a
+ * token back with a new weight / disabled flag - every user edit goes through it.
+ * A keyword that starts with '@' is checked by `prompt-syntax.js`: a well formed
+ * directive is a `pick` token, a broken one an `at` token that carries the error.
  *
  * The same test expectations as `tmp/pedit_test.js` apply (see `tmp/lite_pedit_test.mjs`).
  */
+
+import { analyzeAtSyntax } from './prompt-syntax.js';
 
 export const DEFAULT_WEIGHT = 1.0;
 
@@ -31,8 +35,8 @@ export function splitSegments(line) {
 
   for (; index < line.length; index += 1) {
     const ch = line[index];
-    if (ch === '(' || ch === '[' || ch === '<') depth += 1;
-    else if (ch === ')' || ch === ']' || ch === '>') depth = Math.max(0, depth - 1);
+    if (ch === '(' || ch === '[' || ch === '<' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '>' || ch === '}') depth = Math.max(0, depth - 1);
 
     if (ch === ',' && depth === 0) {
       let tail = ',';
@@ -101,6 +105,21 @@ export function classify(body) {
   if (!text) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
   if (text === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
 
+  // every keyword starting with '@' is a directive and must pass the grammar:
+  // a well formed @PICK is a `pick` token, a broken directive an `at` token carrying
+  // the error (the chips and the CodeMirror decorations style it as broken)
+  const syntax = analyzeAtSyntax(text);
+  if (syntax) {
+    return {
+      kind: syntax.ok ? 'pick' : 'at',
+      text,
+      weight: DEFAULT_WEIGHT,
+      disabled: false,
+      pickCount: syntax.ok ? syntax.count : 0,
+      syntax,
+    };
+  }
+
   // #(...) / #[...] / #<...> -> disabled keyword group (stripped when generating)
   if (text[0] === '#' && text.length > 3) {
     const inner = classify(text.slice(1));
@@ -158,6 +177,10 @@ export function classify(body) {
 
 /** Build the body text for a token with the given weight / disabled flag. */
 export function rebuild(token, weight, disabled) {
+  // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
+  // and a broken '@' directive must keep its text so the user can fix it in place
+  if (token.kind === 'pick' || token.kind === 'at') return token.text;
+
   const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
   let inner;
   if (token.kind === 'angle') {

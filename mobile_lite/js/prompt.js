@@ -27,6 +27,7 @@ import { el, toast } from './ui.js';
 import { on, persist, state } from './state.js';
 import { createPromptCM } from './prompt-cm.js';
 import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
+import { syntaxHint } from './prompt-syntax.js';
 
 const WEIGHT_STEP = 0.05;
 const MAX_SUGGEST = 8;
@@ -69,7 +70,9 @@ function createChipsField(key, placeholder, title) {
   const modeButton = el('button', { class: 'btn tiny', type: 'button' });
   const addLineButton = el('button', { class: 'btn tiny', type: 'button', text: '\uFF0B line', title: 'Add a line' });
   const offBadge = el('span', { class: 'small muted' });
-  const head = el('div', { class: 'pedit-head' }, [modeButton, addLineButton, offBadge]);
+  const errorBadge = el('span', { class: 'pedit-badge is-error', hidden: true });
+  const syntaxNote = el('div', { class: 'pedit-syntax-note', hidden: true });
+  const head = el('div', { class: 'pedit-head' }, [modeButton, addLineButton, offBadge, errorBadge]);
   const body = el('div', { class: 'pedit-body' });
   const actions = el('div', { class: 'pedit-actions' });
 
@@ -104,7 +107,7 @@ function createChipsField(key, placeholder, title) {
   ]);
   document.body.append(textEditor);
 
-  const root = el('div', { class: 'pedit' }, [head, body, actions, textWrap]);
+  const root = el('div', { class: 'pedit' }, [head, body, actions, syntaxNote, textWrap]);
 
   const selection = { line: null, seg: null, adding: null, editing: null, lineWeight: null };
   // lines the user unfolded again (folded is the default; index-based, transient state)
@@ -306,18 +309,41 @@ function createChipsField(key, placeholder, title) {
     return count;
   }
 
+  /** Broken '@' directives across the text (drives the ⚠ badge in the header). */
+  function countSyntaxErrors() {
+    let count = 0;
+    value().split('\n').forEach((line) => {
+      splitSegments(displayContent(line)).forEach((segment) => {
+        const token = classify(segment.body);
+        if (token.syntax && !token.syntax.ok) count += 1;
+      });
+    });
+    return count;
+  }
+
   /* ---------------------------------------------------------------- rendering */
 
   function chipNode(line, seg, token) {
     const classes = ['pedit-chip'];
+    const syntax = token.syntax || null;
     if (token.disabled) classes.push('is-disabled');
     if (selection.line === line && selection.seg === seg) classes.push('is-selected');
     if (!token.text) classes.push('is-empty');
+    if (syntax) classes.push(syntax.ok ? 'is-syntax' : 'is-syntax-error');
 
     const children = [];
     if (token.kind === 'angle') children.push(el('span', { class: 'pedit-chip-kind', text: '\u25C8' }));
+    else if (syntax) children.push(el('span', { class: 'pedit-chip-kind', text: syntax.ok ? '\uD83C\uDFB2' : '\u26A0\uFE0F' }));
     children.push(el('span', { class: 'pedit-chip-text', text: token.text || '\u2026' }));
-    if (Math.abs((token.weight || DEFAULT_WEIGHT) - DEFAULT_WEIGHT) > 1e-9) {
+    if (syntax) {
+      if (syntax.ok && syntax.items.length > 1) {
+        children.push(el('span', {
+          class: 'pedit-chip-w pedit-chip-pick',
+          text: `${syntax.count}/${syntax.items.length}`,
+          title: 'keywords drawn per image / keywords in the group',
+        }));
+      }
+    } else if (Math.abs((token.weight || DEFAULT_WEIGHT) - DEFAULT_WEIGHT) > 1e-9) {
       children.push(el('span', { class: 'pedit-chip-w', text: '\u00D7' + formatWeight(token.weight) }));
     }
     if (token.disabled) children.push(el('span', { class: 'pedit-chip-off', text: '\u26D4' }));
@@ -326,7 +352,7 @@ function createChipsField(key, placeholder, title) {
       class: classes.join(' '),
       type: 'button',
       dataset: { act: 'chip', line: String(line), seg: String(seg) },
-      title: token.text,
+      title: syntaxHint(syntax, token.text),
     }, children);
   }
 
@@ -742,17 +768,19 @@ function createChipsField(key, placeholder, title) {
     return [
       el('span', { class: 'pedit-actions-sel', text: token.text }),
       make('edit', '\u270E', { title: 'Rename this keyword' }),
-      make('w-minus', '\u2212', { title: `Lower weight by ${WEIGHT_STEP}` }),
-      el('span', { class: 'pedit-weight', text: formatWeight(current) }),
-      make('w-plus', '\uFF0B', { title: `Raise weight by ${WEIGHT_STEP}` }),
-      make('w-0.8', '0.8'),
-      make('w-1.1', '1.1'),
-      make('w-1.2', '1.2'),
-      make('reset', '\u27F2 1.0', { title: 'Back to weight 1 (brackets removed)' }),
-      make('toggle-off', token.disabled ? '\u2705' : '\u26D4', {
-        on: token.disabled,
-        title: token.disabled ? 'Enable this keyword' : 'Disable (stripped when generating)',
-      }),
+      ...(token.syntax ? [] : [
+        make('w-minus', '\u2212', { title: `Lower weight by ${WEIGHT_STEP}` }),
+        el('span', { class: 'pedit-weight', text: formatWeight(current) }),
+        make('w-plus', '\uFF0B', { title: `Raise weight by ${WEIGHT_STEP}` }),
+        make('w-0.8', '0.8'),
+        make('w-1.1', '1.1'),
+        make('w-1.2', '1.2'),
+        make('reset', '\u27F2 1.0', { title: 'Back to weight 1 (brackets removed)' }),
+        make('toggle-off', token.disabled ? '\u2705' : '\u26D4', {
+          on: token.disabled,
+          title: token.disabled ? 'Enable this keyword' : 'Disable (stripped when generating)',
+        }),
+      ]),
       make('duplicate', '\u2398', { title: 'Duplicate' }),
       make('delete', '\u{1F5D1}', { title: 'Delete' }),
       make('close', '\u2715', { title: 'Close' }),
@@ -765,11 +793,16 @@ function createChipsField(key, placeholder, title) {
     modeButton.textContent = mode() === 'chips' ? '\u2328 Text' : '\u270E Chips';
     const disabled = countDisabled();
     offBadge.textContent = disabled ? `${disabled} off` : '';
+    const syntaxErrors = countSyntaxErrors();
+    errorBadge.hidden = !syntaxErrors;
+    errorBadge.textContent = syntaxErrors ? `\u26A0 ${syntaxErrors} syntax` : '';
+    errorBadge.title = 'keywords starting with @ must follow the prompt syntax - tap a red keyword to see what is wrong';
 
     if (mode() === 'text') {
       ensureCM();
       body.replaceChildren();
       actions.replaceChildren();
+      syntaxNote.hidden = true;
       queueMicrotask(() => {
         fitTextarea();
         if (cm) cm.requestMeasure();
@@ -788,6 +821,18 @@ function createChipsField(key, placeholder, title) {
       }));
     }
     actions.replaceChildren(...actionsChildren());
+
+    // touch has no hover: the selected '@' keyword shows its hint (description, preview
+    // or the error) right under the action bar
+    const selected = tokenAt(selection.line, selection.seg);
+    if (selected && selected.syntax) {
+      syntaxNote.hidden = false;
+      syntaxNote.textContent = syntaxHint(selected.syntax);
+      syntaxNote.classList.toggle('is-error', !selected.syntax.ok);
+    } else {
+      syntaxNote.hidden = true;
+      syntaxNote.textContent = '';
+    }
   }
 
   /* ---------------------------------------------------------------- operations */

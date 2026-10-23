@@ -12,7 +12,8 @@
  *     popup opens on RIGHT-CLICK only: on a keyword, or inside a selection to apply
  *     weight / ⛔ to every selected keyword at once; Alt+drag rearranges a keyword;
  *   - desktop hotkeys: Ctrl+↑/↓ weight (edit-attention parity), Ctrl+/ comment toggle
- *     (cursor line, or every line in a multi-line selection);
+ *     (cursor line, or every line in a multi-line selection), Ctrl+F find / replace
+ *     panel (seeded with the selection) and Ctrl+D select-next-occurrence multi-editing;
  *   - line-number gutter: the first column shows line numbers; hovering a line swaps its
  *     number for the hover toggle — 💬 comments that single line, ▶/⏸ on a `# ---` section
  *     starter comments / uncomments the whole section.

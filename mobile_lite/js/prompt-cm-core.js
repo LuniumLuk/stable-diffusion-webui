@@ -31,6 +31,13 @@
  *                            the selection covers otherwise).  Ctrl/Cmd+Enter is always
  *                            CONSUMED here (no blank line) and left to the page's global
  *                            generate shortcut (desktop `script.js`).
+ *   - find / multi-select  — Ctrl+F opens the find & replace panel at the top of the
+ *                            editor (seeded with the current selection; next / previous /
+ *                            all, match case, regexp, by word, replace, replace all);
+ *                            Ctrl+D selects the word under the cursor and then each next
+ *                            occurrence as extra selections, so typing edits every match
+ *                            at once (VSCode style).  Ctrl+Shift+L selects all matches,
+ *                            F3 / Shift+F3 step through them, Escape closes the panel.
  *
  * `gestures: false` (Mobile Lite) switches the whole press/drag/tap + context-menu
  * manipulation grammar OFF: the editor behaves like a plain text field with native
@@ -59,6 +66,7 @@ const MAX_WEIGHT = 10;
 let bundlePromise = null;
 let gutterWarned = false;         // stale-bundle warning: once per page, not once per host
 let multiLineWarned = false;      // stale-ops warning: once per page
+let searchWarned = false;         // stale-bundle warning for Ctrl+F / Ctrl+D / multi-cursor
 
 /** Load the vendored CodeMirror bundle once (rejects keep the textarea fallback). */
 function loadBundle() {
@@ -119,10 +127,28 @@ export async function createPromptCM({
   const {
     EditorState, StateEffect, StateField,
     EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor,
-    gutter: cmGutter, GutterMarker,
+    gutter: cmGutter, GutterMarker, drawSelection, hoverTooltip,
     autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
     history, historyKeymap, defaultKeymap,
+    search: searchExt, searchKeymap, openSearchPanel, closeSearchPanel,
+    selectNextOccurrence, highlightSelectionMatches,
   } = await loadBundle();
+
+  // Ctrl+F / Ctrl+D live in @codemirror/search.  A browser still running a CACHED
+  // pre-search bundle keeps a fully working editor, just without those two shortcuts.
+  const canSearch = typeof searchExt === 'function'
+    && typeof openSearchPanel === 'function'
+    && typeof closeSearchPanel === 'function'
+    && typeof selectNextOccurrence === 'function'
+    && typeof highlightSelectionMatches === 'function'
+    && Array.isArray(searchKeymap);
+  // drawSelection replaces the native (single-range) selection paint with one layer per
+  // range, which is what makes the Ctrl+D extra ranges and their cursors visible.
+  const canDrawSelection = typeof drawSelection === 'function';
+  if ((!canSearch || !canDrawSelection) && !searchWarned) {
+    searchWarned = true;
+    console.warn('promptCM: the cached CodeMirror bundle predates the find / multi-select shortcuts - hard-reload (Ctrl+F5) to enable Ctrl+F, Ctrl+D and multi-cursor highlighting');
+  }
 
   const toast = typeof notify === 'function' ? notify : () => {};
   const stepValue = () => {
@@ -269,15 +295,22 @@ export async function createPromptCM({
         if (hash >= 0) marks.push(Decoration.mark({ class: 'pedit-cm-comment-hash' }).range(line.from + hash, line.from + hash + 1));
         continue;
       }
-      // disabled keyword groups (#(...) / #[...] / #<...>) get a struck-through mark;
+      // disabled keyword groups (#(...) / #[...] / #<...>) get a struck-through mark and
+      // every '@' directive a syntax mark (red when the grammar check failed);
       // offsets come from the same segment walk the ops module uses
       let cursor = 0;
       for (const segment of splitSegments(lineText)) {
         const bodyStart = cursor + segment.lead.length;
         const core = segment.body.trim();
-        if (core && classify(segment.body).disabled) {
+        if (core) {
           const coreLead = segment.body.length - segment.body.trimStart().length;
-          marks.push(Decoration.mark({ class: 'pedit-cm-tok-off' }).range(line.from + bodyStart + coreLead, line.from + bodyStart + coreLead + core.length));
+          const from = line.from + bodyStart + coreLead;
+          const to = from + core.length;
+          const token = classify(segment.body);
+          if (token.disabled) marks.push(Decoration.mark({ class: 'pedit-cm-tok-off' }).range(from, to));
+          if (token.syntax) {
+            marks.push(Decoration.mark({ class: token.syntax.ok ? 'pedit-cm-tok-syntax' : 'pedit-cm-tok-syntax-error' }).range(from, to));
+          }
         }
         cursor = bodyStart + segment.body.length + segment.tail.length;
       }
@@ -293,6 +326,39 @@ export async function createPromptCM({
     },
     provide: (field) => EditorView.decorations.from(field),
   });
+
+  /* ------------------------------------------------------------ @ syntax hint */
+
+  /**
+   * Hover hint for an '@' keyword: what the directive does and what it will produce
+   * (for @PICK: "N of M keywords are chosen at random for every image"), or the
+   * grammar error when the keyword is broken.
+   */
+  function syntaxTooltipSource(viewA, pos) {
+    const token = tokenAt(viewA.state.doc.toString(), pos);
+    const syntax = token && token.token ? token.token.syntax : null;
+    if (!syntax) return null;
+    return {
+      pos: token.from,
+      end: token.to,
+      above: true,
+      create() {
+        const tip = el('div', { class: `pedit-cm-syntax-tip${syntax.ok ? '' : ' is-error'}` });
+        tip.append(el('div', { class: 'pedit-cm-syntax-tip-raw', text: syntax.raw }));
+        tip.append(el('div', { class: 'pedit-cm-syntax-tip-head', text: syntax.headline }));
+        for (const line of syntax.details) {
+          tip.append(el('div', { class: 'pedit-cm-syntax-tip-line', text: line }));
+        }
+        return { dom: tip };
+      },
+    };
+  }
+
+  // Conditional like the other bundle features: a browser still running a cached
+  // pre-hover bundle keeps a working editor, just without the syntax hint.
+  const syntaxHoverExt = typeof hoverTooltip === 'function'
+    ? hoverTooltip(syntaxTooltipSource, { hoverTime: 250 })
+    : null;
 
   /* ------------------------------------------------------------ completion */
 
@@ -396,6 +462,8 @@ export async function createPromptCM({
     const firstWeight = weightOf(t);
     const commonWeight = tokens.every((token) => Math.abs(weightOf(token) - firstWeight) < 1e-9) ? firstWeight : null;
     const allDisabled = tokens.every((token) => token.token.disabled);
+    // '@' directives have no weight of their own and cannot be disabled with '#(...)'
+    const anySyntax = tokens.some((token) => token.token.syntax);
     const row = (...children) => el('div', { class: 'pedit-cm-pop-row' }, children);
     const button = (label, title, act, extra = {}) => el('button', {
       class: 'pedit-cm-pop-btn' + (extra.on ? ' is-on' : ''),
@@ -404,13 +472,15 @@ export async function createPromptCM({
       title,
       dataset: { act },
     });
-    const actionRow = [
-      button(allDisabled ? '\u2705' : '\u26D4',
+    const label = t.text;
+    const actionRow = [];
+    if (!anySyntax) {
+      actionRow.push(button(allDisabled ? '\u2705' : '\u26D4',
         multi
           ? 'Disable every selected keyword (or enable them all when already disabled)'
           : (t.token.disabled ? 'Enable this keyword' : 'Disable (stripped when generating)'),
-        'toggle', { on: allDisabled }),
-    ];
+        'toggle', { on: allDisabled }));
+    }
     if (!multi) {
       actionRow.push(
         button('\u21E6', 'Move one keyword left', 'move-left'),
@@ -420,21 +490,32 @@ export async function createPromptCM({
       );
     }
     actionRow.push(button('\u2715', 'Close', 'close'));
-    popup.replaceChildren(
-      el('div', { class: 'pedit-cm-pop-title', text: multi ? `${tokens.length} keywords selected` : t.text }),
-      row(
-        button('\u2212', `Lower weight by ${stepValue()}`, 'w-minus'),
-        el('span', { class: 'pedit-weight', text: commonWeight == null ? '\u00b1' : formatWeight(commonWeight) }),
-        button('\uFF0B', `Raise weight by ${stepValue()}`, 'w-plus'),
-      ),
-      row(
-        button('0.8', 'Set weight 0.8', 'w-0.8'),
-        button('1.1', 'Set weight 1.1', 'w-1.1'),
-        button('1.2', 'Set weight 1.2', 'w-1.2'),
-        button('\u27F2', 'Back to weight 1 (brackets removed)', 'w-reset'),
-      ),
-      row(...actionRow),
-    );
+    const content = [el('div', { class: 'pedit-cm-pop-title', text: multi ? `${tokens.length} keywords selected` : label })];
+    // same hint as the hover: what the directive does / what is wrong with it
+    if (!multi && t.token.syntax) {
+      content.push(el('div', {
+        class: `pedit-cm-syntax-tip-head${t.token.syntax.ok ? '' : ' is-error'}`,
+        text: t.token.syntax.headline,
+      }));
+    }
+    // an '@' directive has no weight of its own, so the weight rows are left out
+    if (!anySyntax) {
+      content.push(
+        row(
+          button('\u2212', `Lower weight by ${stepValue()}`, 'w-minus'),
+          el('span', { class: 'pedit-weight', text: commonWeight == null ? '\u00b1' : formatWeight(commonWeight) }),
+          button('\uFF0B', `Raise weight by ${stepValue()}`, 'w-plus'),
+        ),
+        row(
+          button('0.8', 'Set weight 0.8', 'w-0.8'),
+          button('1.1', 'Set weight 1.1', 'w-1.1'),
+          button('1.2', 'Set weight 1.2', 'w-1.2'),
+          button('\u27F2', 'Back to weight 1 (brackets removed)', 'w-reset'),
+        ),
+      );
+    }
+    content.push(row(...actionRow));
+    popup.replaceChildren(...content);
   }
 
   function positionPopup() {
@@ -658,13 +739,27 @@ export async function createPromptCM({
     return dispatchPlan(toggleLines(docText, fromLine, toLine), 'pedit.comment');
   }
 
+  const searchHotkeys = canSearch
+    ? [
+      { key: 'Mod-f', run: (viewA) => {
+        closePopup(); // the keyword popup would overlap the panel
+        return openSearchPanel(viewA);
+      }, preventDefault: true },
+      { key: 'Mod-d', run: selectNextOccurrence, preventDefault: true },
+      // the rest of the stock search bindings: F3 / Shift-F3, Mod-g, Mod-Shift-l
+      // (select all matches), Mod-Alt-g (go to line) and Escape inside the panel
+      ...searchKeymap.filter((binding) => binding.key !== 'Mod-f' && binding.key !== 'Mod-d'),
+    ]
+    : [];
+
   const hotkeyEntries = desktopKeys
     ? [
       { key: 'Ctrl-ArrowUp', run: (viewA) => adjustWeights(viewA, 1), preventDefault: true },
       { key: 'Ctrl-ArrowDown', run: (viewA) => adjustWeights(viewA, -1), preventDefault: true },
       { key: 'Ctrl-/', run: toggleComment, preventDefault: true },
+      ...searchHotkeys,
     ]
-    : [];
+    : searchHotkeys;
 
   /* ---------------------------------------------------------- press / drag / tap */
 
@@ -841,6 +936,9 @@ export async function createPromptCM({
     state: EditorState.create({
       doc: text,
       extensions: [
+        // Ctrl+D adds a range per occurrence, so the state must keep multi-ranges
+        EditorState.allowMultipleSelections.of(true),
+        ...(canDrawSelection ? [drawSelection()] : []),
         history(),
         keymap.of([
           // Ctrl/Cmd+Enter is the app-wide "generate" shortcut (the desktop page's
@@ -852,7 +950,14 @@ export async function createPromptCM({
           ...completionKeymap,
           ...defaultKeymap,
           ...historyKeymap,
-          { key: 'Escape', run: () => { if (popup) { closePopup(); return true; } return false; } },
+          { key: 'Escape', run: (viewA) => {
+            if (popup) {
+              closePopup();
+              return true;
+            }
+            // Escape in the editor also dismisses an open find / replace panel
+            return canSearch ? closeSearchPanel(viewA) : false;
+          } },
         ]),
         closeBrackets({ brackets: ['(', '['] }),
         autocompletion({
@@ -864,6 +969,7 @@ export async function createPromptCM({
         }),
         placeholderExt(placeholder),
         EditorView.lineWrapping,
+        ...(canSearch ? [searchExt({ top: true }), highlightSelectionMatches()] : []),
         ...(lineGutterExt ? [lineGutterExt] : []),
         EditorView.contentAttributes.of({
           autocapitalize: 'off',
@@ -873,6 +979,7 @@ export async function createPromptCM({
         }),
         activeTokenField,
         decorationField,
+        ...(syntaxHoverExt ? [syntaxHoverExt] : []),
         dropCursor(),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged || applying) return;

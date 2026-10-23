@@ -947,6 +947,18 @@ body.mask-editing { overflow: hidden; }
 .pedit-chip.is-selected { border-color: var(--accent); background: var(--accent-soft); }
 .pedit-chip.is-disabled { opacity: 0.55; }
 .pedit-chip.is-disabled .pedit-chip-text { text-decoration: line-through; }
+
+/* '@' prompt syntax: a directive chip (valid) and a grammar error chip */
+.pedit-chip.is-syntax { border-color: var(--blue); background: rgba(89, 161, 240, 0.16); }
+.pedit-chip.is-syntax-error {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.16);
+}
+.pedit-chip.is-syntax-error .pedit-chip-text {
+  text-decoration: underline wavy rgba(239, 68, 68, 0.9);
+  text-underline-offset: 3px;
+}
+.pedit-chip-pick { font-variant-numeric: tabular-nums; }
 .pedit-chip-text { max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pedit-chip-w { color: var(--blue); font-size: 10px; }
 .pedit-chip-off { font-size: 10px; }
@@ -1018,6 +1030,21 @@ body.mask-editing { overflow: hidden; }
 .pedit-mode-chips .pedit-textarea-wrap { display: none; }
 .pedit-mode-text .pedit-body,
 .pedit-mode-text .pedit-actions { display: none; }
+
+/* selected '@' keyword: description / preview / error, for touch (no hover) */
+.pedit-syntax-note {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+.pedit-mode-text .pedit-syntax-note { display: none; }
 
 /* text mode: a real editing area (40vh floor, grows with the content) + fullscreen escape hatch */
 .pedit-textarea-wrap { position: relative; }
@@ -1101,6 +1128,11 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .cm-placeholder { color: var(--muted); }
 .pedit-cm .cm-content ::selection { background: rgba(249, 115, 22, 0.28); }
 
+/* Ctrl+D: drawSelection paints one background + one caret per selection range */
+.pedit-cm .cm-editor .cm-selectionBackground { background: rgba(249, 115, 22, 0.28); }
+.pedit-cm .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: rgba(249, 115, 22, 0.34); }
+.pedit-cm .cm-editor .cm-cursorLayer .cm-cursor { border-left-color: var(--text); }
+
 /* inline variant: like the old textarea — 40vh floor, grows with the content */
 .pedit-cm-inline { display: block; }
 .pedit-cm-inline .cm-editor {
@@ -1132,6 +1164,32 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .pedit-cm-tok-off { opacity: 0.55; text-decoration: line-through; }
 .pedit-cm .pedit-cm-tok-active { background: var(--accent-soft); border-radius: 4px; }
 
+/* '@' prompt syntax: a highlight on every directive, a red wavy underline on errors */
+.pedit-cm .pedit-cm-tok-syntax {
+  background: rgba(89, 161, 240, 0.16);
+  border-bottom: 1px solid var(--blue);
+  border-radius: 3px;
+}
+.pedit-cm .pedit-cm-tok-syntax-error {
+  background: rgba(239, 68, 68, 0.16);
+  text-decoration: underline wavy rgba(239, 68, 68, 0.9);
+  text-underline-offset: 3px;
+  border-radius: 3px;
+}
+.pedit-cm .pedit-cm-syntax-tip { max-width: 88vw; padding: 8px 10px; font-size: 12px; line-height: 1.45; }
+.pedit-cm .pedit-cm-syntax-tip-raw {
+  margin-bottom: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+.pedit-cm .pedit-cm-syntax-tip-head,
+.pedit-syntax-note .pedit-cm-syntax-tip-head { font-weight: 600; }
+.pedit-cm .pedit-cm-syntax-tip-head.is-error,
+.pedit-cm .pedit-cm-syntax-tip.is-error .pedit-cm-syntax-tip-head,
+.pedit-syntax-note.is-error { color: #f87171; }
+.pedit-cm .pedit-cm-syntax-tip-line { margin-top: 3px; opacity: 0.8; }
+
 /* autocomplete (inline suggestions) */
 .pedit-cm .cm-tooltip {
   background: var(--surface);
@@ -1145,6 +1203,35 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .cm-tooltip-autocomplete ul li { padding: 7px 10px; line-height: 1.3; }
 .pedit-cm .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent-soft); color: var(--text); }
 .pedit-cm .cm-tooltip-autocomplete .cm-completionIcon { display: none; }
+
+/* find / replace panel (Ctrl+F) + Ctrl+D occurrence highlighting */
+.pedit-cm .cm-panels { background: var(--surface); color: var(--text); border-bottom: none; }
+.pedit-cm .cm-panel.cm-search { margin: 0 0 8px; padding: 0 0 8px; border-bottom: 1px solid var(--border); font-size: 12px; line-height: 1.7; }
+.pedit-cm .cm-panel.cm-search input.cm-textfield {
+  box-sizing: border-box;
+  width: 40%;
+  min-width: 90px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text);
+  font: inherit;
+}
+.pedit-cm .cm-panel.cm-search input.cm-textfield:focus { outline: none; border-color: var(--accent); }
+.pedit-cm .cm-panel.cm-search button.cm-button {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text);
+  font: inherit;
+}
+.pedit-cm .cm-panel.cm-search button.cm-button:hover { border-color: var(--accent); }
+.pedit-cm .cm-panel.cm-search [name=close] { color: inherit; font-size: 15px; opacity: 0.7; }
+.pedit-cm .cm-editor .cm-searchMatch { background: rgba(250, 204, 21, 0.3); outline: 1px solid rgba(250, 204, 21, 0.55); }
+.pedit-cm .cm-editor .cm-searchMatch-selected { background: rgba(249, 115, 22, 0.55); }
+.pedit-cm .cm-editor .cm-selectionMatch { background: var(--accent-soft); border-radius: 3px; }
 
 /* drag affordances: ghost under the finger + drop bar at the landing slot */
 .pedit-cm-dragging .cm-content { user-select: none; -webkit-user-select: none; cursor: grabbing; }

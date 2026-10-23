@@ -457,6 +457,42 @@ class StableDiffusionProcessing:
         self.main_prompt = self.all_prompts[0]
         self.main_negative_prompt = self.all_negative_prompts[0]
 
+    def apply_random_picks(self):
+        """Resolves the @PICK(...){...} groups of every prompt of this generation.
+
+        Runs after the seeds are known (one draw per generated image), so a batch
+        count of 16 draws 16 times.  The with-comments copies used for PNG
+        metadata and gallery restore keep the untouched @PICK source: reloading
+        an image with its seed brings back the same keywords.
+        """
+        seeds = self.all_seeds if isinstance(self.all_seeds, (list, tuple)) else None
+
+        def expand(prompts, kind):
+            if not prompts:
+                return prompts
+
+            picked = []
+            for index, prompt in enumerate(prompts):
+                if not isinstance(prompt, str) or '@' not in prompt:
+                    picked.append(prompt)
+                    continue
+
+                seed = seeds[index] if seeds is not None and index < len(seeds) else self.seed
+                picked.append(prompt_parser.expand_prompt_picks(prompt, prompt_parser.get_pick_rng(seed, index, kind)))
+
+            return picked
+
+        self.all_prompts = expand(self.all_prompts, 'pos')
+        self.all_negative_prompts = expand(self.all_negative_prompts, 'neg')
+
+        hr_prompts = getattr(self, 'all_hr_prompts', None)
+        if hr_prompts:
+            self.all_hr_prompts = expand(hr_prompts, 'pos')
+
+        hr_negative_prompts = getattr(self, 'all_hr_negative_prompts', None)
+        if hr_negative_prompts:
+            self.all_hr_negative_prompts = expand(hr_negative_prompts, 'neg')
+
     def cached_params(self, required_prompts, steps, extra_network_data, hires_steps=None, use_old_scheduling=False):
         """Returns parameters that invalidate the cond cache if changed"""
 
@@ -1043,6 +1079,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
     if p.scripts is not None:
         p.scripts.process(p)
+
+    p.apply_random_picks()
 
     infotexts = []
     output_images = []

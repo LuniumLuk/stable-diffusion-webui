@@ -432,6 +432,15 @@ as pure functions (`splitSegments`/`joinSegments`/`classify`/`rebuild`/`formatWe
 - ⌨ Text / ✎ Chips toggles the view (`ui.peditMode`, persisted, chips by default); an empty
   prompt shows a hint instead of an empty box.
 
+Prompt directives (`@PICK{…}` / `@PICK(2){…}`) live in `mobile_lite/js/prompt-syntax.js`:
+every keyword starting with `@` is grammar-checked, chips and CodeMirror marks style it
+(`is-syntax` / `is-syntax-error`), broken directives raise a `⚠ N syntax` badge and the hover /
+selected hint explains the directive and previews the draw ("2 of 3 keywords are chosen at
+random for every image"). `prompt-parse.js` classifies a valid directive as `pick` and a broken
+one as `at`; `rebuild()` never wraps either in `(…)` or `#(…)`. The desktop chips editor
+(`javascript/promptEditor.js`) keeps a compact mirror of the analyzer, the same way it mirrors
+the token parser.
+
 ### 13.3 Gallery card quick actions
 
 Cards are now `<div class="thumb-wrap">` (the thumb is an ARIA button - a `<button>` cannot

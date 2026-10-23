@@ -74,8 +74,9 @@
     // ── token model ─────────────────────────────────────────────────────────
     //
     // A line is split into segments at *top level* commas (commas inside
-    // (), [] or <> are not separators).  Each segment keeps its raw text
-    // (lead + body + tail) so an untouched line re-serialises byte-identically.
+    // (), [], <>, or an @PICK{...} group are not separators).  Each segment
+    // keeps its raw text (lead + body + tail) so an untouched line
+    // re-serialises byte-identically.
 
     function splitSegments(line) {
         const segs = [];
@@ -91,8 +92,8 @@
 
         for (; i < line.length; i++) {
             const ch = line[i];
-            if (ch === '(' || ch === '[' || ch === '<') depth++;
-            else if (ch === ')' || ch === ']' || ch === '>') depth = Math.max(0, depth - 1);
+            if (ch === '(' || ch === '[' || ch === '<' || ch === '{') depth++;
+            else if (ch === ')' || ch === ']' || ch === '>' || ch === '}') depth = Math.max(0, depth - 1);
 
             if (ch === ',' && depth === 0) {
                 let tail = ',';
@@ -157,16 +158,134 @@
         return { levels: levels, inner: inner };
     }
 
+    // ── '@' prompt syntax ───────────────────────────────────────────────────
+    // Mirror of mobile_lite/js/prompt-syntax.js (a classic script cannot import the
+    // module).  Every keyword starting with '@' is a directive and must pass this
+    // grammar; @PICK is the only directive today.
+
+    const PICK_EXAMPLE = '@PICK{a, b, c} or @PICK(2){a, b, c}';
+
+    /** Splits an @PICK body at top level commas (commas inside (), [], {}, <> stay). */
+    function splitSyntaxItems(text) {
+        const items = [];
+        let current = '';
+        let depth = 0;
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if ('([{<'.indexOf(ch) >= 0) depth++;
+            else if (')]}>'.indexOf(ch) >= 0) depth = Math.max(0, depth - 1);
+            if (ch === ',' && depth === 0) {
+                items.push(current);
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        items.push(current);
+        return items.map((s) => s.trim()).filter(Boolean);
+    }
+
+    function invalidSyntax(raw, tag, kind, error, hint) {
+        return { ok: false, tag: tag, raw: raw, kind: kind, count: 1, items: [], headline: error, details: [hint || 'Example: ' + PICK_EXAMPLE] };
+    }
+
+    /** Grammar-checks one prompt keyword; null when it does not start with '@'. */
+    function analyzeAtSyntax(body) {
+        const raw = String(body == null ? '' : body).trim();
+        if (raw[0] !== '@') return null;
+
+        const tagMatch = /^@([A-Za-z][\w-]*)/.exec(raw);
+        if (!tagMatch) return invalidSyntax(raw, '', 'pick', 'A prompt directive needs a name right after @.', '');
+
+        const tag = tagMatch[1];
+        if (tag.toLowerCase() !== 'pick') {
+            return invalidSyntax(raw, tag, 'unknown', 'Unknown prompt syntax @' + tag + '.', 'Known syntax: ' + PICK_EXAMPLE);
+        }
+
+        const rest = raw.slice(tagMatch[0].length);
+        let at = rest.search(/\S/);
+        at = at < 0 ? rest.length : at;
+
+        let count = 1;
+        if (rest[at] === '(') {
+            const close = rest.indexOf(')', at);
+            if (close < 0) return invalidSyntax(raw, tag, 'pick', 'Missing the closing “)” of the pick count.', 'Pick count syntax: @PICK(2){a, b, c}');
+            const countText = rest.slice(at + 1, close).trim();
+            if (!/^\d+$/.test(countText)) {
+                return invalidSyntax(raw, tag, 'pick',
+                    countText ? 'The pick count “' + countText + '” is not a whole number.' : 'The pick count is empty — write a number, for example @PICK(2){a, b, c}.', '');
+            }
+            count = parseInt(countText, 10);
+            if (count < 1) return invalidSyntax(raw, tag, 'pick', 'The pick count must be 1 or more.', '');
+            at = close + 1;
+            while (at < rest.length && /\s/.test(rest[at])) at++;
+        }
+
+        if (rest[at] !== '{') return invalidSyntax(raw, tag, 'pick', 'Missing the { … } keyword list.', 'Write ' + PICK_EXAMPLE + '.');
+
+        let depth = 0;
+        let close = -1;
+        for (let i = at; i < rest.length; i++) {
+            if (rest[i] === '{') depth++;
+            else if (rest[i] === '}') {
+                depth--;
+                if (depth === 0) {
+                    close = i;
+                    break;
+                }
+            }
+        }
+        if (close < 0) return invalidSyntax(raw, tag, 'pick', 'Missing the closing “}” of the keyword list.', '');
+        if (rest.slice(close + 1).trim()) return invalidSyntax(raw, tag, 'pick', 'Unexpected text after the keyword list.', '');
+
+        const items = splitSyntaxItems(rest.slice(at + 1, close));
+        if (!items.length) return invalidSyntax(raw, tag, 'pick', 'The keyword list is empty — separate keywords with commas.', '');
+
+        const drawn = Math.min(Math.max(count, 1), items.length);
+        let headline;
+        if (items.length === 1) {
+            headline = 'Random pick — the group holds a single keyword, so it is used for every image (nothing is drawn).';
+        } else if (drawn >= items.length) {
+            headline = 'Random pick — all ' + items.length + ' keywords are used for every image (nothing is drawn).';
+        } else {
+            headline = 'Random pick — ' + drawn + ' of ' + items.length + ' keywords ' + (drawn === 1 ? 'is' : 'are') + ' chosen at random for every image.';
+        }
+        const shown = items.slice(0, 8).join(' · ') + (items.length > 8 ? ' … (+' + (items.length - 8) + ')' : '');
+        return {
+            ok: true, tag: 'pick', raw: raw, kind: 'pick', count: drawn, items: items, headline: headline,
+            details: ['Keywords: ' + shown, 'Each image draws again (batch count 16 → 16 draws) and the draw follows the image seed.'],
+        };
+    }
+
+    /** Plain-text hover hint for a chip `title`. */
+    function syntaxHint(syntax) {
+        return syntax ? [syntax.headline].concat(syntax.details).filter(Boolean).join('\n') : '';
+    }
+
     /**
-     * Classify a segment body -> { kind, text, weight, disabled }
-     *   kind: 'plain' | 'paren' | 'bracket' | 'angle'
+     * Classify a segment body -> { kind, text, weight, disabled, syntax? }
+     *   kind: 'plain' | 'paren' | 'bracket' | 'angle' | 'pick' | 'at'
      * The weight is the *effective* A1111 weight, so '((x))' is 1.21 and '[x]' is 0.909.
+     * 'pick' is a well formed @PICK group, 'at' a broken '@' directive (see analyzeAtSyntax).
      */
     function classify(body) {
         const t = body.trim();
         if (!t) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
 
         if (t === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
+
+        // every keyword starting with '@' is a directive and must pass the grammar
+        const syntax = analyzeAtSyntax(t);
+        if (syntax) {
+            return {
+                kind: syntax.ok ? 'pick' : 'at',
+                text: t,
+                weight: DEFAULT_WEIGHT,
+                disabled: false,
+                pickCount: syntax.ok ? syntax.count : 0,
+                syntax: syntax,
+            };
+        }
 
         // #(...) / #[...] / #<...> -> disabled keyword group
         if (t[0] === '#' && t.length > 3) {
@@ -220,6 +339,10 @@
      * Used by every chip action (weight steppers, disable, quick weights).
      */
     function rebuild(token, weight, disabled) {
+        // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
+        // and a broken '@' directive must keep its text so the user can fix it in place
+        if (token.kind === 'pick' || token.kind === 'at') return token.text;
+
         const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
         let inner;
         if (token.kind === 'angle') {
@@ -302,19 +425,26 @@
         function chipHtml(line, seg, token) {
             const selected = state.selected && state.selected.line === line && state.selected.seg === seg;
             const cls = ['pedit-chip'];
+            const syntax = token.syntax || null;
             if (token.disabled) cls.push('is-disabled');
             if (selected) cls.push('is-selected');
             if (!token.text) cls.push('is-empty');
+            if (syntax) cls.push(syntax.ok ? 'is-syntax' : 'is-syntax-error');
 
-            const label = token.text || '…';
-            const showWeight = Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9;
-            const weightBadge = showWeight ? `<span class="pedit-chip-w" title="weight">×${escapeHtml(formatWeight(token.weight))}</span>` : '';
-            const kindBadge = token.kind === 'angle' ? '<span class="pedit-chip-kind" title="extra network tag">◈</span>' : '';
-            return `<span class="${cls.join(' ')}" data-line="${line}" data-seg="${seg}" title="${escapeHtml(token.text)}">`
-                + kindBadge
-                + `<span class="pedit-chip-text">${escapeHtml(label)}</span>`
-                + weightBadge
-                + (token.disabled ? '<span class="pedit-chip-off" title="disabled">⛔</span>' : '')
+            const children = [];
+            if (token.kind === 'angle') children.push('<span class="pedit-chip-kind" title="extra network tag">◈</span>');
+            else if (syntax) children.push(`<span class="pedit-chip-kind" title="${syntax.ok ? 'prompt syntax' : 'prompt syntax error'}">${syntax.ok ? '🎲' : '⚠️'}</span>`);
+            children.push(`<span class="pedit-chip-text">${escapeHtml(token.text || '…')}</span>`);
+            if (syntax) {
+                if (syntax.ok && syntax.items.length > 1) {
+                    children.push(`<span class="pedit-chip-w pedit-chip-pick" title="keywords drawn per image / keywords in the group">${syntax.count}/${syntax.items.length}</span>`);
+                }
+            } else if (Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9) {
+                children.push(`<span class="pedit-chip-w" title="weight">×${escapeHtml(formatWeight(token.weight))}</span>`);
+            }
+            if (token.disabled) children.push('<span class="pedit-chip-off" title="disabled">⛔</span>');
+            return `<span class="${cls.join(' ')}" data-line="${line}" data-seg="${seg}" title="${escapeHtml(syntaxHint(syntax) || token.text)}">`
+                + children.join('')
                 + '</span>';
         }
 
@@ -360,8 +490,10 @@
             const token = tokenAt(sel.line, sel.seg);
             if (!token || !token.text) return '';
             const w = token.weight || DEFAULT_WEIGHT;
-            return `<div class="pedit-actions">`
-                + `<span class="pedit-actions-text" title="selected keyword">${escapeHtml(token.text)}</span>`
+            // a random-pick group has neither a weight nor a disabled form; a broken
+            // '@' directive also keeps every weight control away until it is fixed
+            const isSyntax = !!token.syntax;
+            const weightControls = isSyntax ? '' : ''
                 + `<button type="button" class="pedit-act" data-act="w-minus" title="Lower weight">−</button>`
                 + `<span class="pedit-weight" title="weight">${escapeHtml(formatWeight(w))}</span>`
                 + `<button type="button" class="pedit-act" data-act="w-plus" title="Raise weight">＋</button>`
@@ -369,8 +501,15 @@
                 + `<button type="button" class="pedit-act pedit-quick" data-act="w-1.1">1.1</button>`
                 + `<button type="button" class="pedit-act pedit-quick" data-act="w-1.2">1.2</button>`
                 + `<button type="button" class="pedit-act" data-act="reset" title="Back to weight 1 (no brackets)">⟲1.0</button>`
-                + `<span class="pedit-actions-sep"></span>`
-                + `<button type="button" class="pedit-act ${token.disabled ? 'is-on' : ''}" data-act="toggle-off" title="${token.disabled ? 'Enable this keyword' : 'Disable this keyword (stripped when generating)'}">${token.disabled ? '✅' : '⛔'}</button>`
+                + `<span class="pedit-actions-sep"></span>`;
+            const disableButton = isSyntax ? '' : `<button type="button" class="pedit-act ${token.disabled ? 'is-on' : ''}" data-act="toggle-off" title="${token.disabled ? 'Enable this keyword' : 'Disable this keyword (stripped when generating)'}">${token.disabled ? '✅' : '⛔'}</button>`;
+            // the hint doubles as the error prompt: the headline says what is wrong
+            const hint = isSyntax ? `<span class="pedit-syntax-hint ${token.syntax.ok ? 'is-ok' : 'is-error'}">${escapeHtml(token.syntax.headline)}</span>` : '';
+            return `<div class="pedit-actions">`
+                + `<span class="pedit-actions-text" title="selected keyword">${escapeHtml(token.text)}</span>`
+                + hint
+                + weightControls
+                + disableButton
                 + `<button type="button" class="pedit-act" data-act="duplicate" title="Duplicate">⎘</button>`
                 + `<button type="button" class="pedit-act" data-act="delete" title="Delete">🗑</button>`
                 + `<button type="button" class="pedit-act pedit-act-close" data-act="close" title="Close">✕</button>`
@@ -395,6 +534,7 @@
             const lines = state.text.split('\n');
             const body = lines.map((l, i) => lineHtml(l, i, lines) + inputHtml(i)).join('');
             const disabledCount = countDisabled();
+            const syntaxErrors = countSyntaxErrors();
             const previous = root.querySelector('.pedit-body');
             const scrollTop = previous ? previous.scrollTop : state.scroll;
             root.innerHTML = `<div class="pedit-head">`
@@ -403,6 +543,7 @@
                 + `<button type="button" class="pedit-head-btn" data-act="add-line" title="Add a line">＋ line</button>`
                 + `<button type="button" class="pedit-head-btn" data-act="uncomment-all" title="Uncomment every line">▶ all</button>`
                 + (disabledCount ? `<span class="pedit-badge" title="keywords disabled with #( ) are stripped when generating">${disabledCount} off</span>` : '')
+                + (syntaxErrors ? `<span class="pedit-badge is-error" title="keywords starting with @ must follow the prompt syntax - hover a red keyword to see what is wrong">⚠ ${syntaxErrors} syntax</span>` : '')
                 + '</div>'
                 + `<div class="pedit-body">${body}</div>`
                 + actionBarHtml();
@@ -418,6 +559,18 @@
             state.text.split('\n').forEach((line) => {
                 splitSegments(line).forEach((s) => {
                     if (classify(s.body).disabled) n++;
+                });
+            });
+            return n;
+        }
+
+        /** Broken '@' directives across the text (drives the ⚠ badge in the header). */
+        function countSyntaxErrors() {
+            let n = 0;
+            state.text.split('\n').forEach((line) => {
+                splitSegments(line).forEach((s) => {
+                    const token = classify(s.body);
+                    if (token.syntax && !token.syntax.ok) n++;
                 });
             });
             return n;
@@ -935,5 +1088,7 @@
         classify: classify,
         rebuild: rebuild,
         formatWeight: formatWeight,
+        analyzeAtSyntax: analyzeAtSyntax,
+        syntaxHint: syntaxHint,
     };
 })();
