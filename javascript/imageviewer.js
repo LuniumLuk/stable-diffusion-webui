@@ -68,6 +68,19 @@ function _findImg2imgInputImage() {
     return any && any.src ? any : null;
 }
 
+function _batchMaskInitialImage(src) {
+    // inpaintBatchMask records the source image of each batch-mask chain (see
+    // javascript/inpaintBatchMask.js): chained results must compare with the image
+    // the chain started from, not with the intermediate result of the previous mask.
+    const api = window.inpaintBatchMask;
+    if (!api || typeof api.initialImageFor !== 'function') return null;
+    try {
+        return api.initialImageFor(src) || null;
+    } catch (error) {
+        return null;
+    }
+}
+
 function _prepareModalCompare() {
     const compareBtn = gradioApp().getElementById('modalCompare');
     const tabImg2Img = gradioApp().getElementById('tab_img2img');
@@ -75,6 +88,15 @@ function _prepareModalCompare() {
     _modalInputSrc = null;
 
     if (!compareBtn) return;
+
+    const modalImage = gradioApp().getElementById('modalImage');
+    const batchInitial = _batchMaskInitialImage(modalImage ? modalImage.src : null);
+    if (batchInitial) {
+        _modalInputSrc = batchInitial;
+        compareBtn.style.display = 'inline';
+        _updateModalCompareButton();
+        return;
+    }
 
     const onImg2img = tabImg2Img && tabImg2Img.style.display !== 'none';
     if (!onImg2img) {

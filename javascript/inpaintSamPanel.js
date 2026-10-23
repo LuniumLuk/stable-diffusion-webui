@@ -70,6 +70,7 @@
     outlineCache: null, // offscreen canvas holding the current silhouette
     blinkRaf: null,
     blinkPhase: null,
+    layout: null, // safe top strip reservation {top, wrap, img, fit}
   };
 
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
@@ -676,6 +677,21 @@
     }
   }
 
+  /* ------------------------------- public mask hooks ------------------------------- */
+
+  window.inpaintSamPanel = {
+    isReady: () => !!getParts(),
+    syncMask: () => {
+      syncMaskToGradio();
+      rebuildOutline();
+    },
+    resetMask: () => {
+      state.undo = [];
+      syncMaskToGradio();
+      rebuildOutline();
+    },
+  };
+
   /* ----------------------------------- SAM pick ----------------------------------- */
 
   async function postJSON(url, body) {
@@ -1028,9 +1044,12 @@
     return !!p && p.wrap.contains(e.target);
   }
 
+  // true for the tool bar and the batch mask panel: overlays that must not pan/paint/zoom
   function inBar(p, e) {
     const bar = p && p.host && p.host.querySelector(".inpsam-bar");
-    return !!(bar && bar.contains(e.target));
+    if (bar && bar.contains(e.target)) return true;
+    const batchPanel = p && p.root ? p.root.querySelector(".inpbatch-panel") : null;
+    return !!(batchPanel && batchPanel.contains(e.target));
   }
 
   function bindRootListeners(p) {
@@ -1157,10 +1176,14 @@
         if (e.target && e.target.classList && e.target.classList.contains("absolute-img")) {
           state.undo = [];
           setTimeout(() => {
+            applySafePadding();
             applyModeAppearance();
             fitView();
           }, 60);
-          setTimeout(fitView, 300); // re-fit once layout (imageMaskFix) settles
+          setTimeout(() => {
+            applySafePadding();
+            fitView(); // re-fit once layout (imageMaskFix) settles
+          }, 300);
         }
       },
       true
@@ -1210,12 +1233,72 @@
     bar.style.top = `${top}px`;
   }
 
+  function fitCanvasesToWrap(p) {
+    const natW = p.iface.width;
+    const natH = p.iface.height;
+    const boxW = p.wrap.clientWidth;
+    const boxH = p.wrap.clientHeight;
+    if (!natW || !natH || !boxW || !boxH) return false;
+
+    const scale = Math.min(boxW / natW, boxH / natH);
+    const width = Math.round(natW * scale * 100) / 100;
+    const height = Math.round(natH * scale * 100) / 100;
+    const cssW = `${width}px`;
+    const cssH = `${height}px`;
+
+    const changed = !state.layout.fit || state.layout.fit.width !== width || state.layout.fit.height !== height ||
+        p.iface.style.width !== cssW || p.iface.style.height !== cssH;
+    p.wrap.querySelectorAll("canvas").forEach((cv) => {
+      cv.style.width = cssW;
+      cv.style.height = cssH;
+    });
+    state.layout.fit = {width, height};
+    return changed;
+  }
+
+  // Reserve the top strip taken by the tool bar, so a freshly loaded picture is never
+  // hidden behind it: the canvas wrap and the preview image start below the bar.
+  function applySafePadding() {
+    const p = getParts();
+    if (!p) {
+      state.layout = null;
+      return;
+    }
+
+    const bar = p.host.querySelector(".inpsam-bar");
+    if (!bar) return;
+    const rootRect = p.root.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect();
+    if (!rootRect.height || !barRect.height) return;
+
+    const top = Math.max(0, Math.round(barRect.bottom - rootRect.top + 6));
+    if (top >= rootRect.height - 80) return;
+
+    const prev = state.layout;
+    if (!prev || prev.top !== top || prev.wrap !== p.wrap || prev.img !== p.img) {
+      p.wrap.style.position = "absolute";
+      p.wrap.style.left = "0px";
+      p.wrap.style.right = "0px";
+      p.wrap.style.top = `${top}px`;
+      p.wrap.style.bottom = "0px";
+      p.wrap.style.height = "auto";
+      if (p.img) {
+        p.img.style.top = `${top}px`;
+        p.img.style.height = `calc(100% - ${top}px)`;
+      }
+      state.layout = {top, wrap: p.wrap, img: p.img, fit: null};
+    }
+
+    if (fitCanvasesToWrap(p)) fitView();
+  }
+
   function ensure() {
     const p = getParts();
     if (!p) {
       // canvas not present (no image loaded): remove stale UI
       document.querySelectorAll(".inpsam-bar").forEach((b) => b.remove());
       cursorEl().style.display = "none";
+      state.layout = null;
       return;
     }
     bindRootListeners(p);
@@ -1237,6 +1320,7 @@
       positionBar(bar, p.host);
     }
     refreshToolbarState();
+    applySafePadding();
 
     // image identity changed -> reset state and fit the view
     if (p.img && state.imgEl !== p.img) {

@@ -215,3 +215,100 @@ function uiElementInSight(el) {
 
     return isOnScreen;
 }
+
+/* Top-tab history: browser Back/Forward (including mouse side buttons) walks
+   through visited UI tabs instead of leaving the app. Each tab switch records
+   the visible .tabitem id plus the label/order as a guard for UI reloads. */
+(function() {
+    'use strict';
+
+    let initialized = false;
+
+    function tabsHost() {
+        return gradioApp().querySelector('#tabs');
+    }
+
+    function navButtons() {
+        const host = tabsHost();
+        return host ? Array.from(host.querySelectorAll(':scope > .tab-nav > button')) : [];
+    }
+
+    function tabItems() {
+        const host = tabsHost();
+        return host ? Array.from(host.querySelectorAll(':scope > .tabitem')) : [];
+    }
+
+    function currentTabInfo() {
+        const host = tabsHost();
+        if (!host) return null;
+        const button = host.querySelector(':scope > .tab-nav > button.selected');
+        if (!button) return null;
+        const index = navButtons().indexOf(button);
+        const item = tabItems()[index];
+        return {
+            id: item ? item.id : '',
+            label: (button.textContent || '').trim(),
+            index: index >= 0 ? index : 0
+        };
+    }
+
+    function activateTab(info) {
+        if (!info) return false;
+        const buttons = navButtons();
+        if (!buttons.length) return false;
+
+        let target = null;
+        if (info.id) {
+            const itemIndex = tabItems().findIndex(function(item) { return item.id === info.id; });
+            if (itemIndex >= 0) target = buttons[itemIndex] || null;
+        }
+        if (!target && info.label) {
+            target = buttons.find(function(button) {
+                return (button.textContent || '').trim() === info.label;
+            }) || null;
+        }
+        if (!target && typeof info.index === 'number') target = buttons[info.index] || null;
+        if (!target) return false;
+
+        target.click();
+        return true;
+    }
+
+    function ensureInitialized() {
+        if (initialized) return true;
+        const info = currentTabInfo();
+        if (!info) return false;
+        initialized = true;
+        history.replaceState(Object.assign({}, history.state || {}, {sdTab: info}), '', location.href);
+        return true;
+    }
+
+    function onTabChange() {
+        const info = currentTabInfo();
+        if (!info || !ensureInitialized()) return;
+        const recorded = history.state && history.state.sdTab;
+        if (recorded && recorded.id === info.id) return;
+        history.pushState(Object.assign({}, history.state || {}, {sdTab: info}), '', location.href);
+    }
+
+    window.addEventListener('popstate', function(event) {
+        const info = event.state && event.state.sdTab;
+        if (!info) return;
+        activateTab(info);
+    });
+
+    if (typeof onUiTabChange === 'function') {
+        onUiTabChange(onTabChange);
+    }
+    if (typeof onUiLoaded === 'function') {
+        onUiLoaded(ensureInitialized);
+    }
+
+    // The UI can be mounted after this script runs; retry briefly then stop.
+    document.addEventListener('DOMContentLoaded', function() {
+        let tries = 0;
+        const timer = setInterval(function() {
+            if (ensureInitialized() || ++tries > 100) clearInterval(timer);
+        }, 100);
+    });
+}());

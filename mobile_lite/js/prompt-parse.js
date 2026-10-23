@@ -4,7 +4,8 @@
  * Faithful port of the pure parser in `javascript/promptEditor.js` (the desktop chips
  * editor): a line is split into segments at *top level* commas (commas inside (), [], <>
  * or an @PICK{...} group are not separators), each segment keeps its raw lead/body/tail
- * so an untouched line re-serialises byte-identically.  `classify()` reports the
+ * so an untouched line re-serialises byte-identically.  `findPickGroups()` scans the
+ * whole prompt so an @PICK keyword list may span lines.  `classify()` reports the
  * *effective* A1111 weight ('((x))' -> 1.21, '[x]' -> 0.909) and `rebuild()` writes a
  * token back with a new weight / disabled flag - every user edit goes through it.
  * A keyword that starts with '@' is checked by `prompt-syntax.js`: a well formed
@@ -58,6 +59,91 @@ export function joinSegments(segments) {
   return segments.map((segment) => segment.lead + segment.body + segment.tail).join('');
 }
 
+/* ------------------------------------------------- multi-line @PICK groups
+ *
+ * The token model is line based, but the backend accepts an @PICK keyword list
+ * that spans lines.  Scan the whole prompt once so the editors can validate the
+ * opening line against the complete group instead of reporting a missing '}'.
+ */
+
+const PICK_GROUP_RE = /@pick[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
+
+function lineStarts(text) {
+  const starts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') starts.push(index + 1);
+  }
+  return starts;
+}
+
+function lineAtOffset(starts, offset) {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (starts[mid] <= offset) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+
+/**
+ * Locates every closed @PICK group in the full prompt (including groups whose
+ * keyword list spans lines).  Returns `{ start, end, headerEnd, openLine,
+ * openColumn, closeLine, multiline, raw, syntax }` objects in document order.
+ */
+export function findPickGroups(text) {
+  const source = String(text == null ? '' : text);
+  if (!source.includes('@')) return [];
+
+  const starts = lineStarts(source);
+  const groups = [];
+  PICK_GROUP_RE.lastIndex = 0;
+  let match;
+  while ((match = PICK_GROUP_RE.exec(source)) !== null) {
+    const start = match.index;
+    const openLine = lineAtOffset(starts, start);
+    const lineStart = starts[openLine];
+    // a directive inside a comment line is not active syntax
+    if (/^\s*#(?!\()/.test(source.slice(lineStart, start))) continue;
+
+    let depth = 1;
+    let index = PICK_GROUP_RE.lastIndex;
+    let close = -1;
+    while (index < source.length) {
+      const ch = source[index];
+      if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          close = index;
+          break;
+        }
+      }
+      index += 1;
+    }
+    if (close < 0) continue;
+
+    const end = close + 1;
+    const raw = source.slice(start, end);
+    const closeLine = lineAtOffset(starts, close);
+    groups.push({
+      start,
+      end,
+      headerEnd: match.index + match[0].length,
+      openLine,
+      openColumn: start - lineStart,
+      closeLine,
+      multiline: openLine !== closeLine,
+      raw,
+      syntax: analyzeAtSyntax(raw),
+    });
+    // nested @PICK directives belong to the outer keyword list
+    PICK_GROUP_RE.lastIndex = end;
+  }
+  return groups;
+}
+
 function colonWeight(inner) {
   let depth = 0;
   for (let index = inner.length - 1; index >= 0; index -= 1) {
@@ -100,15 +186,16 @@ function wrapperLevels(text, open, close) {
 }
 
 /** Classify a segment body -> { kind, text, weight, disabled }. */
-export function classify(body) {
+export function classify(body, syntaxOverride = null) {
   const text = String(body == null ? '' : body).trim();
   if (!text) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
   if (text === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
 
   // every keyword starting with '@' is a directive and must pass the grammar:
   // a well formed @PICK is a `pick` token, a broken directive an `at` token carrying
-  // the error (the chips and the CodeMirror decorations style it as broken)
-  const syntax = analyzeAtSyntax(text);
+  // the error (the chips and the CodeMirror decorations style it as broken).
+  // `syntaxOverride` is the already-validated full group for a multi-line @PICK header.
+  const syntax = syntaxOverride || analyzeAtSyntax(text);
   if (syntax) {
     return {
       kind: syntax.ok ? 'pick' : 'at',

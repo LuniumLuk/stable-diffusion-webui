@@ -48,7 +48,7 @@
  * loads lazily on first use; when that fails the caller keeps its plain textarea.
  */
 
-import { blockIsOff, classify, DEFAULT_WEIGHT, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
+import { blockIsOff, classify, DEFAULT_WEIGHT, findPickGroups, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
 // Namespace import on purpose: a browser that still runs a CACHED older copy of this
 // module must not break the whole editor just because a recent op was not there yet —
 // the long-standing names are destructured (present in every CM-era copy) and only the
@@ -285,6 +285,8 @@ export async function createPromptCM({
   /** Comment lines, `# ---` markers and disabled `#(...)` groups, from the document. */
   function buildDecorations(state) {
     const marks = [];
+    const text = state.doc.toString();
+    const pickGroups = new Map(findPickGroups(text).map((group) => [group.start, group]));
     for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
       const line = state.doc.line(lineNumber);
       const lineText = line.text;
@@ -306,7 +308,8 @@ export async function createPromptCM({
           const coreLead = segment.body.length - segment.body.trimStart().length;
           const from = line.from + bodyStart + coreLead;
           const to = from + core.length;
-          const token = classify(segment.body);
+          const group = pickGroups.get(from) || null;
+          const token = classify(segment.body, group ? group.syntax : null);
           if (token.disabled) marks.push(Decoration.mark({ class: 'pedit-cm-tok-off' }).range(from, to));
           if (token.syntax) {
             marks.push(Decoration.mark({ class: token.syntax.ok ? 'pedit-cm-tok-syntax' : 'pedit-cm-tok-syntax-error' }).range(from, to));
@@ -942,7 +945,7 @@ export async function createPromptCM({
             return canSearch ? closeSearchPanel(viewA) : false;
           } },
         ]),
-        closeBrackets({ brackets: ['(', '['] }),
+        closeBrackets({ brackets: ['(', '[', '{'] }),
         autocompletion({
           override: [completionSource],
           activateOnTyping: true,

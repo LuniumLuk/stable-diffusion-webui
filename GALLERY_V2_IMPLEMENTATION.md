@@ -141,6 +141,7 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
 - Narrow viewports keep the classic full-screen lightbox. Resizing while the viewer is open
   switches modes live; Escape/close returns to the drawer, a second Escape closes the
   drawer, and prev/next navigation plus wheel zoom and drag panning work in both modes.
+  Up/Down still endorse/dislike the open item instead of scrolling the page.
 
 ## Deferred by design (plan phases)
 

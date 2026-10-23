@@ -72,6 +72,7 @@
     selectMode: false,
     lastIndex: -1,
     detailKey: null,
+    detailMediaLeft: false, // detail drawer: preview on the left stage instead of in the panel
     busy: false,
     loadedOnce: false
   };
@@ -1283,6 +1284,7 @@
       var size = parseInt(prefs.pageSize, 10);
       if (size >= 12 && size <= 500) state.pageSize = size;
       if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
+      if (prefs.detailMediaLeft === true) state.detailMediaLeft = true;
     } catch (err) { /* ignore bad prefs */ }
   }
 
@@ -1291,7 +1293,8 @@
       window.localStorage.setItem(PREFS_KEY, JSON.stringify({
         pageMode: state.pageMode,
         pageSize: state.pageSize,
-        thumbSize: state.thumbSize
+        thumbSize: state.thumbSize,
+        detailMediaLeft: !!state.detailMediaLeft
       }));
     } catch (err) { /* ignore */ }
   }
@@ -1960,6 +1963,45 @@
       '</div>' + current + coverLine;
   }
 
+  // Two detail-drawer layouts, remembered in the UI prefs:
+  //   false -> the preview sits at the top of the right drawer (classic)
+  //   true  -> the preview fills the stage on the left, the drawer keeps the metadata
+  function detailMediaLeftActive() {
+    // on narrow windows the drawer takes almost the whole width, so keep the classic layout
+    return !!state.detailMediaLeft && window.innerWidth > 820;
+  }
+
+  function applyDetailMediaMode() {
+    var box = el('gv2-detail');
+    if (!box) return;
+
+    var left = detailMediaLeftActive();
+    var stage = box.querySelector('.gv2-detail-stage');
+    var wrap = box.querySelector('.gv2-detail-img-wrap');
+    var panel = box.querySelector('.gv2-detail-panel');
+    var body = box.querySelector('.gv2-detail-body');
+
+    if (wrap && stage && panel) {
+      var host = left ? stage : panel;
+      if (wrap.parentElement !== host) {
+        if (left) host.appendChild(wrap);
+        else panel.insertBefore(wrap, body || null);
+      }
+    }
+
+    box.classList.toggle('gv2-detail-media-left', left);
+    var toggle = el('gv2-detail-media-toggle');
+    if (toggle) {
+      toggle.classList.toggle('gv2-detail-media-toggle-on', left);
+      toggle.setAttribute('aria-pressed', left ? 'true' : 'false');
+      toggle.title = left
+        ? 'Preview on the left (click to show it in this panel)'
+        : 'Preview in this panel (click to show it on the left)';
+      if (state.detailMediaLeft && !left) toggle.title += ' - needs a wider window';
+      toggle.setAttribute('aria-label', toggle.title);
+    }
+  }
+
   function renderDetail(item) {
     var box = el('gv2-detail');
     if (!box) return;
@@ -1993,9 +2035,12 @@
     }).join('<br>');
     var expiry = expiryText(item);
     box.innerHTML =
+      '<div class="gv2-detail-stage"></div>' +
       '<div class="gv2-detail-panel">' +
         '<button id="gv2-detail-close" class="gv2-detail-close">\u00d7</button>' +
-        img +
+        '<button id="gv2-detail-media-toggle" class="gv2-detail-media-toggle" ' +
+          'title="Show the preview on the left">\u25a5</button>' +
+        '<div class="gv2-detail-img-wrap">' + img + '</div>' +
         '<div class="gv2-detail-body">' +
           (item.state !== 'trashed'
             ? '<div class="gv2-detail-fileops">' +
@@ -2048,8 +2093,24 @@
         '</div>' +
       '</div>';
     box.classList.remove('gv2-detail-hidden');
+    applyDetailMediaMode();
 
     el('gv2-detail-close').addEventListener('click', closeDetail);
+    var mediaToggle = el('gv2-detail-media-toggle');
+    if (mediaToggle) {
+      mediaToggle.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        state.detailMediaLeft = !state.detailMediaLeft;
+        savePrefs();
+        applyDetailMediaMode();
+      });
+    }
+    var detailStage = box.querySelector('.gv2-detail-stage');
+    if (detailStage) {
+      detailStage.addEventListener('click', function (ev) {
+        if (ev.target === detailStage) closeDetail();
+      });
+    }
     var detailImg = box.querySelector('.gv2-detail-img');
     if (detailImg) {
       detailImg.addEventListener('click', function () { openDetailViewer(item); });
@@ -2301,12 +2362,28 @@
       }
     });
     document.addEventListener('keydown', function (ev) {
-      // The fullscreen viewer owns the keyboard while a Gallery v2 image is open.
-      // `_lightboxHandled` covers the same-tick race: the viewer's own Escape
-      // handler clears gv2LightboxNav before this listener runs.
-      if (window.gv2LightboxNav || ev._lightboxHandled) return;
       var box = el('gv2-detail');
       var drawerOpen = box && !box.classList.contains('gv2-detail-hidden');
+
+      // The fullscreen viewer owns the keyboard while a Gallery v2 image is
+      // open, but the drawer's up/down rating shortcuts stay available so the
+      // browser does not scroll the page instead.
+      if (window.gv2LightboxNav) {
+        if (isTypingTarget(ev.target)) return;
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        if (ev.key === 'ArrowUp') {
+          ev.preventDefault();
+          if (!ev.repeat) detailApply('endorse');
+        } else if (ev.key === 'ArrowDown') {
+          ev.preventDefault();
+          if (!ev.repeat) detailApply('dislike');
+        }
+        return;
+      }
+
+      // `_lightboxHandled` covers the same-tick race: the viewer's own Escape
+      // handler clears gv2LightboxNav before this listener runs.
+      if (ev._lightboxHandled) return;
       if (ev.key === 'Escape') {
         if (drawerOpen) { closeDetail(); return; }
         if (state.selectMode) setSelectMode(false);
@@ -2330,6 +2407,8 @@
     // The split viewer is width-dependent: switching between the split stage
     // and the classic fullscreen lightbox must also work after a resize.
     window.addEventListener('resize', function () {
+      var detailBox = el('gv2-detail');
+      if (detailBox && !detailBox.classList.contains('gv2-detail-hidden')) applyDetailMediaMode();
       var nav = window.gv2LightboxNav;
       if (!nav) return;
       var split = detailSplitEnabled();

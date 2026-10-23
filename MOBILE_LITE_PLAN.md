@@ -440,7 +440,8 @@ grammar error) opens on demand only — right-click on desktop, tap on Mobile Li
 covers the prompt while typing. `prompt-parse.js` classifies a valid directive as `pick` and a
 broken one as `at`; `rebuild()` never wraps either in `(…)` or `#(…)`. The desktop chips editor
 (`javascript/promptEditor.js`) keeps a compact mirror of the analyzer, the same way it mirrors
-the token parser.
+the token parser. Multi-line keyword lists are supported: `findPickGroups()` scans the whole
+prompt so the opening line is validated against the complete group instead of a missing `}`.
 
 ### 13.3 Gallery card quick actions
 

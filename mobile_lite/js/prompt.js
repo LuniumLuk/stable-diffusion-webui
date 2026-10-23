@@ -26,7 +26,7 @@ import { api_ } from './api.js';
 import { el, toast } from './ui.js';
 import { on, persist, state } from './state.js';
 import { createPromptCM } from './prompt-cm.js';
-import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
+import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, findPickGroups, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
 import { syntaxHint } from './prompt-syntax.js';
 
 const WEIGHT_STEP = 0.05;
@@ -287,13 +287,26 @@ function createChipsField(key, placeholder, title) {
   expandButton.addEventListener('click', () => openTextEditor());
   window.addEventListener('resize', fitTextarea);
 
+  function pickGroupAt(groups, line, column) {
+    for (let i = 0; i < groups.length; i += 1) {
+      if (groups[i].openLine === line && groups[i].openColumn === column) return groups[i];
+    }
+    return null;
+  }
+
   function tokenAt(line, seg) {
     if (line === null || seg === null || line === undefined || seg === undefined) return null;
     const lines = value().split('\n');
     if (line < 0 || line >= lines.length) return null;
     const segments = splitSegments(displayContent(lines[line]));
     if (seg < 0 || seg >= segments.length) return null;
-    const token = classify(segments[seg].body);
+    let column = 0;
+    for (let i = 0; i < seg; i += 1) {
+      column += segments[i].lead.length + segments[i].body.length + segments[i].tail.length;
+    }
+    column += segments[seg].lead.length + (segments[seg].body.length - segments[seg].body.trimStart().length);
+    const group = pickGroupAt(findPickGroups(value()), line, column);
+    const token = classify(segments[seg].body, group ? group.syntax : null);
     token.line = line;
     token.seg = seg;
     return token;
@@ -311,10 +324,16 @@ function createChipsField(key, placeholder, title) {
 
   /** Broken '@' directives across the text (drives the ⚠ badge in the header). */
   function countSyntaxErrors() {
+    const groups = findPickGroups(value());
     let count = 0;
-    value().split('\n').forEach((line) => {
+    value().split('\n').forEach((line, lineIndex) => {
+      let cursor = 0;
       splitSegments(displayContent(line)).forEach((segment) => {
-        const token = classify(segment.body);
+        const bodyStart = cursor + segment.lead.length;
+        const coreStart = bodyStart + (segment.body.length - segment.body.trimStart().length);
+        cursor = bodyStart + segment.body.length + segment.tail.length;
+        const group = pickGroupAt(groups, lineIndex, coreStart);
+        const token = classify(segment.body, group ? group.syntax : null);
         if (token.syntax && !token.syntax.ok) count += 1;
       });
     });
@@ -541,7 +560,7 @@ function createChipsField(key, placeholder, title) {
     commit(lines.join('\n'));
   }
 
-  function lineNode(lineText, index, lines) {
+  function lineNode(lineText, index, lines, groups) {
     const commented = isCommentedLine(lineText);
     // a commented line shows its keywords without the leading '# ' - the gutter carries state;
     // displayContent also unwraps a line-weight group so per-keyword chips stay editable
@@ -567,12 +586,17 @@ function createChipsField(key, placeholder, title) {
     }
     // a folded line keeps one chip row that slides horizontally - the buttons stay reachable
     const chips = el('div', { class: 'pedit-chips' });
+    let cursor = 0;
     segments.forEach((segment, segIndex) => {
+      const bodyStart = cursor + segment.lead.length;
+      const coreStart = bodyStart + (segment.body.length - segment.body.trimStart().length);
+      cursor = bodyStart + segment.body.length + segment.tail.length;
       if (!segment.body.trim()) {
         if (segIndex < segments.length - 1) chips.append(el('span', { class: 'pedit-sep', text: ',' }));
         return;
       }
-      chips.append(chipNode(index, segIndex, classify(segment.body)));
+      const group = pickGroupAt(groups, index, coreStart);
+      chips.append(chipNode(index, segIndex, classify(segment.body, group ? group.syntax : null)));
     });
     row.append(chips);
     row.append(el('span', { class: 'pedit-fold-slot' }));
@@ -812,8 +836,9 @@ function createChipsField(key, placeholder, title) {
     }
 
     const lines = value().split('\n');
+    const groups = findPickGroups(value());
     const anchor = captureScrollAnchor();
-    body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines)));
+    body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines, groups)));
     queueMicrotask(() => { applyFolds(); restoreScrollAnchor(anchor); });
     if (!value().trim()) {
       body.append(el('div', {

@@ -60,6 +60,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
 - Prompt Editing, a way to change prompt mid-generation, say to start making a watermelon and switch to anime girl midway
 - Random pick, a way to let each generated image draw its keywords at random from a group
      - `@PICK{a, b, c}` picks one keyword, `@PICK(2){a, b, c}` picks two
+     - the keyword list may span multiple lines; the editors validate the complete group
      - every image of a batch draws again: batch count 16 means 16 draws
      - the draw is tied to the image seed, so reloading an image's parameters brings back the same keywords
      - keywords starting with `@` are checked and highlighted; right-click a directive (tap it in the mobile UI) for a hint with the N-of-M preview, broken syntax is marked in red with the reason

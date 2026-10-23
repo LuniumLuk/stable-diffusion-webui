@@ -13,7 +13,7 @@
  * and `caret` is where the selection should land afterwards (null = leave it alone).
  */
 
-import { blockBounds, classify, isBlockMarker, joinSegments, splitSegments, toggleBlockLines } from './prompt-parse.js';
+import { blockBounds, classify, findPickGroups, isBlockMarker, joinSegments, splitSegments, toggleBlockLines } from './prompt-parse.js';
 
 /* ------------------------------------------------------------------ line helpers */
 
@@ -101,6 +101,7 @@ export function tokenAt(text, pos) {
   const lineText = text.slice(start, end);
   const offset = pos - start;
   const segments = splitSegments(lineText);
+  const groups = findPickGroups(text);
   let cursor = 0;
   for (let seg = 0; seg < segments.length; seg += 1) {
     const { lead, body, tail } = segments[seg];
@@ -110,13 +111,15 @@ export function tokenAt(text, pos) {
     const coreFrom = bodyStart + coreLead;
     const coreTo = coreFrom + core.length;
     if (core && offset >= coreFrom && offset <= coreTo) {
+      const absoluteFrom = start + coreFrom;
+      const group = groups.find((candidate) => candidate.start === absoluteFrom) || null;
       return {
         line,
         seg,
         from: start + coreFrom,
         to: start + coreTo,
         text: core,
-        token: classify(body),
+        token: classify(body, group ? group.syntax : null),
       };
     }
     cursor = bodyStart + body.length + tail.length;
@@ -336,6 +339,7 @@ export function tokensInRange(text, from, to) {
   const clampedTo = Math.max(0, Math.min(to, text.length));
   const startLine = lineIndexAt(text, clampedFrom);
   const endLine = lineIndexAt(text, clampedTo);
+  const groups = findPickGroups(text);
   for (let line = startLine; line <= endLine; line += 1) {
     const bounds = lineBounds(text, line);
     const lineText = text.slice(bounds.start, bounds.end);
@@ -349,7 +353,15 @@ export function tokensInRange(text, from, to) {
       const coreFrom = bounds.start + bodyStart + coreLead;
       const coreTo = coreFrom + core.length;
       if (core && coreTo > clampedFrom && coreFrom < clampedTo) {
-        tokens.push({ line, seg, from: coreFrom, to: coreTo, text: core, token: classify(body) });
+        const group = groups.find((candidate) => candidate.start === coreFrom) || null;
+        tokens.push({
+          line,
+          seg,
+          from: coreFrom,
+          to: coreTo,
+          text: core,
+          token: classify(body, group ? group.syntax : null),
+        });
       }
       cursor = bodyStart + body.length + tail.length;
     }

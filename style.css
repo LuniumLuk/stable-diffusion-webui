@@ -4430,6 +4430,227 @@ body.resizing .resize-handle {
     cursor: crosshair !important;
 }
 
+/* ==== Inpaint batch mask panel - javascript/inpaintBatchMask.js ==== */
+
+/* the panel lives inside #img2maskimg now; the gradio host is only kept as a stable anchor */
+.img2img-batch-mask-host {
+    display: none;
+}
+
+.inpbatch-panel {
+    position: absolute;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color-primary, rgba(255, 255, 255, 0.08));
+    border-radius: 8px;
+    background: rgba(20, 20, 24, 0.9);
+    color: #eee;
+    font-size: 12px;
+    line-height: 1.35;
+    user-select: none;
+}
+
+.inpbatch-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.inpbatch-toggle {
+    padding: 4px 10px;
+    border: 1px solid var(--border-color-primary, #555);
+    border-radius: 6px;
+    background: var(--input-background-fill, rgba(255, 255, 255, 0.06));
+    color: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.inpbatch-toggle:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.inpbatch-toggle.inpbatch-on {
+    background: #2f7bd9;
+    border-color: #59a1f0;
+    color: #fff;
+    font-weight: 600;
+}
+
+.inpbatch-status {
+    opacity: 0.65;
+    font-size: 11px;
+}
+
+.inpbatch-body[hidden] {
+    display: none !important;
+}
+
+.inpbatch-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.inpbatch-btn {
+    padding: 3px 8px;
+    border: 1px solid var(--border-color-primary, #555);
+    border-radius: 6px;
+    background: var(--input-background-fill, rgba(255, 255, 255, 0.06));
+    color: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.inpbatch-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.inpbatch-btn.inpbatch-confirm {
+    border-color: #e05252;
+    background: rgba(224, 82, 82, 0.3);
+    color: #fff;
+}
+
+.inpbatch-order-hint {
+    text-align: right;
+    opacity: 0.55;
+    font-size: 10px;
+}
+
+/* outlines + order numbers of the masks that are not being edited */
+.inpbatch-ghost-border,
+.inpbatch-ghost-label {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    margin: auto;
+    pointer-events: none;
+    transform-origin: 0 0;
+}
+
+.inpbatch-ghost-border {
+    z-index: 17; /* above the SAM silhouette (16) */
+    animation: inpbatch-ghost-blink 1.3s ease-in-out infinite alternate;
+}
+
+.inpbatch-ghost-label {
+    z-index: 18;
+    opacity: 0.5;
+}
+
+@keyframes inpbatch-ghost-blink {
+    from {
+        opacity: 0.5;
+    }
+    to {
+        opacity: 0.08;
+    }
+}
+
+.inpbatch-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 260px;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+.inpbatch-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: var(--input-background-fill, rgba(255, 255, 255, 0.05));
+    cursor: pointer;
+}
+
+.inpbatch-item:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+}
+
+.inpbatch-item.inpbatch-active {
+    border-color: #59a1f0;
+    background: rgba(47, 123, 217, 0.22);
+}
+
+.inpbatch-num {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    line-height: 18px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--body-text-color-subdued, #9a9a9a);
+    font-size: 10px;
+    text-align: center;
+}
+
+.inpbatch-thumb {
+    flex: none;
+    display: block;
+    width: 38px;
+    height: 26px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    background-color: #2a2a2a;
+    background-image:
+        linear-gradient(45deg, #3a3a3a 25%, transparent 25%, transparent 75%, #3a3a3a 75%),
+        linear-gradient(45deg, #3a3a3a 25%, transparent 25%, transparent 75%, #3a3a3a 75%);
+    background-size: 10px 10px;
+    background-position: 0 0, 5px 5px;
+}
+
+.inpbatch-thumb-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.inpbatch-thumb-img.inpbatch-thumb-empty {
+    opacity: 0;
+}
+
+.inpbatch-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inpbatch-actions {
+    flex: none;
+    display: flex;
+    gap: 2px;
+}
+
+.inpbatch-actions .inpbatch-action {
+    padding: 1px 4px;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.inpbatch-hint {
+    opacity: 0.6;
+    font-size: 10px;
+    line-height: 1.35;
+}
+
 
 /* ==== Prompt editor (chips mode) - javascript/promptEditor.js ==== */
 
@@ -6347,6 +6568,79 @@ body.resizing .resize-handle {
     background: #0b1220;
     border-radius: 10px;
     cursor: zoom-in;
+}
+
+/* Detail drawer layouts (toggle in the drawer):
+   classic = preview inside the right panel, split = preview fills the left stage. */
+.gv2-detail-img-wrap {
+    /* keep the drawer's close/layout buttons clear of the preview */
+    margin-top: 34px;
+}
+
+.gv2-detail-stage {
+    display: none;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.gv2-detail.gv2-detail-media-left {
+    background: rgba(0, 0, 0, 0.82);
+}
+
+.gv2-detail.gv2-detail-media-left .gv2-detail-stage {
+    display: flex;
+}
+
+.gv2-detail.gv2-detail-media-left .gv2-detail-img-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    margin-top: 0;
+}
+
+.gv2-detail.gv2-detail-media-left .gv2-detail-img {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+/* the fullscreen viewer already fills the left side; keep only the drawer panel visible */
+.gv2-detail.gv2-detail-split .gv2-detail-stage {
+    display: none;
+}
+
+.gv2-detail-media-toggle {
+    position: absolute;
+    top: 8px;
+    right: 48px;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--gv2-line);
+    border-radius: 8px;
+    background: var(--gv2-panel);
+    color: var(--gv2-text);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 2;
+}
+
+.gv2-detail-media-toggle:hover {
+    border-color: var(--gv2-accent);
+}
+
+.gv2-detail-media-toggle.gv2-detail-media-toggle-on {
+    background: var(--gv2-accent);
+    border-color: var(--gv2-accent);
+    color: #062033;
 }
 
 .gv2-detail-body {

@@ -70,6 +70,11 @@ def test_tag_is_case_insensitive_and_allows_spaces():
     assert expand("@PICK ( 2 ) {a, b, c}").count(", ") == 1
 
 
+def test_keyword_lists_may_span_lines():
+    assert expand("@PICK(1){\n  red,\n  green\n}") in {"red", "green"}
+    assert expand("@PICK(2){\n  red,\n  green,\n  blue\n}").count(", ") == 1
+
+
 def test_broken_groups_stay_literal():
     assert expand("@PICK{a, b") == "@PICK{a, b"
     assert expand("@PICK{}") == "@PICK{}"

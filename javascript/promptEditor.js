@@ -262,20 +262,104 @@
         return syntax ? [syntax.headline].concat(syntax.details).filter(Boolean).join('\n') : '';
     }
 
+    /* ------------------------------------------------- multi-line @PICK groups
+     * Mirror of findPickGroups in mobile_lite/js/prompt-parse.js: the token model
+     * is line based, but an @PICK keyword list may span lines.  The opening line
+     * is validated against the whole group so it is not flagged as missing '}'.
+     */
+
+    const PICK_GROUP_RE = /@pick[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
+
+    function lineStartOffsets(text) {
+        const starts = [0];
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] === '\n') starts.push(i + 1);
+        }
+        return starts;
+    }
+
+    function lineForOffset(starts, offset) {
+        let low = 0;
+        let high = starts.length - 1;
+        while (low < high) {
+            const mid = (low + high + 1) >> 1;
+            if (starts[mid] <= offset) low = mid;
+            else high = mid - 1;
+        }
+        return low;
+    }
+
+    function findPickGroups(text) {
+        const source = text == null ? '' : String(text);
+        if (source.indexOf('@') < 0) return [];
+        const starts = lineStartOffsets(source);
+        const groups = [];
+        PICK_GROUP_RE.lastIndex = 0;
+        let match;
+        while ((match = PICK_GROUP_RE.exec(source)) !== null) {
+            const start = match.index;
+            const openLine = lineForOffset(starts, start);
+            const lineStart = starts[openLine];
+            if (/^\s*#(?!\()/.test(source.slice(lineStart, start))) continue;
+
+            let depth = 1;
+            let index = PICK_GROUP_RE.lastIndex;
+            let close = -1;
+            while (index < source.length) {
+                const ch = source[index];
+                if (ch === '{') depth++;
+                else if (ch === '}') {
+                    depth--;
+                    if (depth === 0) {
+                        close = index;
+                        break;
+                    }
+                }
+                index++;
+            }
+            if (close < 0) continue;
+
+            const end = close + 1;
+            const raw = source.slice(start, end);
+            const closeLine = lineForOffset(starts, close);
+            groups.push({
+                start: start,
+                end: end,
+                headerEnd: match.index + match[0].length,
+                openLine: openLine,
+                openColumn: start - lineStart,
+                closeLine: closeLine,
+                multiline: openLine !== closeLine,
+                raw: raw,
+                syntax: analyzeAtSyntax(raw),
+            });
+            PICK_GROUP_RE.lastIndex = end;
+        }
+        return groups;
+    }
+
+    function pickGroupAt(groups, line, column) {
+        for (let i = 0; i < groups.length; i++) {
+            if (groups[i].openLine === line && groups[i].openColumn === column) return groups[i];
+        }
+        return null;
+    }
+
     /**
      * Classify a segment body -> { kind, text, weight, disabled, syntax? }
      *   kind: 'plain' | 'paren' | 'bracket' | 'angle' | 'pick' | 'at'
      * The weight is the *effective* A1111 weight, so '((x))' is 1.21 and '[x]' is 0.909.
      * 'pick' is a well formed @PICK group, 'at' a broken '@' directive (see analyzeAtSyntax).
      */
-    function classify(body) {
+    function classify(body, syntaxOverride) {
         const t = body.trim();
         if (!t) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
 
         if (t === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
 
-        // every keyword starting with '@' is a directive and must pass the grammar
-        const syntax = analyzeAtSyntax(t);
+        // every keyword starting with '@' is a directive and must pass the grammar;
+        // syntaxOverride is the validated full group for a multi-line @PICK header
+        const syntax = syntaxOverride || analyzeAtSyntax(t);
         if (syntax) {
             return {
                 kind: syntax.ok ? 'pick' : 'at',
@@ -416,7 +500,13 @@
             if (line < 0 || line >= lines.length) return null;
             const segs = splitSegments(lines[line]);
             if (seg < 0 || seg >= segs.length) return null;
-            const info = classify(segs[seg].body);
+            let column = 0;
+            for (let i = 0; i < seg; i++) {
+                column += segs[i].lead.length + segs[i].body.length + segs[i].tail.length;
+            }
+            column += segs[seg].lead.length + (segs[seg].body.length - segs[seg].body.trimStart().length);
+            const group = pickGroupAt(findPickGroups(state.text), line, column);
+            const info = classify(segs[seg].body, group ? group.syntax : null);
             info.segIndex = seg;
             info.lineIndex = line;
             return info;
@@ -450,19 +540,24 @@
                 + '</span>';
         }
 
-        function lineHtml(line, index, lines) {
+        function lineHtml(line, index, lines, groups) {
             const commented = /^\s*#(?!\()/.test(line);
             // a commented line shows its keywords without the leading '# ' - the
             // gutter button carries the state and the raw text stays untouched
             const content = commented ? line.replace(/^(\s*)#\s?/, '$1') : line;
             const segs = splitSegments(content);
+            let cursor = 0;
             const chips = segs
                 .map((s, i) => {
+                    const bodyStart = cursor + s.lead.length;
+                    const coreStart = bodyStart + (s.body.length - s.body.trimStart().length);
+                    cursor = bodyStart + s.body.length + s.tail.length;
                     if (!s.body.trim()) {
                         // a bare separator (", a, b" or "a, , b") keeps its comma visible
                         return i < segs.length - 1 ? '<span class="pedit-sep">,</span>' : '';
                     }
-                    return chipHtml(index, i, classify(s.body));
+                    const group = pickGroupAt(groups, index, coreStart);
+                    return chipHtml(index, i, classify(s.body, group ? group.syntax : null));
                 })
                 .join('');
             const commentBtn = `<button type="button" class="pedit-gutter ${commented ? 'is-comment' : ''}" `
@@ -535,7 +630,8 @@
         function render() {
             closeSyntaxPop();
             const lines = state.text.split('\n');
-            const body = lines.map((l, i) => lineHtml(l, i, lines) + inputHtml(i)).join('');
+            const groups = findPickGroups(state.text);
+            const body = lines.map((l, i) => lineHtml(l, i, lines, groups) + inputHtml(i)).join('');
             const disabledCount = countDisabled();
             const syntaxErrors = countSyntaxErrors();
             const previous = root.querySelector('.pedit-body');
@@ -569,10 +665,16 @@
 
         /** Broken '@' directives across the text (drives the ⚠ badge in the header). */
         function countSyntaxErrors() {
+            const groups = findPickGroups(state.text);
             let n = 0;
-            state.text.split('\n').forEach((line) => {
+            state.text.split('\n').forEach((line, lineIndex) => {
+                let cursor = 0;
                 splitSegments(line).forEach((s) => {
-                    const token = classify(s.body);
+                    const bodyStart = cursor + s.lead.length;
+                    const coreStart = bodyStart + (s.body.length - s.body.trimStart().length);
+                    cursor = bodyStart + s.body.length + s.tail.length;
+                    const group = pickGroupAt(groups, lineIndex, coreStart);
+                    const token = classify(s.body, group ? group.syntax : null);
                     if (token.syntax && !token.syntax.ok) n++;
                 });
             });
@@ -1153,6 +1255,7 @@
         rebuild: rebuild,
         formatWeight: formatWeight,
         analyzeAtSyntax: analyzeAtSyntax,
+        findPickGroups: findPickGroups,
         syntaxHint: syntaxHint,
     };
 })();

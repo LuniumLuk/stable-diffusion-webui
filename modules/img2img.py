@@ -1,3 +1,6 @@
+import base64
+import io
+import json
 import os
 from contextlib import closing
 from pathlib import Path
@@ -149,7 +152,94 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
     return batch_results
 
 
-def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, *args):
+def decode_inpaint_batch_masks(payload: str) -> list:
+    """Decode the masks produced by the Inpaint tab's batch-mask layer panel.
+
+    The panel serializes ``{"enabled": bool, "masks": [data-url, ...]}``; the list order is the
+    order the masks must be applied in.
+    """
+    if not payload:
+        return []
+
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return []
+
+    if not isinstance(data, dict) or not data.get("enabled"):
+        return []
+
+    masks = []
+    for index, entry in enumerate(data.get("masks") or []):
+        if not isinstance(entry, str) or not entry:
+            continue
+
+        try:
+            raw = entry.split(",", 1)[1] if entry.startswith("data:") else entry
+            image = Image.open(io.BytesIO(base64.b64decode(raw)))
+            image.load()
+            mask = image.convert("RGBA")
+        except Exception:
+            print(f"Inpaint batch mask: layer {index + 1} could not be decoded, skipping it.")
+            continue
+
+        if mask.getchannel("A").getextrema()[1] == 0:
+            print(f"Inpaint batch mask: layer {index + 1} is empty, skipping it.")
+            continue
+
+        masks.append(mask)
+
+    return masks
+
+
+def process_inpaint_batch(p, masks, args):
+    """Inpaint every mask in order, feeding each result into the next mask as its input image."""
+    processing.fix_seed(p)
+
+    # Chaining needs a single result per mask to feed forward, so the batch settings are fixed.
+    p.n_iter = 1
+    p.batch_size = 1
+
+    state.job_count = len(masks)
+    current_image = p.init_images[0]
+    inpaint_full_res = p.inpaint_full_res
+    images_list = []
+    infotexts = []
+    last = None
+
+    for index, mask in enumerate(masks):
+        if state.interrupted or state.stopping_generation:
+            break
+
+        state.job = f"Batch mask {index + 1} out of {len(masks)}"
+
+        p.init_images = [current_image]
+        p.image_mask = mask
+        p.color_corrections = None
+        p.paste_to = None
+        p.inpaint_full_res = inpaint_full_res  # init() can switch this off for blank masks
+        p.extra_generation_params["Batch mask"] = f"{index + 1}/{len(masks)}"
+
+        proc = modules.scripts.scripts_img2img.run(p, *args)
+        if proc is None:
+            proc = process_images(p)
+
+        last = proc
+        if not proc or not proc.images:
+            break
+
+        position = min(proc.index_of_first_image, len(proc.images) - 1)
+        current_image = proc.images[position]
+        images_list.append(current_image)
+        infotexts.append(proc.infotexts[position] if position < len(proc.infotexts) else proc.info)
+
+    if last is None:
+        return None
+
+    return Processed(p, images_list=images_list, seed=last.seed, info=infotexts[0] if infotexts else "", subseed=last.subseed, infotexts=infotexts)
+
+
+def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, img2img_batch_mask_payload: str, *args):
     override_settings = create_override_settings_dict(override_settings_texts)
 
     is_batch = mode == 5
@@ -162,7 +252,8 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
         mask = None
     elif mode == 2:  # inpaint
         image, mask = init_img_with_mask["image"], init_img_with_mask["mask"]
-        mask = processing.create_binary_mask(mask)
+        if mask is not None:
+            mask = processing.create_binary_mask(mask)
     elif mode == 3:  # inpaint sketch
         image = inpaint_color_sketch
         orig = inpaint_color_sketch_orig or inpaint_color_sketch
@@ -222,8 +313,15 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
     if shared.opts.enable_console_prompts:
         print(f"\nimg2img: {prompt}", file=shared.progress_print_out)
 
+    batch_masks = decode_inpaint_batch_masks(img2img_batch_mask_payload) if mode == 2 else []
+
     with closing(p):
-        if is_batch:
+        if batch_masks:
+            assert image is not None, "No image to inpaint"
+            processed = process_inpaint_batch(p, batch_masks, args)
+            if processed is None:
+                processed = Processed(p, [], p.seed, "")
+        elif is_batch:
             if img2img_batch_source_type == "upload":
                 assert isinstance(img2img_batch_upload, list) and img2img_batch_upload
                 output_dir = ""

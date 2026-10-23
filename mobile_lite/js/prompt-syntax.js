@@ -6,6 +6,10 @@
  *
  *   @PICK{a, b, c}      draw 1 keyword at random for every image
  *   @PICK(2){a, b, c}   draw 2 keywords at random for every image
+ *   @PICK(2){
+ *     red,
+ *     blue
+ *   }                   keyword lists may span multiple lines
  *
  * `analyzeAtSyntax(body)` returns null for an ordinary keyword and otherwise
  *   {

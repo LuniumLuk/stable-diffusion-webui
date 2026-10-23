@@ -517,7 +517,7 @@ def _build_job_details(job) -> dict:
         # 27:batch_input_dir, 28:batch_output_dir, 29:batch_inpaint_mask_dir,
         # 30:override_settings, 31:batch_use_png_info, 32:batch_png_info_props,
         # 33:batch_png_info_dir, 34:batch_source_type, 35:batch_upload,
-        # 36+: custom_inputs
+        # 36:batch_mask_payload, 37+: custom_inputs
         if len(args) > 1:
             details["Prompt"] = _safe_detail_val(args[1])
         if len(args) > 2:

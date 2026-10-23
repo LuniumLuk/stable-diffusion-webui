@@ -54,6 +54,7 @@ module.exports = {
         onAfterUiUpdate: "readonly",
         onOptionsChanged: "readonly",
         onUiLoaded: "readonly",
+        onUiTabChange: "readonly",
         onUiUpdate: "readonly",
         uiCurrentTab: "writable",
         uiElementInSight: "readonly",
