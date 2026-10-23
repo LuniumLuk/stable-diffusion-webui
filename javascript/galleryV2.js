@@ -1892,6 +1892,7 @@
     window.gv2LightboxNav = {
       nav: function (offset) { navDetailViewer(offset); },
       split: split,
+      closeDetail: closeDetail,
       cleanup: function () { applyDetailSplit(false); }
     };
     detailViewerSrc(item, previewSrc, function (src) {
@@ -2112,9 +2113,11 @@
     box.innerHTML =
       '<div class="gv2-detail-stage"></div>' +
       '<div class="gv2-detail-panel">' +
-        '<button id="gv2-detail-close" class="gv2-detail-close">\u00d7</button>' +
-        '<button id="gv2-detail-media-toggle" class="gv2-detail-media-toggle" ' +
-          'title="Show the preview on the left">\u25a5</button>' +
+        '<div class="gv2-detail-head">' +
+          '<button id="gv2-detail-media-toggle" class="gv2-detail-media-toggle" ' +
+            'title="Show the preview on the left">\u25a5</button>' +
+          '<button id="gv2-detail-close" class="gv2-detail-close">\u00d7</button>' +
+        '</div>' +
         '<div class="gv2-detail-img-wrap">' + img + '</div>' +
         '<div class="gv2-detail-body">' +
           (item.state !== 'trashed'
@@ -2186,7 +2189,9 @@
     var detailStage = box.querySelector('.gv2-detail-stage');
     if (detailStage) {
       detailStage.addEventListener('click', function (ev) {
-        if (ev.target === detailStage) closeDetail();
+        // clicking the empty space around the preview leaves the drawer
+        if (ev.target && ev.target.closest && ev.target.closest('.gv2-detail-img')) return;
+        closeDetail();
       });
     }
     var detailImg = box.querySelector('.gv2-detail-img');

@@ -1492,7 +1492,7 @@ table.popup-table .link{
 #lightboxModal{
     display: none;
     position: fixed;
-    z-index: 1001;
+    z-index: 1151;
     left: 0;
     top: 0;
     width: 100%;
@@ -6516,7 +6516,7 @@ body.resizing .resize-handle {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
-    z-index: 1000;
+    z-index: 1150;
     display: flex;
     justify-content: flex-end;
 }
@@ -6526,7 +6526,7 @@ body.resizing .resize-handle {
 }
 
 .gv2-detail.gv2-detail-split {
-    z-index: 1002;
+    z-index: 1152;
     background: transparent;
     pointer-events: none;
 }
@@ -6547,9 +6547,6 @@ body.resizing .resize-handle {
 }
 
 .gv2-detail-close {
-    position: absolute;
-    top: 8px;
-    right: 10px;
     width: 30px;
     height: 30px;
     border-radius: 8px;
@@ -6557,8 +6554,10 @@ body.resizing .resize-handle {
     background: var(--gv2-panel);
     color: var(--gv2-text);
     font-size: 16px;
+    line-height: 1;
+    padding: 0;
     cursor: pointer;
-    z-index: 2;
+    flex: none;
 }
 
 .gv2-detail-img {
@@ -6572,9 +6571,14 @@ body.resizing .resize-handle {
 
 /* Detail drawer layouts (toggle in the drawer):
    classic = preview inside the right panel, split = preview fills the left stage. */
-.gv2-detail-img-wrap {
-    /* keep the drawer's close/layout buttons clear of the preview */
-    margin-top: 34px;
+.gv2-detail-head {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    /* sits below the global progress strip (24px) */
+    padding-top: 14px;
+    margin-bottom: 6px;
 }
 
 .gv2-detail-stage {
@@ -6600,7 +6604,7 @@ body.resizing .resize-handle {
     justify-content: center;
     width: 100%;
     height: 100%;
-    margin-top: 0;
+    pointer-events: none; /* empty space around the preview belongs to the stage (closes the drawer) */
 }
 
 .gv2-detail.gv2-detail-media-left .gv2-detail-img {
@@ -6609,6 +6613,7 @@ body.resizing .resize-handle {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
+    pointer-events: auto;
 }
 
 /* the fullscreen viewer already fills the left side; keep only the drawer panel visible */
@@ -6617,9 +6622,6 @@ body.resizing .resize-handle {
 }
 
 .gv2-detail-media-toggle {
-    position: absolute;
-    top: 8px;
-    right: 48px;
     width: 30px;
     height: 30px;
     padding: 0;
@@ -6630,7 +6632,7 @@ body.resizing .resize-handle {
     font-size: 14px;
     line-height: 1;
     cursor: pointer;
-    z-index: 2;
+    flex: none;
 }
 
 .gv2-detail-media-toggle:hover {
@@ -6933,7 +6935,7 @@ body.resizing .resize-handle {
     border-radius: 10px;
     padding: 8px 16px;
     font-size: 12.5px;
-    z-index: 1100;
+    z-index: 1160; /* above the detail drawer (1150/1152) and the fullscreen viewer (1151) */
     max-width: 70vw;
 }
 

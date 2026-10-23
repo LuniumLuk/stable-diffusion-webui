@@ -44,6 +44,21 @@ function _modalFitToViewport(img) {
     _modalApplyTransform();
 }
 
+// Background clicks close the viewer; when it was opened from a Gallery v2
+// detail drawer, they leave the drawer as well (the drawer is part of the
+// fullscreen split view).
+function closeModalFromBackdrop() {
+    const nav = window.gv2LightboxNav;
+    closeModal();
+    if (nav && typeof nav.closeDetail === 'function') {
+        try {
+            nav.closeDetail();
+        } catch (error) {
+            console.error('gallery detail close failed', error);
+        }
+    }
+}
+
 function _updateModalCompareButton() {
     const btn = gradioApp().getElementById('modalCompare');
     if (!btn) return;
@@ -474,7 +489,7 @@ onAfterUiUpdate(function() {
 document.addEventListener("DOMContentLoaded", function() {
     //const modalFragment = document.createDocumentFragment();
     const modal = document.createElement('div');
-    modal.onclick = closeModal;
+    modal.onclick = closeModalFromBackdrop;
     modal.id = "lightboxModal";
     modal.tabIndex = 0;
     modal.addEventListener('keydown', modalKeyHandler, true);
