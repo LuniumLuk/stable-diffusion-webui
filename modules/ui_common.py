@@ -35,6 +35,11 @@ def plaintext_to_html(text, classname=None):
     return f"<p class='{classname}'>{content}</p>" if classname else f"<p>{content}</p>"
 
 
+def quick_action_message(text, success=True):
+    """Log line for a quick action; javascript/outputPanelActions.js also pops it up as a banner."""
+    return plaintext_to_html(text, classname="quick-action-success" if success else "quick-action-error")
+
+
 def update_logfile(logfile_path, fields):
     """Update a logfile from old format to new format to maintain CSV integrity."""
     with open(logfile_path, "r", encoding="utf8", newline="") as file:
@@ -171,10 +176,10 @@ def endorse_current(js_data, images, index):
     try:
         data = json.loads(js_data)
     except Exception:
-        return plaintext_to_html("Endorse failed: could not parse generation info.")
+        return quick_action_message("Endorse failed: could not parse generation info.", success=False)
 
     if not images:
-        return plaintext_to_html("No image to endorse.")
+        return quick_action_message("No image to endorse.", success=False)
 
     idx = int(index or 0)
     if idx < 0 or idx >= len(images):
@@ -182,7 +187,7 @@ def endorse_current(js_data, images, index):
 
     infotexts = data.get("infotexts", [])
     if not infotexts:
-        return plaintext_to_html("No generation info available.")
+        return quick_action_message("No generation info available.", success=False)
 
     infotext_idx = idx if idx < len(infotexts) else 0
     infotext_str = infotexts[infotext_idx]
@@ -191,7 +196,7 @@ def endorse_current(js_data, images, index):
     try:
         image = image_from_url_text(images[idx])
     except Exception as e:
-        return plaintext_to_html(f"Endorse failed: could not read image: {e}")
+        return quick_action_message(f"Endorse failed: could not read image: {e}", success=False)
 
     # Save a permanent copy under <outdir_save>/endorsed/
     try:
@@ -204,7 +209,7 @@ def endorse_current(js_data, images, index):
         png_info.add_text("parameters", infotext_str)
         image.save(img_path, pnginfo=png_info)
     except Exception as e:
-        return plaintext_to_html(f"Endorse failed: could not save image: {e}")
+        return quick_action_message(f"Endorse failed: could not save image: {e}", success=False)
 
     try:
         edb.init_db()
@@ -223,10 +228,10 @@ def endorse_current(js_data, images, index):
             infotext=infotext_str,
         )
     except Exception as e:
-        return plaintext_to_html(f"Endorse failed (DB): {e}")
+        return quick_action_message(f"Endorse failed (DB): {e}", success=False)
 
     seed_disp = params.get("Seed", "?")
-    return plaintext_to_html(f"\u2b50 Endorsed! Seed: {seed_disp}")
+    return quick_action_message(f"\u2b50 Endorsed! Seed: {seed_disp}")
 
 
 @dataclasses.dataclass
@@ -237,6 +242,10 @@ class OutputPanel:
     html_log = None
     button_upscale = None
     button_quick_generate = None
+    button_stage = None
+    button_composer = None
+    stage_payload = None
+    stage_capture = None
 
 
 def create_output_panel(tabname, outdir, toprow=None):
@@ -275,12 +284,15 @@ def create_output_panel(tabname, outdir, toprow=None):
                     save = ToolButton('💾', elem_id=f'save_{tabname}', tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
                     save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
                     endorse_btn = ToolButton('\u2b50', elem_id=f'endorse_{tabname}', tooltip="Endorse this image – save a copy and record it in the starred gallery.")
+                    res.button_stage = ToolButton('➕', elem_id=f'{tabname}_stage', tooltip="Capture the current settings into an img2img stage.")
 
                 buttons = {
                     'img2img': ToolButton('🖼️', elem_id=f'{tabname}_send_to_img2img', tooltip="Send image and generation parameters to img2img tab."),
                     'inpaint': ToolButton('🎨️', elem_id=f'{tabname}_send_to_inpaint', tooltip="Send image and generation parameters to img2img inpaint tab."),
                     'extras': ToolButton('📐', elem_id=f'{tabname}_send_to_extras', tooltip="Send image and generation parameters to extras tab.")
                 }
+
+                res.button_composer = ToolButton('🧩', elem_id=f'{tabname}_send_to_composer', tooltip="Send the image to the Composer tab.")
 
                 if tabname == 'txt2img':
                     res.button_upscale = ToolButton('✨', elem_id=f'{tabname}_upscale', tooltip="Create an upscaled version of the current image using hires fix settings.")
@@ -305,6 +317,10 @@ def create_output_panel(tabname, outdir, toprow=None):
 
             if tabname != "extras":
                 download_files = gr.File(None, file_count="multiple", interactive=False, show_label=False, visible=False, elem_id=f'download_files_{tabname}')
+
+                # the ➕ quick action fills the payload and clicks this hidden button
+                res.stage_payload = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_stage_quick_payload')
+                res.stage_capture = gr.Button(visible=False, elem_id=f'{tabname}_stage_quick_capture')
 
                 with gr.Group():
                     res.infotext = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext")
@@ -337,8 +353,12 @@ def create_output_panel(tabname, outdir, toprow=None):
                         show_progress=False,
                     )
 
+                    def endorse_current_output(*args):
+                        # wrap_gradio_call_no_job() turns a plain string into a list of characters
+                        return [endorse_current(*args)]
+
                     endorse_btn.click(
-                        fn=call_queue.wrap_gradio_call_no_job(endorse_current),
+                        fn=call_queue.wrap_gradio_call_no_job(endorse_current_output),
                         _js="(x, y, z) => [x, y, selected_gallery_index()]",
                         inputs=[
                             res.generation_info,

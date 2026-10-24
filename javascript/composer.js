@@ -3875,6 +3875,58 @@
     }
   };
 
+  /**
+   * Load a single image into the Composer as a background layer.
+   * @param {string} src Any URL the browser can load (gallery /file= URL, data URL).
+   */
+  window.composer_load_from_url = async function (src) {
+    _composerLog('composer_load_from_url() src=' + (src ? String(src).slice(0, 120) : '(none)'));
+    window.composer_ensure_init();
+    const root = document.getElementById("composer_root");
+    if (!root || !root.__composer_state) {
+      throw new Error("composer is not ready");
+    }
+
+    // compose_from_payload() decodes base64 data URLs, so inline whatever we load
+    let dataUrl = src;
+    if (!String(src).startsWith("data:")) {
+      const resp = await fetch(src);
+      if (!resp.ok) throw new Error("fetch failed: " + resp.status);
+      const blob = await resp.blob();
+      dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("could not read the image"));
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    const canvas = root.querySelector("#composer_canvas");
+    const img = await new Promise((resolve, reject) => {
+      const probe = new Image();
+      probe.onload = () => resolve(probe);
+      probe.onerror = () => reject(new Error("could not load the image"));
+      probe.src = dataUrl;
+    });
+
+    const width = Math.max(1, Number(img.naturalWidth || img.width || (canvas && canvas.width) || 1));
+    const height = Math.max(1, Number(img.naturalHeight || img.height || (canvas && canvas.height) || 1));
+
+    let name = "Result Image";
+    try {
+      name = decodeURIComponent(String(src).split("?")[0]).split(/[\\/]/).pop() || name;
+    } catch (e) {
+      // keep the default name when the URL is not decodable
+    }
+
+    await root.__composer_state.restoreFromConfigJson(JSON.stringify({
+      width: width,
+      height: height,
+      background_color: null,
+      layers: [{ name: name, src: dataUrl, x: width / 2, y: height / 2, scale: 1, rot_deg: 0, mirror: false, opacity: 1, is_background: true }],
+    }));
+  };
+
   function bindCaptionClickToCopy() {
     const captionWrap = document.getElementById("composer_caption_output");
     if (!captionWrap) return;

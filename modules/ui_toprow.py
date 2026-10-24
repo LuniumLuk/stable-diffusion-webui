@@ -58,6 +58,7 @@ class Img2imgStageManager:
 
     def __init__(self):
         self.stages = {}  # name -> {field_key: value}
+        self.last_added_name = None
 
     def _next_default_name(self):
         i = 1
@@ -91,6 +92,7 @@ class Img2imgStageManager:
 
     def capture(self, payload, *values):
         """Store a new stage from the currently selected fields. Returns (list html, cleared payload)."""
+        self.last_added_name = None
         try:
             data = json.loads(payload or "{}")
         except Exception:
@@ -112,6 +114,7 @@ class Img2imgStageManager:
                 stage[key] = values[i]
 
         self.stages[name] = stage
+        self.last_added_name = name
         return self.list_html(), gr.update(value="")
 
     def drop(self, payload):

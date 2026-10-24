@@ -1115,6 +1115,20 @@ div#extras_scale_to_tab div.form{
     justify-content: center;
 }
 
+/* keep the eleven quick actions on a single row in the narrower result panel */
+#image_buttons_txt2img, #image_buttons_img2img {
+    gap: 0.3em;
+}
+
+/* feedback for quick actions (also popped up as banners by outputPanelActions.js) */
+.html-log .quick-action-success {
+    color: #22c55e;
+}
+
+.html-log .quick-action-error {
+    color: #ef4444;
+}
+
 .infotext {
     overflow-wrap: break-word;
 }
@@ -2070,30 +2084,100 @@ div.accordions > div.input-accordion.input-accordion-open{
 
 /* sticky right hand columns */
 
-#img2img_results, #txt2img_results, #extras_results {
+#extras_results {
     position: sticky;
     top: 0.5em;
 }
 
-/* Keep the txt2img prompt / Generate / Quick Generate row visible while the
-   long parameter list below it scrolls. */
-#txt2img_toprow {
-    position: sticky;
-    top: 0;
-    /* Gradio block labels are positioned with z-index: var(--layer-4) (40), so
-       the pinned row must outrank them instead of tying. */
-    z-index: 41;
-    /* Gradio's `.compact { background: transparent !important }` rule would
-       otherwise let the parameter list show through the pinned row. */
-    background: var(--background-fill-primary, #0b0f19) !important;
+/* Two column generation layout: parameters scroll in the left column while the
+   actions and the result preview stay pinned in the right one. The row height is
+   measured by javascript/desktopLayout.js, the splitter comes from
+   javascript/resizeHandle.js. */
+
+/* the parameter column is too narrow to keep the tools next to the styles
+   dropdown, so give the prompt tools a full line of their own */
+#txt2img_settings .toprow-compact-tools, #img2img_settings .toprow-compact-tools {
+    flex: 1 1 100%;
+    min-width: 0 !important;
+    max-width: none;
 }
 
-/* The result panel pins just below the sticky top row. The offset is measured
-   by javascript/desktopLayout.js. */
-#txt2img_results {
-    top: var(--txt2img-results-top, 0.5em);
-    max-height: calc(100vh - var(--txt2img-results-top, 0.5em) - 0.5em);
-    overflow-y: auto;
+/* the styles editor is a wide inline dialog; keep it inside the parameter column */
+#txt2img_settings .popup-dialog, #img2img_settings .popup-dialog {
+    width: 100%;
+    min-width: 0;
+}
+
+/* resizeHandle.js stacks the two columns below this width */
+@media screen and (min-width: 705px) {
+    #txt2img_generation_row, #img2img_generation_row {
+        grid-template-rows: minmax(0, 1fr);
+        align-items: stretch;
+        height: var(--generation-panel-height, auto);
+    }
+
+    #txt2img_settings, #img2img_settings {
+        overflow: hidden auto;
+        flex-wrap: nowrap;
+    }
+
+    #txt2img_results, #img2img_results {
+        position: static;
+        height: 100%;
+        max-height: none;
+        overflow: hidden;
+        flex-wrap: nowrap;
+    }
+
+    #txt2img_results_panel, #img2img_results_panel,
+    #txt2img_gallery_container, #img2img_gallery_container,
+    #txt2img_gallery_container > .styler, #img2img_gallery_container > .styler,
+    #txt2img_gallery, #img2img_gallery {
+        flex: 1 1 0%;
+        min-height: 0;
+    }
+
+    #txt2img_gallery_container > .styler, #img2img_gallery_container > .styler,
+    #txt2img_gallery, #img2img_gallery {
+        display: flex;
+        flex-direction: column;
+    }
+
+    #txt2img_gallery .grid-wrap, #img2img_gallery .grid-wrap {
+        flex: 1 1 auto;
+        min-height: 0;
+        max-height: none;
+        height: auto;
+        overflow-y: auto;
+    }
+
+    /* Fill the preview instead of using gradio's fixed 4 column grid;
+       desktopLayout.js derives the column count from the image count. */
+    #txt2img_gallery .grid-container, #img2img_gallery .grid-container {
+        height: 100%;
+        grid-template-columns: repeat(var(--generation-gallery-cols, 4), minmax(0, 1fr));
+        grid-template-rows: repeat(var(--generation-gallery-rows, 1), minmax(0, 1fr));
+        grid-auto-rows: minmax(0, 1fr);
+    }
+
+    #txt2img_gallery .thumbnail-lg > img, #img2img_gallery .thumbnail-lg > img {
+        object-fit: contain;
+    }
+
+    /* keep a long generation info from squeezing the preview away */
+    #txt2img_results_panel > .gradio-group:not(#txt2img_gallery_container),
+    #img2img_results_panel > .gradio-group:not(#img2img_gallery_container) {
+        flex: 0 1 auto;
+        max-height: 40%;
+        overflow-y: auto;
+    }
+
+    /* the staging list is an extra panel above the preview in img2img */
+    #img2img_staging_panel {
+        flex: 0 1 auto;
+        max-height: 30%;
+        overflow-y: auto;
+    }
 }
 
 /* Checkpoint selector host inside the Generation parameters column. */

@@ -229,7 +229,6 @@
     "extra_options_img2img": [],
     "extra_options_cols": 1,
     "extra_options_accordion": false,
-    "compact_prompt_box": false,
     "samplers_in_dropdown": true,
     "dimensions_and_batch_together": true,
     "sd_checkpoint_dropdown_use_short": false,

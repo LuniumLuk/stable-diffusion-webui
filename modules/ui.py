@@ -1,5 +1,6 @@
 import datetime
 import importlib
+import json
 import mimetypes
 import os
 import sys
@@ -289,14 +290,14 @@ def create_ui():
         return modules.img2img.img2img(id_task, request, *args)
 
     with gr.Blocks(analytics_enabled=False) as txt2img_interface:
-        toprow = ui_toprow.Toprow(is_img2img=False, is_compact=shared.opts.compact_prompt_box)
+        toprow = ui_toprow.Toprow(is_img2img=False, is_compact=True)
 
         dummy_component = gr.Label(visible=False)
 
         extra_tabs = gr.Tabs(elem_id="txt2img_extra_tabs", elem_classes=["extra-networks"])
         extra_tabs.__enter__()
 
-        with gr.Tab("Generation", id="txt2img_generation") as txt2img_generation_tab, ResizeHandleRow(equal_height=False):
+        with gr.Tab("Generation", id="txt2img_generation") as txt2img_generation_tab, ResizeHandleRow(equal_height=False, elem_id="txt2img_generation_row"):
             with ExitStack() as stack:
                 if shared.opts.txt2img_settings_accordion:
                     stack.enter_context(gr.Accordion("Open for Settings", open=False))
@@ -551,16 +552,28 @@ def create_ui():
 
         extra_tabs.__exit__()
 
+        # the img2img stage quick action can also stage the txt2img settings
+        txt2img_output_panel = output_panel
+        txt2img_stage_components = {
+            "prompt": toprow.prompt,
+            "negative_prompt": toprow.negative_prompt,
+            "cfg_scale": cfg_scale,
+            "width": width,
+            "height": height,
+            "batch_count": batch_count,
+            "batch_size": batch_size,
+        }
+
     scripts.scripts_current = scripts.scripts_img2img
     scripts.scripts_img2img.initialize_scripts(is_img2img=True)
 
     with gr.Blocks(analytics_enabled=False) as img2img_interface:
-        toprow = ui_toprow.Toprow(is_img2img=True, is_compact=shared.opts.compact_prompt_box)
+        toprow = ui_toprow.Toprow(is_img2img=True, is_compact=True)
 
         extra_tabs = gr.Tabs(elem_id="img2img_extra_tabs", elem_classes=["extra-networks"])
         extra_tabs.__enter__()
 
-        with gr.Tab("Generation", id="img2img_generation") as img2img_generation_tab, ResizeHandleRow(equal_height=False):
+        with gr.Tab("Generation", id="img2img_generation") as img2img_generation_tab, ResizeHandleRow(equal_height=False, elem_id="img2img_generation_row"):
             with ExitStack() as stack:
                 if shared.opts.img2img_settings_accordion:
                     stack.enter_context(gr.Accordion("Open for Settings", open=False))
@@ -953,10 +966,54 @@ def create_ui():
                 show_progress=False,
             )
 
+            def capture_stage(payload, *values):
+                """Store a stage and also log a line that the result panel turns into a banner."""
+                list_html, cleared = toprow.stage_manager.capture(payload, *values)
+                name = toprow.stage_manager.last_added_name
+                if name:
+                    message = ui_common.quick_action_message(f"\u2795 Stage {name} added")
+                else:
+                    message = ui_common.quick_action_message("Stage not added: nothing to capture", success=False)
+                return list_html, cleared, message
+
             toprow.staging_capture_btn.click(
-                fn=toprow.stage_manager.capture,
+                fn=capture_stage,
                 inputs=[toprow.staging_payload] + stage_field_components,
-                outputs=[toprow.staging_list_html, toprow.staging_payload],
+                outputs=[toprow.staging_list_html, toprow.staging_payload, output_panel.html_log],
+                show_progress=False,
+            )
+
+            # quick actions in the result panel: ➕ captures the current tab's settings
+            output_panel.stage_capture.click(
+                fn=capture_stage,
+                inputs=[output_panel.stage_payload] + stage_field_components,
+                outputs=[toprow.staging_list_html, output_panel.stage_payload, output_panel.html_log],
+                show_progress=False,
+            )
+
+            txt2img_stage_sample = scripts.scripts_txt2img.script('Sampler')
+            txt2img_stage_seed = scripts.scripts_txt2img.script('Seed')
+            txt2img_stage_components.update({
+                "steps": txt2img_stage_sample.steps,
+                "sampler_name": txt2img_stage_sample.sampler_name,
+                "scheduler": txt2img_stage_sample.scheduler,
+                "seed": txt2img_stage_seed.seed,
+            })
+            txt2img_stage_values = [txt2img_stage_components.get(key, dummy_component) for key in ui_toprow.IMG2IMG_STAGE_KEYS]
+
+            def capture_txt2img_stage(payload, *values):
+                # drop img2img-only fields the txt2img column has no component for
+                try:
+                    data = json.loads(payload or "{}")
+                except Exception:
+                    data = {}
+                data["fields"] = [key for key in data.get("fields", []) if key in txt2img_stage_components]
+                return capture_stage(json.dumps(data), *values)
+
+            txt2img_output_panel.stage_capture.click(
+                fn=capture_txt2img_stage,
+                inputs=[txt2img_output_panel.stage_payload] + txt2img_stage_values,
+                outputs=[toprow.staging_list_html, txt2img_output_panel.stage_payload, txt2img_output_panel.html_log],
                 show_progress=False,
             )
 
