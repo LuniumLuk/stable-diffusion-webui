@@ -1044,6 +1044,14 @@
     return !!p && p.wrap.contains(e.target);
   }
 
+  // true only when the pointer is over the picture itself, not over the empty space
+  // around it inside the editor; wheel/drag outside the picture must keep scrolling
+  function overImage(p, e) {
+    if (!p || !p.iface) return false;
+    const r = p.iface.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  }
+
   // true for the tool bar and the batch mask panel: overlays that must not pan/paint/zoom
   function inBar(p, e) {
     const bar = p && p.host && p.host.querySelector(".inpsam-bar");
@@ -1062,7 +1070,7 @@
         if (e.__inpsamSynthetic) return; // our own mask-sync stroke: let gradio process it
         const q = getParts();
         if (!q || inBar(q, e)) return;
-        if (e.button === 2 && inCanvas(q, e)) {
+        if (e.button === 2 && overImage(q, e)) {
           // right mouse: pan in every mode (also stops gradio from painting with RMB)
           e.preventDefault();
           e.stopPropagation();
@@ -1140,7 +1148,8 @@
       "wheel",
       (e) => {
         const q = getParts();
-        if (!q || inBar(q, e)) return;
+        // outside the picture the wheel belongs to the page (the parameter column)
+        if (!q || inBar(q, e) || !overImage(q, e)) return;
         e.preventDefault();
         e.stopPropagation();
         if (e.ctrlKey || e.altKey) {

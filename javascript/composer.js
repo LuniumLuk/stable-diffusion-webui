@@ -53,6 +53,9 @@
       cropSelection: null,
       cropPreview: null,
       brushLastPoint: null,
+      warpHover: null,
+      warpDrag: null,
+      warpRenderWarningShown: false,
       // ALT+right-drag resize state
       altResizeStartClientX: null,
       altResizeStartBrushSize: null,
@@ -108,6 +111,28 @@
     const toolLineBtn = root.querySelector("#composer_tool_line_btn");
     const toolPickerBtn = root.querySelector("#composer_tool_picker_btn");
     const toolCropBtn = root.querySelector("#composer_tool_crop_btn");
+    const toolWarpBtn = root.querySelector("#composer_tool_warp_btn");
+    const warpUi = {
+      modeGrid: root.querySelector("#composer_warp_mode_grid_btn"),
+      modePoints: root.querySelector("#composer_warp_mode_points_btn"),
+      modeLocal: root.querySelector("#composer_warp_mode_local_btn"),
+      gridSection: root.querySelector("#composer_warp_grid_section"),
+      pointsSection: root.querySelector("#composer_warp_points_section"),
+      localSection: root.querySelector("#composer_warp_local_section"),
+      gridSize: root.querySelector("#composer_warp_grid_size"),
+      pointsRadius: root.querySelector("#composer_warp_points_radius"),
+      pointsRadiusValue: root.querySelector("#composer_warp_points_radius_value"),
+      pointsClearBtn: root.querySelector("#composer_warp_points_clear_btn"),
+      localPushBtn: root.querySelector("#composer_warp_local_push_btn"),
+      localStretchBtn: root.querySelector("#composer_warp_local_stretch_btn"),
+      localRadius: root.querySelector("#composer_warp_local_radius"),
+      localRadiusValue: root.querySelector("#composer_warp_local_radius_value"),
+      localStrength: root.querySelector("#composer_warp_local_strength"),
+      localStrengthValue: root.querySelector("#composer_warp_local_strength_value"),
+      resetBtn: root.querySelector("#composer_warp_reset_btn"),
+      applyBtn: root.querySelector("#composer_warp_apply_btn"),
+      status: root.querySelector("#composer_warp_status"),
+    };
     const drawColorInput = root.querySelector("#composer_draw_color");
     const brushSizeInput = root.querySelector("#composer_brush_size");
     const brushSizeValue = root.querySelector("#composer_brush_size_value");
@@ -169,6 +194,7 @@
       line: toolLineBtn,
       picker: toolPickerBtn,
       crop: toolCropBtn,
+      warp: toolWarpBtn,
     };
     const flattenPaintBtn = root.querySelector("#composer_flatten_paint_btn");
     const useLctrlZoomBtn = root.querySelector('#composer_use_lctrl_zoom_btn');
@@ -180,6 +206,7 @@
       if (toolLineBtn) toolLineBtn.title = "Line (E / 3)";
       if (toolPickerBtn) toolPickerBtn.title = "Picker (R / I / 4)";
       if (toolCropBtn) toolCropBtn.title = "Crop (T / 5)";
+      if (toolWarpBtn) toolWarpBtn.title = "Warp (G / 7)";
     } catch (e) {
       // ignore environments that don't support setting title
     }
@@ -251,6 +278,7 @@
                 canvas.style.cursor = "crosshair";
                 break;
               case "crop":
+              case "warp":
                 canvas.style.cursor = "crosshair";
                 break;
               default:
@@ -600,6 +628,16 @@
       if (toolName !== "line") {
         state.linePreview = null;
       }
+      if (toolName === "warp") {
+        const warpLayer = getActiveWarpLayer();
+        if (warpLayer) {
+          ensureWarpState(warpLayer);
+        }
+        updateWarpUi();
+      } else {
+        state.warpHover = null;
+        state.warpDrag = null;
+      }
       updateToolUi();
       draw();
 
@@ -825,6 +863,31 @@
         return;
       }
 
+      if (record.type === "warp") {
+        if (!Warp) {
+          setStatus("Warp engine failed to load.");
+          return;
+        }
+        const target = state.layers.find((x) => x.id === record.layerId);
+        if (!target) {
+          setStatus("Undo failed (warp layer not found).");
+          return;
+        }
+        state.paintRedoStack.push(captureWarpRecord(target));
+        if (state.paintRedoStack.length > state.maxPaintHistory) {
+          state.paintRedoStack.shift();
+        }
+        target.warp = record.warp ? Warp.cloneWarp(record.warp) : null;
+        target._warpCache = null;
+        if (target.warp) {
+          target.warp.rev = (target.warp.rev || 0) + 1;
+        }
+        updateWarpUi();
+        draw();
+        setStatus("Undo warp edit.");
+        return;
+      }
+
       // Stroke snapshot: capture the current state of the layer it belongs to.
       const target = state.layers.find((x) => x.id === record.layerId);
       const current = target ? captureLayerSnapshot(target) : null;
@@ -889,6 +952,31 @@
         renderLayerList();
         draw();
         setStatus("Redo: generated layer restored.");
+        return;
+      }
+
+      if (record.type === "warp") {
+        if (!Warp) {
+          setStatus("Warp engine failed to load.");
+          return;
+        }
+        const target = state.layers.find((x) => x.id === record.layerId);
+        if (!target) {
+          setStatus("Redo failed (warp layer not found).");
+          return;
+        }
+        state.paintUndoStack.push(captureWarpRecord(target));
+        if (state.paintUndoStack.length > state.maxPaintHistory) {
+          state.paintUndoStack.shift();
+        }
+        target.warp = record.warp ? Warp.cloneWarp(record.warp) : null;
+        target._warpCache = null;
+        if (target.warp) {
+          target.warp.rev = (target.warp.rev || 0) + 1;
+        }
+        updateWarpUi();
+        draw();
+        setStatus("Redo warp edit.");
         return;
       }
 
@@ -998,6 +1086,9 @@
           opacity: ld.opacity !== undefined ? ld.opacity : 1,
           isBackground: ld.is_background || false,
           isPaintOverlay: ld.is_paint_overlay || false,
+          warp: null,
+          _warpCache: null,
+          _warpImageRev: 0,
         });
       }
 
@@ -1026,11 +1117,13 @@
       renderAssetList();
       fitCanvasToParent();
       syncCanvasSizeInputs();
+      updateWarpUi();
       draw();
       setStatus(`Config loaded: ${layers.length} layer(s), ${state.assets.length} asset(s) restored.`);
     }
 
     state.restoreFromConfigJson = restoreFromConfigJson;
+    state.getLayerExportSrc = warpCanvasToDataUrl;
 
     function fitCanvasToParent() {
       const wrap = root.querySelector("#composer_canvas_wrap");
@@ -1112,22 +1205,25 @@
 
     // Build (and cache) a preview copy of the layer with the current HSV
     // shifts applied. The original layer is never mutated.
-    function computeHsvPreviewCanvas(layer) {
-      if (!layer || !layer.img) return null;
+    function computeHsvPreviewCanvas(layer, sourceImg) {
+      const source = sourceImg || (layer && layer.img);
+      if (!layer || !source) return null;
       const hShift = Number(state.layerHsvHue) || 0;
       const sShift = Number(state.layerHsvSat) || 0;
       const vShift = Number(state.layerHsvVal) || 0;
+      const warpRev = layer.warp ? (layer.warp.rev || 0) : 0;
 
       const cache = state._hsvPreviewCache;
       if (cache && cache.layerId === layer.id && cache.src === layer.src
+        && cache.source === source && cache.warpRev === warpRev
         && cache.hShift === hShift && cache.sShift === sShift && cache.vShift === vShift) {
         return cache.canvas;
       }
 
       // Cap the preview resolution so huge layers stay responsive; drawLayer
       // upscales the preview canvas back to the layer's display size.
-      const srcW = Math.max(1, layer.img.width);
-      const srcH = Math.max(1, layer.img.height);
+      const srcW = Math.max(1, source.width);
+      const srcH = Math.max(1, source.height);
       const maxPreviewDim = 2048;
       const ratio = Math.min(1, maxPreviewDim / Math.max(srcW, srcH));
       const w = Math.max(1, Math.round(srcW * ratio));
@@ -1136,7 +1232,7 @@
       preview.width = w;
       preview.height = h;
       const pctx = preview.getContext("2d");
-      pctx.drawImage(layer.img, 0, 0, w, h);
+      pctx.drawImage(source, 0, 0, w, h);
 
       const imgData = pctx.getImageData(0, 0, w, h);
       const d = imgData.data;
@@ -1153,17 +1249,28 @@
       }
       pctx.putImageData(imgData, 0, 0);
 
-      state._hsvPreviewCache = { layerId: layer.id, src: layer.src, hShift, sShift, vShift, canvas: preview };
+      state._hsvPreviewCache = {
+        layerId: layer.id,
+        src: layer.src,
+        source: source,
+        warpRev,
+        hShift,
+        sShift,
+        vShift,
+        canvas: preview,
+      };
       return preview;
     }
 
-    // Image source used when drawing a layer: the HSV-previewed copy for the
-    // active layer while shifts are non-zero, otherwise the layer image itself.
+    // Image source used when drawing a layer: the warped copy, plus the
+    // HSV-previewed copy for the active layer while shifts are non-zero.
     function getLayerDrawImage(layer) {
+      const warped = getWarpedLayerCanvas(layer);
+      const source = warped || layer.img;
       if (layer === getActiveLayer() && hasLayerHsvPreview() && canEditLayer(layer)) {
-        return computeHsvPreviewCanvas(layer) || layer.img;
+        return computeHsvPreviewCanvas(layer, source) || source;
       }
-      return layer.img;
+      return source;
     }
 
     function drawLayer(layer) {
@@ -1287,6 +1394,7 @@
       drawLineOverlay(state.linePreview);
       drawCropOverlay(state.cropPreview || state.cropSelection);
       drawShiftSelectOverlay();
+      drawWarpOverlay();
     }
 
     function applyColorBackground(hexColor) {
@@ -1378,7 +1486,7 @@
         targetCtx.fillRect(0, 0, canvas.width, canvas.height);
       }
       for (const layer of state.layers) {
-        const img = layer.img;
+        const img = getWarpedLayerCanvas(layer) || layer.img;
         if (!img) continue;
         const { w, h } = getLayerSize(layer);
         targetCtx.save();
@@ -1827,6 +1935,10 @@
         item.textContent = label;
         item.onclick = () => {
           state.active = i;
+          if (state.tool === "warp" && canEditLayer(layer)) {
+            ensureWarpState(layer);
+          }
+          updateWarpUi();
           renderLayerList();
           draw();
         };
@@ -1919,6 +2031,8 @@
       nextCanvas.getContext("2d").drawImage(layer.img, 0, 0, nextCanvas.width, nextCanvas.height);
       layer.img = nextCanvas;
       layer.src = nextCanvas.toDataURL("image/png");
+      layer._warpImageRev = (layer._warpImageRev || 0) + 1;
+      layer._warpCache = null;
       layer.x = canvas.width / 2;
       layer.y = canvas.height / 2;
       layer.scale = 1;
@@ -2142,12 +2256,16 @@
       editCtx.drawImage(layer.img, 0, 0);
       layer.img = editable;
       layer.src = editable.toDataURL("image/png");
+      layer._warpImageRev = (layer._warpImageRev || 0) + 1;
+      layer._warpCache = null;
       return editable;
     }
 
     function updateLayerImageSource(layer, canvasEl) {
       layer.img = canvasEl;
       layer.src = canvasEl.toDataURL("image/png");
+      layer._warpImageRev = (layer._warpImageRev || 0) + 1;
+      layer._warpCache = null;
     }
 
     function imageLocalToWorld(layer, point) {
@@ -2264,6 +2382,21 @@
         return;
       }
 
+      // A warp changes the layer geometry, so bake it before cropping; the
+      // crop then operates on the warped pixels the user sees.
+      if (layer.warp && Warp && !Warp.warpIsIdentity(layer.warp)) {
+        const warped = getWarpedLayerCanvas(layer);
+        if (warped) {
+          pushPaintUndoSnapshot(layer);
+          const baked = document.createElement("canvas");
+          baked.width = Math.max(1, warped.width);
+          baked.height = Math.max(1, warped.height);
+          baked.getContext("2d").drawImage(warped, 0, 0);
+          updateLayerImageSource(layer, baked);
+          layer.warp = null;
+        }
+      }
+
       const sourceCanvas = ensureEditableLayerCanvas(layer);
       const cropped = document.createElement("canvas");
       cropped.width = cropW;
@@ -2284,6 +2417,618 @@
       state.cropPreview = null;
       draw();
       setStatus(`Cropped layer: ${layer.name}`);
+    }
+
+    // ── Warp tool ─────────────────────────────────
+    const Warp = window.ComposerWarp || null;
+    let warpRenderer = null;
+    let warpRendererChecked = false;
+
+    function clampWarp01(value) {
+      return value < 0 ? 0 : value > 1 ? 1 : value;
+    }
+
+    function getWarpRenderer() {
+      if (!Warp) return null;
+      if (!warpRendererChecked) {
+        warpRendererChecked = true;
+        try {
+          warpRenderer = Warp.createRenderer();
+        } catch (e) {
+          warpRenderer = null;
+        }
+      }
+      return warpRenderer;
+    }
+
+    function getActiveWarpLayer() {
+      if (state.active < 0) return null;
+      const layer = state.layers[state.active];
+      return layer && layer.img && canEditLayer(layer) ? layer : null;
+    }
+
+    function ensureWarpState(layer) {
+      if (!Warp || !layer) return null;
+      if (!layer.warp) {
+        layer.warp = Warp.createWarpState({
+          mode: "grid",
+          cols: 4,
+          rows: 4,
+          pointRadius: 0.3,
+          radius: 0.18,
+          strength: 1,
+          localMode: "push",
+        });
+      }
+      return layer.warp;
+    }
+
+    function getWarpedLayerCanvas(layer) {
+      if (!Warp || !layer || !layer.warp) return null;
+      if (Warp.warpIsIdentity(layer.warp)) return null;
+
+      const imageRev = layer._warpImageRev || 0;
+      const cache = layer._warpCache;
+      if (cache
+        && cache.rev === layer.warp.rev
+        && cache.srcImg === layer.img
+        && cache.imageRev === imageRev) {
+        return cache.canvas;
+      }
+
+      const renderer = getWarpRenderer();
+      if (!renderer) {
+        if (!state.warpRenderWarningShown) {
+          state.warpRenderWarningShown = true;
+          setStatus("Warp requires WebGL, which is not available in this browser.");
+        }
+        return null;
+      }
+
+      try {
+        const warped = Warp.renderWarped(renderer, layer.img, layer.warp, imageRev);
+        if (!warped) return null;
+
+        // The renderer owns a single GPU canvas that is reused for every
+        // layer, so copy the result into a per-layer canvas. Caching the GPU
+        // canvas directly would make warped layers overwrite each other.
+        const previous = layer._warpCache;
+        const out = previous && previous.canvas
+          && previous.canvas.width === warped.width
+          && previous.canvas.height === warped.height
+          ? previous.canvas
+          : document.createElement("canvas");
+        out.width = Math.max(1, warped.width);
+        out.height = Math.max(1, warped.height);
+        out.getContext("2d").drawImage(warped, 0, 0);
+
+        layer._warpCache = {
+          rev: layer.warp.rev,
+          srcImg: layer.img,
+          imageRev,
+          canvas: out,
+        };
+        return out;
+      } catch (e) {
+        console.warn("[composer] Warp render failed:", e);
+        setStatus("Warp render failed — check the browser console.");
+        return null;
+      }
+    }
+
+    // The cached warp canvas is always a 2D canvas, so it can be exported
+    // directly without touching the WebGL drawing buffer.
+    function warpCanvasToDataUrl(layer) {
+      const warped = getWarpedLayerCanvas(layer);
+      if (!warped) return layer ? layer.src : "";
+      return warped.toDataURL("image/png");
+    }
+
+    function captureWarpRecord(layer) {
+      return {
+        type: "warp",
+        layerId: layer.id,
+        warp: layer.warp ? Warp.cloneWarp(layer.warp) : null,
+      };
+    }
+
+    function pushWarpUndoSnapshot(layer) {
+      if (!Warp || !layer) return;
+      state.paintUndoStack.push(captureWarpRecord(layer));
+      if (state.paintUndoStack.length > state.maxPaintHistory) {
+        state.paintUndoStack.shift();
+      }
+      state.paintRedoStack = [];
+    }
+
+    function layerNormToCanvas(layer, u, v) {
+      const { w, h } = getLayerSize(layer);
+      return imageLocalToWorld(layer, {
+        x: (u - 0.5) * w,
+        y: (v - 0.5) * h,
+      });
+    }
+
+    function canvasPointToLayerNorm(layer, px, py) {
+      const { w, h } = getLayerSize(layer);
+      const local = toImageLocal(layer, px, py);
+      return {
+        u: clampWarp01(local.x / Math.max(1, w) + 0.5),
+        v: clampWarp01(local.y / Math.max(1, h) + 0.5),
+      };
+    }
+
+    function warpHandleHit(layer, warp, px, py) {
+      if (!warp) return null;
+      const tolerance = Math.max(6, uiPxToCanvas(10));
+
+      if (warp.mode === "grid") {
+        for (let r = 0; r < warp.grid.length; r++) {
+          for (let c = 0; c < warp.grid[r].length; c++) {
+            const handle = layerNormToCanvas(layer, warp.grid[r][c].x, warp.grid[r][c].y);
+            if (Math.hypot(handle.x - px, handle.y - py) <= tolerance) {
+              return { kind: "grid", r: r, c: c };
+            }
+          }
+        }
+        return null;
+      }
+
+      if (warp.mode === "points") {
+        const { w, h } = getLayerSize(layer);
+        const norm = canvasPointToLayerNorm(layer, px, py);
+        const index = Warp.findPointNear(warp, norm.u, norm.v, w, h, tolerance);
+        if (index >= 0) return { kind: "point", index: index };
+      }
+
+      return null;
+    }
+
+    function drawWarpOverlay() {
+      if (state.tool !== "warp") return;
+      const layer = getActiveWarpLayer();
+      if (!layer || !layer.warp) return;
+
+      const warp = layer.warp;
+      const { w, h } = getLayerSize(layer);
+      const lineWidth = Math.max(1, uiPxToCanvas(1.25));
+      const handleSize = Math.max(7, uiPxToCanvas(8));
+
+      ctx.save();
+      ctx.translate(layer.x, layer.y);
+      ctx.rotate(layer.rot);
+      ctx.scale(layer.mirror ? -1 : 1, 1);
+      ctx.lineJoin = "round";
+
+      const toLocal = (p) => ({
+        x: (p.x - 0.5) * w,
+        y: (p.y - 0.5) * h,
+      });
+
+      if (warp.mode === "grid") {
+        ctx.strokeStyle = "rgba(56,189,248,0.55)";
+        ctx.lineWidth = lineWidth;
+        for (let r = 0; r < warp.grid.length; r++) {
+          ctx.beginPath();
+          for (let c = 0; c < warp.grid[r].length; c++) {
+            const p = toLocal(warp.grid[r][c]);
+            if (c === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+        for (let c = 0; c < warp.cols + 1; c++) {
+          ctx.beginPath();
+          for (let r = 0; r < warp.rows + 1; r++) {
+            const p = toLocal(warp.grid[r][c]);
+            if (r === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+
+        for (let r = 0; r < warp.grid.length; r++) {
+          for (let c = 0; c < warp.grid[r].length; c++) {
+            const p = toLocal(warp.grid[r][c]);
+            const hovered = state.warpHover
+              && state.warpHover.kind === "grid"
+              && state.warpHover.r === r
+              && state.warpHover.c === c;
+            ctx.fillStyle = hovered ? "#f59e0b" : "#38bdf8";
+            ctx.strokeStyle = "rgba(15,23,42,0.9)";
+            ctx.lineWidth = Math.max(1, uiPxToCanvas(1));
+            ctx.beginPath();
+            ctx.rect(p.x - handleSize / 2, p.y - handleSize / 2, handleSize, handleSize);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+      } else if (warp.mode === "points") {
+        ctx.lineWidth = lineWidth;
+        for (let i = 0; i < warp.points.length; i++) {
+          const point = warp.points[i];
+          const anchor = toLocal({ x: point.x0, y: point.y0 });
+          const pos = toLocal({ x: point.x, y: point.y });
+
+          ctx.setLineDash([uiPxToCanvas(4), uiPxToCanvas(3)]);
+          ctx.strokeStyle = "rgba(226,232,240,0.4)";
+          ctx.beginPath();
+          ctx.arc(anchor.x, anchor.y, handleSize * 0.55, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          if (Math.abs(point.x - point.x0) > 1e-6 || Math.abs(point.y - point.y0) > 1e-6) {
+            ctx.strokeStyle = "rgba(56,189,248,0.4)";
+            ctx.beginPath();
+            ctx.moveTo(anchor.x, anchor.y);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+          }
+
+          const hovered = state.warpHover
+            && state.warpHover.kind === "point"
+            && state.warpHover.index === i;
+          ctx.fillStyle = hovered ? "#f59e0b" : "#22d3ee";
+          ctx.strokeStyle = "rgba(15,23,42,0.9)";
+          ctx.lineWidth = Math.max(1, uiPxToCanvas(1));
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, handleSize * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      } else if (warp.mode === "local") {
+        if (state.cursorClientX !== null && state.cursorClientY !== null) {
+          const cursor = clientToCanvas(state.cursorClientX, state.cursorClientY);
+          if (cursor) {
+            const local = toImageLocal(layer, cursor.x, cursor.y);
+            const radiusPx = warp.radius * Math.min(w, h);
+            ctx.strokeStyle = "rgba(56,189,248,0.85)";
+            ctx.lineWidth = lineWidth;
+            ctx.setLineDash([uiPxToCanvas(6), uiPxToCanvas(4)]);
+            ctx.beginPath();
+            ctx.arc(local.x, local.y, radiusPx, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            if (warp.localMode === "stretchY") {
+              ctx.strokeStyle = "rgba(245,158,11,0.85)";
+              ctx.beginPath();
+              ctx.moveTo(local.x - radiusPx, local.y);
+              ctx.lineTo(local.x + radiusPx, local.y);
+              ctx.stroke();
+            }
+          }
+        }
+      }
+
+      ctx.restore();
+    }
+
+    function updateWarpUi() {
+      const layer = getActiveWarpLayer();
+      const warp = layer && layer.warp ? layer.warp : null;
+      const mode = warp ? warp.mode : "grid";
+      const localMode = warp ? warp.localMode : "push";
+
+      if (warpUi.modeGrid) warpUi.modeGrid.classList.toggle("active", mode === "grid");
+      if (warpUi.modePoints) warpUi.modePoints.classList.toggle("active", mode === "points");
+      if (warpUi.modeLocal) warpUi.modeLocal.classList.toggle("active", mode === "local");
+      if (warpUi.localPushBtn) warpUi.localPushBtn.classList.toggle("active", localMode === "push");
+      if (warpUi.localStretchBtn) warpUi.localStretchBtn.classList.toggle("active", localMode === "stretchY");
+
+      if (warpUi.gridSection) warpUi.gridSection.style.display = mode === "grid" ? "grid" : "none";
+      if (warpUi.pointsSection) warpUi.pointsSection.style.display = mode === "points" ? "grid" : "none";
+      if (warpUi.localSection) warpUi.localSection.style.display = mode === "local" ? "grid" : "none";
+
+      const gridSize = warp ? warp.cols : 4;
+      if (warpUi.gridSize) warpUi.gridSize.value = String(gridSize);
+
+      const pointsPct = warp ? Math.round(warp.pointRadius * 100) : 30;
+      if (warpUi.pointsRadius) warpUi.pointsRadius.value = String(pointsPct);
+      if (warpUi.pointsRadiusValue) warpUi.pointsRadiusValue.textContent = `${pointsPct}%`;
+
+      const radiusPct = warp ? Math.round(warp.radius * 100) : 18;
+      if (warpUi.localRadius) warpUi.localRadius.value = String(radiusPct);
+      if (warpUi.localRadiusValue) warpUi.localRadiusValue.textContent = `${radiusPct}%`;
+
+      const strengthPct = warp ? Math.round(warp.strength * 100) : 100;
+      if (warpUi.localStrength) warpUi.localStrength.value = String(strengthPct);
+      if (warpUi.localStrengthValue) {
+        warpUi.localStrengthValue.textContent = `${(strengthPct / 100).toFixed(1)}×`;
+      }
+
+      if (warpUi.status) {
+        if (!Warp) {
+          warpUi.status.textContent = "Warp engine failed to load.";
+        } else if (!layer) {
+          warpUi.status.textContent = "Select an editable layer to warp.";
+        } else if (!warp) {
+          warpUi.status.textContent = "Warp tool ready — drag on the layer to start.";
+        } else if (mode === "grid") {
+          warpUi.status.textContent = `Grid ${warp.cols}×${warp.rows}: drag a vertex to deform.`;
+        } else if (mode === "points") {
+          warpUi.status.textContent = `${warp.points.length} control point(s): click to add, drag to move.`;
+        } else if (localMode === "stretchY") {
+          warpUi.status.textContent = "Stretch Y: drag up to lengthen, drag down to shorten.";
+        } else {
+          warpUi.status.textContent = "Push: drag on the layer to move pixels locally.";
+        }
+      }
+    }
+
+    function setWarpMode(mode) {
+      const layer = getActiveWarpLayer();
+      if (!layer) {
+        setStatus("Select an editable layer first.");
+        return;
+      }
+      const warp = ensureWarpState(layer);
+      if (!warp) return;
+      if (warp.mode !== mode) {
+        pushWarpUndoSnapshot(layer);
+        warp.mode = mode;
+        warp.rev = (warp.rev || 0) + 1;
+        layer._warpCache = null;
+      }
+      state.warpHover = null;
+      state.warpDrag = null;
+      updateWarpUi();
+      draw();
+    }
+
+    function setWarpLocalMode(mode) {
+      const layer = getActiveWarpLayer();
+      if (!layer) {
+        setStatus("Select an editable layer first.");
+        return;
+      }
+      const warp = ensureWarpState(layer);
+      if (!warp || warp.localMode === mode) return;
+      warp.localMode = mode;
+      updateWarpUi();
+      draw();
+    }
+
+    function resetActiveWarp() {
+      const layer = getActiveWarpLayer();
+      if (!layer || !layer.warp) {
+        setStatus("Select a warp layer first.");
+        return;
+      }
+      pushWarpUndoSnapshot(layer);
+      Warp.resetWarp(layer.warp);
+      layer._warpCache = null;
+      updateWarpUi();
+      draw();
+      setStatus("Warp reset.");
+    }
+
+    function applyActiveWarp() {
+      const layer = getActiveWarpLayer();
+      if (!layer || !layer.warp) {
+        setStatus("No warp to apply.");
+        return;
+      }
+      const warped = getWarpedLayerCanvas(layer);
+      if (!warped) {
+        setStatus("No warp deformation to apply.");
+        return;
+      }
+
+      pushPaintUndoSnapshot(layer);
+      const baked = document.createElement("canvas");
+      baked.width = Math.max(1, warped.width);
+      baked.height = Math.max(1, warped.height);
+      baked.getContext("2d").drawImage(warped, 0, 0);
+      updateLayerImageSource(layer, baked);
+      layer.warp = null;
+      state.warpHover = null;
+      state.warpDrag = null;
+
+      renderLayerList();
+      updateWarpUi();
+      draw();
+      setStatus(`Warp applied to ${layer.name}.`);
+    }
+
+    function captureWarpPointer(evt) {
+      try {
+        canvas.setPointerCapture(evt.pointerId);
+      } catch (e) {
+        // ignore pointer capture failures
+      }
+    }
+
+    function beginWarpInteraction(evt, p) {
+      if (!Warp) {
+        setStatus("Warp engine failed to load.");
+        return true;
+      }
+
+      let layer = getActiveWarpLayer();
+      if (!layer) {
+        const hit = getTopEditableLayerAt(p.x, p.y);
+        if (!hit) {
+          setStatus("Select an editable layer first.");
+          return true;
+        }
+        state.active = hit.index;
+        layer = hit.layer;
+        renderLayerList();
+      }
+
+      let warp = ensureWarpState(layer);
+      if (!warp) return true;
+      let handle = warpHandleHit(layer, warp, p.x, p.y);
+
+      // Clicking a different layer selects it, unless a handle of the active
+      // layer sits under the cursor.
+      if (!handle) {
+        const hit = getTopEditableLayerAt(p.x, p.y);
+        if (hit && hit.layer !== layer) {
+          state.active = hit.index;
+          layer = hit.layer;
+          renderLayerList();
+          warp = ensureWarpState(layer);
+          handle = warpHandleHit(layer, warp, p.x, p.y);
+        }
+      }
+      updateWarpUi();
+
+      if (warp.mode === "grid") {
+        if (!handle || handle.kind !== "grid") {
+          setStatus("Drag a grid vertex to deform the layer.");
+          return true;
+        }
+        pushWarpUndoSnapshot(layer);
+        state.dragMode = "warp_handle";
+        state.warpDrag = { layerId: layer.id, kind: "grid", r: handle.r, c: handle.c };
+        captureWarpPointer(evt);
+        draw();
+        return true;
+      }
+
+      if (warp.mode === "points") {
+        if (handle && handle.kind === "point") {
+          if (evt.altKey) {
+            pushWarpUndoSnapshot(layer);
+            Warp.removePoint(warp, handle.index);
+            layer._warpCache = null;
+            state.warpHover = null;
+            updateWarpUi();
+            draw();
+            setStatus("Control point removed.");
+            return true;
+          }
+          pushWarpUndoSnapshot(layer);
+          state.dragMode = "warp_point";
+          state.warpDrag = { layerId: layer.id, kind: "point", index: handle.index };
+          captureWarpPointer(evt);
+          return true;
+        }
+
+        if (!getDisplayBoundsHit(layer, p.x, p.y)) {
+          setStatus("Click inside the layer to add a control point.");
+          return true;
+        }
+
+        pushWarpUndoSnapshot(layer);
+        const norm = canvasPointToLayerNorm(layer, p.x, p.y);
+        const point = Warp.addPoint(warp, norm.u, norm.v);
+        layer._warpCache = null;
+        state.dragMode = "warp_point";
+        state.warpDrag = { layerId: layer.id, kind: "point", index: warp.points.indexOf(point) };
+        captureWarpPointer(evt);
+        updateWarpUi();
+        draw();
+        return true;
+      }
+
+      if (warp.mode === "local") {
+        if (!getDisplayBoundsHit(layer, p.x, p.y)) {
+          setStatus("Paint inside the layer to warp it.");
+          return true;
+        }
+        pushWarpUndoSnapshot(layer);
+        const norm = canvasPointToLayerNorm(layer, p.x, p.y);
+        state.dragMode = "warp_brush";
+        state.warpDrag = {
+          layerId: layer.id,
+          kind: "brush",
+          last: norm,
+          anchor: norm,
+        };
+        captureWarpPointer(evt);
+        return true;
+      }
+
+      return true;
+    }
+
+    function moveWarpDrag(p) {
+      const drag = state.warpDrag;
+      if (!drag) return;
+      const layer = state.layers.find((x) => x.id === drag.layerId);
+      if (!layer || !layer.warp) return;
+
+      if (drag.kind === "grid" || drag.kind === "point") {
+        const norm = canvasPointToLayerNorm(layer, p.x, p.y);
+        if (drag.kind === "grid") {
+          const row = layer.warp.grid[drag.r];
+          if (!row || !row[drag.c]) return;
+          row[drag.c] = { x: norm.u, y: norm.v };
+        } else {
+          const point = layer.warp.points[drag.index];
+          if (!point) return;
+          point.x = norm.u;
+          point.y = norm.v;
+        }
+        layer.warp.rev = (layer.warp.rev || 0) + 1;
+        layer._warpCache = null;
+        draw();
+        return;
+      }
+
+      if (drag.kind === "brush") {
+        const norm = canvasPointToLayerNorm(layer, p.x, p.y);
+        const { w, h } = getLayerSize(layer);
+        const changed = Warp.applyLocalDab(layer.warp, drag.last, norm, drag.anchor, w, h);
+        drag.last = norm;
+        if (changed) {
+          layer._warpCache = null;
+          draw();
+        }
+      }
+    }
+
+    function endWarpDrag() {
+      const drag = state.warpDrag;
+      state.warpDrag = null;
+      if (!drag) return;
+      const layer = state.layers.find((x) => x.id === drag.layerId);
+      if (!layer) return;
+      updateWarpUi();
+      if (drag.kind === "brush") {
+        setStatus(layer.warp && layer.warp.localMode === "stretchY"
+          ? "Local stretch applied. Drag up to lengthen or down to shorten."
+          : "Local warp applied.");
+      } else if (drag.kind === "point") {
+        setStatus(`Control points: ${layer.warp ? layer.warp.points.length : 0}.`);
+      } else {
+        setStatus("Grid warp updated.");
+      }
+    }
+
+    let warpHoverRaf = null;
+
+    function requestWarpOverlayDraw() {
+      if (warpHoverRaf) return;
+      warpHoverRaf = requestAnimationFrame(() => {
+        warpHoverRaf = null;
+        draw();
+      });
+    }
+
+    function updateWarpHover(p) {
+      const layer = getActiveWarpLayer();
+      if (!layer || !layer.warp) {
+        state.warpHover = null;
+        return;
+      }
+      const previous = state.warpHover;
+      const next = warpHandleHit(layer, layer.warp, p.x, p.y);
+      const changed = (!previous && next)
+        || (previous && !next)
+        || (previous && next && (previous.kind !== next.kind || previous.r !== next.r
+          || previous.c !== next.c || previous.index !== next.index));
+      state.warpHover = next;
+      if (canvas) {
+        canvas.style.cursor = next ? "move" : "crosshair";
+      }
+      // The local brush preview follows the cursor, and grid/point handles
+      // highlight on hover; repaint only when something visible changed.
+      if (layer.warp.mode === "local" || changed) {
+        requestWarpOverlayDraw();
+      }
     }
 
     function hitTest(px, py) {
@@ -2419,6 +3164,10 @@
       }
 
       const p = getMousePos(evt);
+
+      if (state.tool === "warp" && beginWarpInteraction(evt, p)) {
+        return;
+      }
 
       if (state.tool === "picker") {
         // Start a short-lived picker drag so we pick on pointerup. If the
@@ -2611,6 +3360,15 @@
 
       const p = getMousePos(evt);
 
+      if (state.dragMode === "warp_handle" || state.dragMode === "warp_point" || state.dragMode === "warp_brush") {
+        moveWarpDrag(p);
+        return;
+      }
+
+      if (state.tool === "warp") {
+        updateWarpHover(p);
+      }
+
       if (state.dragMode === "brush_select") {
         const selCanvas = ensureShiftSelectCanvas();
         const pt = { x: p.x, y: p.y };
@@ -2694,6 +3452,8 @@
         state.cropSelection = state.cropPreview;
         state.cropPreview = null;
         setStatus("Crop selection ready. Click Apply Crop to commit.");
+      } else if (state.dragMode === "warp_handle" || state.dragMode === "warp_point" || state.dragMode === "warp_brush") {
+        endWarpDrag();
       }
 
       else if (state.dragMode === "alt_resize_brush") {
@@ -2772,6 +3532,8 @@
       state.altResizeAccumDx = 0;
       state.linePreview = null;
       state.cropPreview = null;
+      state.warpDrag = null;
+      state.warpHover = null;
       hideColorPreview();
       hideSizePreview();
       try { updateToolUi(); } catch (e) {}
@@ -2869,7 +3631,8 @@
 
     window.addEventListener("keydown", (evt) => {
       const target = evt.target;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA"
+        || target.tagName === "SELECT" || target.isContentEditable)) {
         return;
       }
 
@@ -2910,6 +3673,10 @@
           return;
         } else if (key === "t" || key === "5") {
           setTool("crop");
+          evt.preventDefault();
+          return;
+        } else if (key === "g" || key === "7") {
+          setTool("warp");
           evt.preventDefault();
           return;
         } else if (key === "a") {
@@ -3161,6 +3928,117 @@
         setTool(toolName);
       });
     });
+
+    // ── Warp controls ─────────────────────────────
+    if (warpUi.modeGrid) {
+      warpUi.modeGrid.addEventListener("click", () => setWarpMode("grid"));
+    }
+    if (warpUi.modePoints) {
+      warpUi.modePoints.addEventListener("click", () => setWarpMode("points"));
+    }
+    if (warpUi.modeLocal) {
+      warpUi.modeLocal.addEventListener("click", () => setWarpMode("local"));
+    }
+
+    if (warpUi.gridSize) {
+      warpUi.gridSize.addEventListener("change", () => {
+        const size = Math.max(1, Math.min(16, parseInt(warpUi.gridSize.value, 10) || 4));
+        const layer = getActiveWarpLayer();
+        if (!layer || !Warp) {
+          updateWarpUi();
+          setStatus("Select an editable layer first.");
+          return;
+        }
+        const warp = ensureWarpState(layer);
+        if (!warp || (warp.cols === size && warp.rows === size)) return;
+        pushWarpUndoSnapshot(layer);
+        warp.cols = size;
+        warp.rows = size;
+        warp.grid = Warp.identityGrid(size, size);
+        warp.rev = (warp.rev || 0) + 1;
+        layer._warpCache = null;
+        updateWarpUi();
+        draw();
+        setStatus(`Warp grid: ${size} × ${size} (mesh reset).`);
+      });
+    }
+
+    if (warpUi.pointsRadius) {
+      warpUi.pointsRadius.addEventListener("input", () => {
+        const pct = Math.max(5, Math.min(80, Math.round(Number(warpUi.pointsRadius.value) || 30)));
+        if (warpUi.pointsRadiusValue) warpUi.pointsRadiusValue.textContent = `${pct}%`;
+        const layer = getActiveWarpLayer();
+        if (!layer || !Warp) return;
+        const warp = ensureWarpState(layer);
+        if (!warp) return;
+        warp.pointRadius = pct / 100;
+        warp.rev = (warp.rev || 0) + 1;
+        layer._warpCache = null;
+        draw();
+      });
+    }
+
+    if (warpUi.pointsClearBtn) {
+      warpUi.pointsClearBtn.addEventListener("click", () => {
+        const layer = getActiveWarpLayer();
+        if (!layer || !layer.warp) {
+          setStatus("Select a warp layer first.");
+          return;
+        }
+        if (layer.warp.points.length === 0) {
+          setStatus("No control points to clear.");
+          return;
+        }
+        pushWarpUndoSnapshot(layer);
+        layer.warp.points = [];
+        layer.warp.rev = (layer.warp.rev || 0) + 1;
+        layer._warpCache = null;
+        updateWarpUi();
+        draw();
+        setStatus("Control points cleared.");
+      });
+    }
+
+    if (warpUi.localPushBtn) {
+      warpUi.localPushBtn.addEventListener("click", () => setWarpLocalMode("push"));
+    }
+    if (warpUi.localStretchBtn) {
+      warpUi.localStretchBtn.addEventListener("click", () => setWarpLocalMode("stretchY"));
+    }
+
+    if (warpUi.localRadius) {
+      warpUi.localRadius.addEventListener("input", () => {
+        const pct = Math.max(2, Math.min(60, Math.round(Number(warpUi.localRadius.value) || 18)));
+        if (warpUi.localRadiusValue) warpUi.localRadiusValue.textContent = `${pct}%`;
+        const layer = getActiveWarpLayer();
+        if (!layer || !Warp) return;
+        const warp = ensureWarpState(layer);
+        if (!warp) return;
+        warp.radius = pct / 100;
+        draw();
+      });
+    }
+
+    if (warpUi.localStrength) {
+      warpUi.localStrength.addEventListener("input", () => {
+        const pct = Math.max(10, Math.min(200, Math.round(Number(warpUi.localStrength.value) || 100)));
+        if (warpUi.localStrengthValue) {
+          warpUi.localStrengthValue.textContent = `${(pct / 100).toFixed(1)}×`;
+        }
+        const layer = getActiveWarpLayer();
+        if (!layer || !Warp) return;
+        const warp = ensureWarpState(layer);
+        if (!warp) return;
+        warp.strength = pct / 100;
+      });
+    }
+
+    if (warpUi.resetBtn) {
+      warpUi.resetBtn.addEventListener("click", resetActiveWarp);
+    }
+    if (warpUi.applyBtn) {
+      warpUi.applyBtn.addEventListener("click", applyActiveWarp);
+    }
 
     if (drawColorInput) {
       drawColorInput.addEventListener("input", () => {
@@ -3554,6 +4432,7 @@
       if (!canEditLayer(state.layers[state.active])) return;
       state.layers.splice(state.active, 1);
       state.active = Math.min(state.active, state.layers.length - 1);
+      updateWarpUi();
       renderLayerList();
       draw();
     });
@@ -3585,6 +4464,7 @@
     updateLockModeUi();
     updateBgLockUi();
     updateToolUi();
+    updateWarpUi();
     renderAssetList();
     state.bindUploadInputs = bindUploadInputs;
 
@@ -3788,7 +4668,7 @@
       background_color: state.useColorBackground ? state.backgroundColor : null,
       layers: state.layers.map((l) => ({
         name: l.name,
-        src: l.src,
+        src: typeof state.getLayerExportSrc === "function" ? state.getLayerExportSrc(l) : l.src,
         x: l.x,
         y: l.y,
         scale: l.scale,

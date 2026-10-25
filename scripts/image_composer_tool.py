@@ -131,10 +131,10 @@ COMPOSER_HTML = """
 }
 .cmp-toggle-btn.active::before { content: "●  "; color: #22d3ee; }
 
-/* ── Tool grid (6 tools) ────────────────────── */
+/* ── Tool grid ──────────────────────────────── */
 .cmp-tool-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
 }
 .cmp-tool-btn {
@@ -256,6 +256,28 @@ COMPOSER_HTML = """
   min-width: 0;
 }
 #composer_hsv_s_filter, #composer_hsv_v_filter {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Warp panel ─────────────────────────────── */
+.cmp-warp-section { display: grid; gap: 6px; }
+.cmp-warp-hint {
+  font-size: 10px;
+  line-height: 1.35;
+  color: #64748b;
+}
+#composer_warp_grid_size {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 11px;
+  border: 1px solid var(--block-border-color, #334155);
+  border-radius: 5px;
+  background: var(--block-background-fill, #1e293b);
+  color: var(--body-text-color, #e2e8f0);
+}
+#composer_warp_points_radius, #composer_warp_local_radius, #composer_warp_local_strength {
   flex: 1;
   min-width: 0;
 }
@@ -571,6 +593,10 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                   title="Drag a crop region on the selected layer">
             <span class="cmp-tool-icon">&#8984;</span>Crop
           </button>
+          <button id="composer_tool_warp_btn"   type="button" class="cmp-tool-btn"
+                  title="Warp the selected layer with a grid, control points, or a local brush">
+            <span class="cmp-tool-icon">&#9638;</span>Warp
+          </button>
         </div>
 
         <div class="cmp-paint-panel">
@@ -594,6 +620,77 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
           <button id="composer_crop_cancel_btn" type="button" class="cmp-sm-btn"
                   title="Cancel the current crop selection">&#10005; Cancel</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ─ WARP ─────────────────────────────────── -->
+    <div class="composer-box">
+      <div class="cmp-box-header">Warp</div>
+      <div class="cmp-box-body">
+        <div class="cmp-hsv-mode-group">
+          <button id="composer_warp_mode_grid_btn" type="button" class="cmp-hsv-mode-btn active"
+                  title="Grid warp: drag mesh vertices">Grid</button>
+          <button id="composer_warp_mode_points_btn" type="button" class="cmp-hsv-mode-btn"
+                  title="Control point warp: click to add a point, drag to move it">Points</button>
+          <button id="composer_warp_mode_local_btn" type="button" class="cmp-hsv-mode-btn"
+                  title="Local warp: paint with a brush">Local</button>
+        </div>
+
+        <div id="composer_warp_grid_section" class="cmp-warp-section">
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Grid</span>
+            <select id="composer_warp_grid_size" title="Number of mesh cells">
+              <option value="2">2 &times; 2</option>
+              <option value="3">3 &times; 3</option>
+              <option value="4" selected>4 &times; 4</option>
+              <option value="6">6 &times; 6</option>
+              <option value="8">8 &times; 8</option>
+            </select>
+          </div>
+          <div class="cmp-warp-hint">Drag grid vertices to deform the layer. Changing the grid size resets the mesh.</div>
+        </div>
+
+        <div id="composer_warp_points_section" class="cmp-warp-section" style="display:none;">
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Influence</span>
+            <input id="composer_warp_points_radius" type="range" min="5" max="80" step="1" value="30"
+                   title="Falloff radius around each control point" />
+            <span id="composer_warp_points_radius_value" class="cmp-fval">30%</span>
+          </div>
+          <button id="composer_warp_points_clear_btn" type="button" class="cmp-sm-btn"
+                  title="Remove every control point">Clear Points</button>
+          <div class="cmp-warp-hint">Click the layer to add a control point, drag it to deform. Alt+click a point removes it.</div>
+        </div>
+
+        <div id="composer_warp_local_section" class="cmp-warp-section" style="display:none;">
+          <div class="cmp-hsv-mode-group" style="grid-template-columns:1fr 1fr;">
+            <button id="composer_warp_local_push_btn" type="button" class="cmp-hsv-mode-btn active"
+                    title="Push pixels along the brush stroke">Push</button>
+            <button id="composer_warp_local_stretch_btn" type="button" class="cmp-hsv-mode-btn"
+                    title="Stretch or squash the region vertically">Stretch Y</button>
+          </div>
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Radius</span>
+            <input id="composer_warp_local_radius" type="range" min="2" max="60" step="1" value="18"
+                   title="Brush radius (percent of the layer's smaller side)" />
+            <span id="composer_warp_local_radius_value" class="cmp-fval">18%</span>
+          </div>
+          <div class="cmp-paint-row">
+            <span class="cmp-flabel">Strength</span>
+            <input id="composer_warp_local_strength" type="range" min="10" max="200" step="5" value="100"
+                   title="Brush strength" />
+            <span id="composer_warp_local_strength_value" class="cmp-fval">1.0&times;</span>
+          </div>
+          <div class="cmp-warp-hint">Paint on the layer to deform it. Stretch Y: drag up to make the character taller, drag down to squash.</div>
+        </div>
+
+        <div class="cmp-crop-row">
+          <button id="composer_warp_reset_btn" type="button" class="cmp-sm-btn"
+                  title="Reset the warp on the selected layer">Reset Warp</button>
+          <button id="composer_warp_apply_btn" type="button" class="cmp-sm-btn"
+                  title="Bake the warp into the layer pixels">Apply Warp</button>
+        </div>
+        <div id="composer_warp_status" class="cmp-warp-hint">Select a layer, then choose the Warp tool.</div>
       </div>
     </div>
 
