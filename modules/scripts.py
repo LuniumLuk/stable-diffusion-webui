@@ -765,7 +765,23 @@ class ScriptRunner:
 
         return self.inputs
 
+    @staticmethod
+    def _is_dit_job(p) -> bool:
+        try:
+            from modules import backends
+
+            return backends.is_dit_job(p)
+        except Exception:
+            return False
+
     def run(self, p, *args):
+        if self._is_dit_job(p):
+            # selected scripts cannot run against a DiT backend; fall back to the
+            # normal pipeline, which dispatches the job to the sidecar
+            from modules import processing
+
+            return processing.process_images(p)
+
         script_index = args[0]
 
         if script_index == 0 or script_index is None:
@@ -818,6 +834,9 @@ class ScriptRunner:
         return [x.callback for x in self.ordered_callbacks(method_name)]
 
     def before_process(self, p):
+        if self._is_dit_job(p):
+            return
+
         for script in self.ordered_scripts('before_process'):
             try:
                 script_args = p.script_args[script.args_from:script.args_to]
@@ -826,6 +845,9 @@ class ScriptRunner:
                 errors.report(f"Error running before_process: {script.filename}", exc_info=True)
 
     def process(self, p):
+        if self._is_dit_job(p):
+            return
+
         for script in self.ordered_scripts('process'):
             try:
                 script_args = p.script_args[script.args_from:script.args_to]

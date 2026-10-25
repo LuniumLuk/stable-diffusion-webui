@@ -997,6 +997,16 @@ def strip_prompt_comments(text: str) -> str:
 
 
 def process_images(p: StableDiffusionProcessing) -> Processed:
+    # DiT backends (Anima) own their whole pipeline. Dispatch before any script or
+    # SD-loader code: extensions such as hypertile or ControlNet expect a loaded
+    # SD model and would fail on a DiT job.
+    from modules import backends
+    dit_model = backends.resolve(p)
+    if dit_model is not None:
+        _print_task_header(p)
+        p._start_time = time.perf_counter()
+        return backends.run(p, dit_model)
+
     if p.scripts is not None:
         p.scripts.before_process(p)
 

@@ -54,7 +54,16 @@ def refresh_unet_list():
 
 def list_checkpoint_tiles(use_short=False):
     import modules.sd_models
-    return modules.sd_models.checkpoint_tiles(use_short)
+    import modules.model_registry
+    from modules import shared
+
+    tiles = modules.sd_models.checkpoint_tiles(use_short)
+    try:
+        if getattr(shared.opts, "anima_enabled", True):
+            tiles = tiles + modules.model_registry.checkpoint_tiles()
+    except Exception:
+        pass
+    return tiles
 
 
 def refresh_checkpoints():

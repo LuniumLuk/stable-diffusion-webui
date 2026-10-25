@@ -1,7 +1,7 @@
 import os
 import gradio as gr
 
-from modules import localization, ui_components, shared_items, shared, interrogate, shared_gradio_themes, util, sd_emphasis
+from modules import localization, ui_components, shared_items, shared, interrogate, shared_gradio_themes, util, sd_emphasis, model_registry
 from modules.paths_internal import models_path, script_path, data_path, sd_configs_path, sd_default_config, sd_model_file, default_sd_model_file, extensions_dir, extensions_builtin_dir, default_output_dir  # noqa: F401
 from modules.shared_cmd_options import cmd_opts
 from modules.options import options_section, OptionInfo, OptionHTML, categories
@@ -436,6 +436,14 @@ options_templates.update(options_section(('postprocessing', "Postprocessing", "p
     'postprocessing_operation_order': OptionInfo([], "Postprocessing operation order", ui_components.DropdownMulti, lambda: {"choices": [x.name for x in shared_items.postprocessing_scripts()]}),
     'upscaling_max_images_in_cache': OptionInfo(5, "Maximum number of images in upscaling cache", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}),
     'postprocessing_existing_caption_action': OptionInfo("Ignore", "Action for existing captions", gr.Radio, {"choices": ["Ignore", "Keep", "Prepend", "Append"]}).info("when generating captions using postprocessing; Ignore = use generated; Keep = use original; Prepend/Append = combine both"),
+}))
+
+options_templates.update(options_section(('dit-backends', "DiT backends (Anima)", "sd"), {
+    "anima_enabled": OptionInfo(True, "Show Anima (DiT) models in the checkpoint list"),
+    "anima_text_encoder": OptionInfo(None, "Anima text encoder", gr.Dropdown, lambda: {"choices": model_registry.list_text_encoders()}, refresh=model_registry.invalidate_cache),
+    "anima_vae": OptionInfo(None, "Anima VAE", gr.Dropdown, lambda: {"choices": model_registry.list_vaes()}, refresh=model_registry.invalidate_cache),
+    "anima_server_port": OptionInfo(7866, "stable-diffusion.cpp sidecar port", gr.Number, {"precision": 0}),
+    "anima_flow_shift": OptionInfo(0.0, "Anima flow shift (0 = auto)", gr.Slider, {"minimum": 0.0, "maximum": 5.0, "step": 0.1}),
 }))
 
 options_templates.update(options_section((None, "Hidden options"), {

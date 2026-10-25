@@ -212,6 +212,14 @@ def apply_setting(key, value):
         return gr.update()
 
     if key == "sd_model_checkpoint":
+        from modules import model_registry
+
+        if model_registry.is_dit_title(value):
+            # DiT checkpoints are served by a sidecar; keep them away from the SD
+            # loader and from the checkpoint onchange (which would reload weights).
+            opts.data[key] = value
+            return gr.update(value=value)
+
         ckpt_info = sd_models.get_closet_checkpoint_match(value)
 
         if ckpt_info is not None:

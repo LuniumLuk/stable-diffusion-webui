@@ -237,6 +237,14 @@ def select_checkpoint():
     if checkpoint_info is not None:
         return checkpoint_info
 
+    if model_checkpoint:
+        from modules import model_registry
+
+        if model_registry.is_dit_title(model_checkpoint):
+            # DiT checkpoints are served by a sidecar; there is no SD model to select
+            # and no reason to fall back to an unrelated checkpoint.
+            return None
+
     if len(checkpoints_list) == 0:
         error_message = "No checkpoints found. When searching for checkpoints, looked at:"
         if shared.cmd_opts.ckpt is not None:
@@ -826,6 +834,9 @@ def get_obj_from_str(string, reload=False):
 def load_model(checkpoint_info=None, already_loaded_state_dict=None):
     from modules import sd_hijack
     checkpoint_info = checkpoint_info or select_checkpoint()
+    if checkpoint_info is None:
+        # DiT selection: the SD loader has nothing to do.
+        return None
 
     timer = Timer()
 
@@ -978,6 +989,15 @@ def reuse_model_from_already_loaded(sd_model, checkpoint_info, timer):
 
 
 def reload_model_weights(sd_model=None, info=None, forced_reload=False):
+    if info is None:
+        from modules import model_registry
+
+        if model_registry.is_dit_title(getattr(shared.opts, "sd_model_checkpoint", None)):
+            # DiT checkpoints are served by a sidecar; there is nothing for the SD
+            # loader to do, and falling back to another checkpoint would silently
+            # replace the user's selection.
+            return sd_model if sd_model is not None else model_data.sd_model
+
     checkpoint_info = info or select_checkpoint()
 
     timer = Timer()
