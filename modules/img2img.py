@@ -193,19 +193,24 @@ def decode_inpaint_batch_masks(payload: str) -> list:
 
 
 def process_inpaint_batch(p, masks, args):
-    """Inpaint every mask in order, feeding each result into the next mask as its input image."""
+    """Inpaint every mask in order, feeding each result into the next mask as its input image.
+
+    Only the final image of the chain is kept: the intermediate results exist to feed the next
+    mask, so they are neither saved to disk nor returned to the gallery.
+    """
     processing.fix_seed(p)
 
     # Chaining needs a single result per mask to feed forward, so the batch settings are fixed.
     p.n_iter = 1
     p.batch_size = 1
+    p.do_not_save_grid = True
 
     state.job_count = len(masks)
     current_image = p.init_images[0]
     inpaint_full_res = p.inpaint_full_res
-    images_list = []
-    infotexts = []
     last = None
+    last_infotext = ""
+    last_index = len(masks) - 1
 
     for index, mask in enumerate(masks):
         if state.interrupted or state.stopping_generation:
@@ -219,24 +224,24 @@ def process_inpaint_batch(p, masks, args):
         p.paste_to = None
         p.inpaint_full_res = inpaint_full_res  # init() can switch this off for blank masks
         p.extra_generation_params["Batch mask"] = f"{index + 1}/{len(masks)}"
+        p.do_not_save_samples = index < last_index  # only the final result is written to disk
 
         proc = modules.scripts.scripts_img2img.run(p, *args)
         if proc is None:
             proc = process_images(p)
 
-        last = proc
         if not proc or not proc.images:
             break
 
         position = min(proc.index_of_first_image, len(proc.images) - 1)
         current_image = proc.images[position]
-        images_list.append(current_image)
-        infotexts.append(proc.infotexts[position] if position < len(proc.infotexts) else proc.info)
+        last = proc
+        last_infotext = proc.infotexts[position] if position < len(proc.infotexts) else proc.info
 
     if last is None:
         return None
 
-    return Processed(p, images_list=images_list, seed=last.seed, info=infotexts[0] if infotexts else "", subseed=last.subseed, infotexts=infotexts)
+    return Processed(p, images_list=[current_image], seed=last.seed, info=last_infotext, subseed=last.subseed, infotexts=[last_infotext])
 
 
 def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, img2img_batch_mask_payload: str, *args):

@@ -4735,6 +4735,50 @@ body.resizing .resize-handle {
     line-height: 1.35;
 }
 
+/* right-click menu of the mask edit area */
+.inpbatch-menu {
+    position: absolute;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-sizing: border-box;
+    min-width: 180px;
+    padding: 4px;
+    border: 1px solid var(--border-color-primary, rgba(255, 255, 255, 0.12));
+    border-radius: 8px;
+    background: rgba(20, 20, 24, 0.96);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    color: #eee;
+    font-size: 12px;
+    user-select: none;
+}
+
+.inpbatch-menu-item {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    font-size: 12px;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.inpbatch-menu-item:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.inpbatch-menu-item.inpbatch-menu-danger {
+    color: #ff9a9a;
+}
+
+.inpbatch-menu-item.inpbatch-menu-armed {
+    background: rgba(224, 82, 82, 0.35);
+    color: #fff;
+}
+
 
 /* ==== Prompt editor (chips mode) - javascript/promptEditor.js ==== */
 
@@ -6991,6 +7035,49 @@ body.resizing .resize-handle {
 .gv2-ctx-sub {
     min-width: 232px;
     border-color: #0284c7;
+}
+
+.gv2-ctx-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+}
+
+.gv2-ctx-row .gv2-ctx-opt {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+}
+
+.gv2-ctx-row .gv2-ctx-star {
+    flex: none;
+    width: 30px;
+    padding: 0;
+    color: #64748b;
+    font-size: 14px;
+    line-height: 1;
+    text-align: center;
+}
+
+.gv2-ctx-row .gv2-ctx-star:hover {
+    background: rgba(251, 191, 36, 0.18);
+    color: #fbbf24;
+}
+
+.gv2-ctx-row.gv2-ctx-row-default .gv2-ctx-opt {
+    color: #bae6fd;
+    font-weight: 600;
+}
+
+.gv2-ctx-row.gv2-ctx-row-default .gv2-ctx-star {
+    color: #fbbf24;
+}
+
+.gv2-ctx-hint {
+    padding: 5px 10px 3px;
+    color: #64748b;
+    font-size: 11px;
+    text-align: center;
 }
 
 .gv2-detail-tagadd {

@@ -74,6 +74,7 @@
     detailKey: null,
     detailMediaLeft: false, // detail drawer: preview on the left stage instead of in the panel
     promptVariant: 'source', // 'source' or 'compiled' - which prompt the info panel shows / sends
+    sendDefaults: {}, // bare send action -> variation id used by a plain click
     busy: false,
     loadedOnce: false
   };
@@ -120,11 +121,59 @@
 
   var SEND_ACTIONS = [
     ['txt2img', '\u270E  txt2img', 'Apply the prompt + parameters to txt2img'],
-    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send only the image to img2img (right-click: prompt-only / image + prompt / send all)'],
-    ['inpaint', '\u{1F3A8}  Inpaint', 'Send only the image to inpaint (right-click: prompt-only / image + prompt / send all)'],
+    ['img2img', '\u{1F5BC}\uFE0F  Image', 'Send the image to img2img (right-click for send variations)'],
+    ['inpaint', '\u{1F3A8}  Inpaint', 'Send the image to inpaint (right-click for send variations)'],
     ['composer', '\u{1F9E9}  Composer', 'Open the image in the Composer tab'],
     ['censor', '\u{1F58A}\uFE0F  Censor', 'Open the image in the Censor panel']
   ];
+
+  // Variations of the bare send actions (img2img / inpaint). '' is "image only",
+  // which is also the built-in default for a plain click.
+  var SEND_ONLY_VALUES = ['', 'prompt', 'image_prompt', 'all'];
+  var SEND_ONLY_DEFS = [
+    ['', '\u{1F5BC}\uFE0F  Send image only', 'Image only',
+      'Send only the image \u2014 keep the current prompt and parameters'],
+    ['prompt', '\u270E  Send prompt + negative only', 'Prompt + negative only',
+      'Apply only the prompt and negative prompt \u2014 no image, no other settings'],
+    ['image_prompt', '\u{1F5BC}\uFE0F  Send image + prompt (no settings)', 'Image + prompt',
+      'Send the image AND apply the prompt + negative prompt \u2014 no other settings'],
+    ['all', '\u{1F4E6}  Send all (image + prompt + settings)', 'Image + prompt + settings',
+      'Send the image AND apply the prompt + parameters (the old full send)']
+  ];
+
+  function sendActionLabel(action) {
+    for (var i = 0; i < SEND_ACTIONS.length; i++) {
+      if (SEND_ACTIONS[i][0] === action) return SEND_ACTIONS[i][1].replace(/^\S+\s+/, '');
+    }
+    return action;
+  }
+
+  function sendOptionName(only) {
+    for (var i = 0; i < SEND_ONLY_DEFS.length; i++) {
+      if (SEND_ONLY_DEFS[i][0] === only) return SEND_ONLY_DEFS[i][2];
+    }
+    return '';
+  }
+
+  function sendActionTitle(action) {
+    var tip = action;
+    for (var i = 0; i < SEND_ACTIONS.length; i++) {
+      if (SEND_ACTIONS[i][0] === action) tip = SEND_ACTIONS[i][2];
+    }
+    if (bareSendAction(action)) tip += ' \u2014 plain click: ' + sendOptionName(sendDefaultOnly(action));
+    return tip;
+  }
+
+  function sendDefaultOnly(action) {
+    var only = state.sendDefaults[action];
+    return SEND_ONLY_VALUES.indexOf(only) > -1 ? only : '';
+  }
+
+  function setSendDefault(action, only) {
+    if (SEND_ONLY_VALUES.indexOf(only) < 0) return;
+    state.sendDefaults[action] = only;
+    savePrefs();
+  }
 
   function setGradioTextbox(elemId, value) {
     var host = gradioApp().querySelector('#' + elemId);
@@ -397,54 +446,83 @@
   // Right-click options for a send-to-img2img / send-to-inpaint entry: either
   // inject ONLY the image (keep prompt + parameters), send the image with the
   // item's prompt + negative prompt (no other settings), or apply ONLY the
-  // item's prompt + negative prompt (no image, no other settings).
-  function makeSendOptions(makeRun) {
-    return [
-      {
-        id: 'prompt',
-        label: '\u270E  Send prompt + negative only',
-        title: 'Apply only the prompt and negative prompt \u2014 no image, no other settings',
-        run: makeRun('prompt'),
-      },
-      {
-        id: 'image_prompt',
-        label: '\u{1F5BC}  Send image + prompt (no settings)',
-        title: 'Send the image AND apply the prompt + negative prompt \u2014 no other settings',
-        run: makeRun('image_prompt'),
-      },
-      {
-        id: 'all',
-        label: '\u{1F4E6}  Send all (image + prompt + settings)',
-        title: 'Send the image AND apply the prompt + parameters (the old full send)',
-        run: makeRun('all'),
-      },
-    ];
+  // item's prompt + negative prompt (no image, no other settings). Every row
+  // carries a star that makes that variation the default for a plain click.
+  function makeSendOptions(action, makeRun) {
+    return {
+      action: action,
+      options: SEND_ONLY_DEFS.map(function (def) {
+        return {
+          id: def[0],
+          label: def[1],
+          title: def[3],
+          run: makeRun(def[0]),
+        };
+      }),
+    };
   }
 
-  function openSendOptionsMenu(ev, options) {
-    closeCtxSub();
-    var sub = document.createElement('div');
-    sub.className = 'gv2-ctx gv2-ctx-sub';
-    options.forEach(function (opt) {
+  function renderSendOptions(sub, spec) {
+    var current = sendDefaultOnly(spec.action);
+    sub.textContent = '';
+    spec.options.forEach(function (opt) {
+      var isDefault = opt.id === current;
+      var row = document.createElement('div');
+      row.className = 'gv2-ctx-row' + (isDefault ? ' gv2-ctx-row-default' : '');
+
       var btn = document.createElement('button');
       btn.type = 'button';
+      btn.className = 'gv2-ctx-opt';
       btn.setAttribute('data-bare-send', opt.id);
       btn.textContent = opt.label;
       btn.title = opt.title;
-      sub.appendChild(btn);
+
+      var star = document.createElement('button');
+      star.type = 'button';
+      star.className = 'gv2-ctx-star';
+      star.setAttribute('data-send-default', opt.id);
+      star.textContent = isDefault ? '\u2605' : '\u2606';
+      star.title = isDefault
+        ? 'Default variation for a plain click on ' + sendActionLabel(spec.action)
+        : 'Set as the default for a plain click on ' + sendActionLabel(spec.action);
+
+      row.append(btn, star);
+      sub.appendChild(row);
     });
+
+    var hint = document.createElement('div');
+    hint.className = 'gv2-ctx-hint';
+    hint.textContent = '\u2606 sets the default for a plain click';
+    sub.appendChild(hint);
+  }
+
+  function openSendOptionsMenu(ev, spec) {
+    closeCtxSub();
+    var sub = document.createElement('div');
+    sub.className = 'gv2-ctx gv2-ctx-sub';
+    renderSendOptions(sub, spec);
     document.body.appendChild(sub);
     var w = sub.offsetWidth;
     var h = sub.offsetHeight;
     sub.style.left = Math.max(4, Math.min(ev.clientX, window.innerWidth - w - 6)) + 'px';
     sub.style.top = Math.max(4, Math.min(ev.clientY, window.innerHeight - h - 6)) + 'px';
     sub.addEventListener('click', function (e) {
+      var star = e.target.closest ? e.target.closest('[data-send-default]') : null;
+      if (star) {
+        e.preventDefault();
+        e.stopPropagation();
+        var only = star.getAttribute('data-send-default');
+        setSendDefault(spec.action, only);
+        renderSendOptions(sub, spec);
+        toast('Default for ' + sendActionLabel(spec.action) + ': ' + sendOptionName(only));
+        return;
+      }
       var pick = e.target.closest ? e.target.closest('[data-bare-send]') : null;
       if (!pick) return;
       closeCtxSub();
       var id = pick.getAttribute('data-bare-send');
-      for (var i = 0; i < options.length; i++) {
-        if (options[i].id === id) { options[i].run(); return; }
+      for (var i = 0; i < spec.options.length; i++) {
+        if (spec.options[i].id === id) { spec.options[i].run(); return; }
       }
     });
     _ctxSubEl = sub;
@@ -461,7 +539,7 @@
       btn.type = 'button';
       btn.setAttribute('data-send', def[0]);
       btn.textContent = def[1];
-      btn.title = def[2];
+      btn.title = sendActionTitle(def[0]);
       menu.appendChild(btn);
     });
     document.body.appendChild(menu);
@@ -473,7 +551,8 @@
       var btn = e.target.closest ? e.target.closest('[data-send]') : null;
       if (!btn) return;
       closeCtxMenu();
-      sendItemByKey(key, btn.getAttribute('data-send'));
+      var action = btn.getAttribute('data-send');
+      sendItemByKey(key, action, bareSendAction(action) ? { only: sendDefaultOnly(action) } : undefined);
     });
     menu.addEventListener('contextmenu', function (e) {
       var btn = e.target.closest ? e.target.closest('[data-send]') : null;
@@ -482,7 +561,7 @@
       if (!bareSendAction(action)) return;
       e.preventDefault();
       e.stopPropagation();
-      openSendOptionsMenu(e, makeSendOptions(function (only) {
+      openSendOptionsMenu(e, makeSendOptions(action, function (only) {
         return function () {
           closeCtxMenu();
           sendItemByKey(key, action, { only: only });
@@ -1350,6 +1429,12 @@
       if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
       if (prefs.detailMediaLeft === true) state.detailMediaLeft = true;
       if (prefs.promptVariant === 'compiled') state.promptVariant = 'compiled';
+      if (prefs.sendDefaults && typeof prefs.sendDefaults === 'object') {
+        ['img2img', 'inpaint'].forEach(function (action) {
+          var only = prefs.sendDefaults[action];
+          if (SEND_ONLY_VALUES.indexOf(only) > -1) state.sendDefaults[action] = only;
+        });
+      }
     } catch (err) { /* ignore bad prefs */ }
   }
 
@@ -1360,7 +1445,8 @@
         pageSize: state.pageSize,
         thumbSize: state.thumbSize,
         detailMediaLeft: !!state.detailMediaLeft,
-        promptVariant: state.promptVariant === 'compiled' ? 'compiled' : 'source'
+        promptVariant: state.promptVariant === 'compiled' ? 'compiled' : 'source',
+        sendDefaults: state.sendDefaults
       }));
     } catch (err) { /* ignore */ }
   }
@@ -2161,7 +2247,7 @@
             '<span class="gv2-row-hint">prompt: ' + (state.promptVariant === 'compiled' && hasCompiledPrompt(item) ? 'compiled' : 'source') + '</span></div>' +
             '<div class="gv2-detail-send">' +
               SEND_ACTIONS.map(function (def) {
-                return '<button class="gv2-btn gv2-btn-quiet" data-send-act="' + def[0] + '" title="' + esc(def[2]) + '">' + def[1] + '</button>';
+                return '<button class="gv2-btn gv2-btn-quiet" data-send-act="' + def[0] + '" title="' + esc(sendActionTitle(def[0])) + '">' + def[1] + '</button>';
               }).join('') +
             '</div>' +
           '</div>' +
@@ -2223,13 +2309,13 @@
     box.querySelectorAll('[data-send-act]').forEach(function (btn) {
       var act = btn.getAttribute('data-send-act');
       btn.addEventListener('click', function () {
-        sendItemTo(item, act);
+        sendItemTo(item, act, bareSendAction(act) ? { only: sendDefaultOnly(act) } : undefined);
       });
       if (bareSendAction(act)) {
         btn.addEventListener('contextmenu', function (e) {
           e.preventDefault();
           e.stopPropagation();
-          openSendOptionsMenu(e, makeSendOptions(function (only) {
+          openSendOptionsMenu(e, makeSendOptions(act, function (only) {
             return function () { sendItemTo(item, act, { only: only }); };
           }));
         });

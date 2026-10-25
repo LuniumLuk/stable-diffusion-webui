@@ -5,14 +5,17 @@
  * gutter left of the picture (below the SAM tool bar).
  *
  *   - Toggle "Batch mask" on to manage a list of masks: create, select (edit), duplicate,
- *     reorder, clear and delete them. Only the selected layer is present on the gradio sketch
- *     mask canvas, so all existing editing tools (brush, SAM pick, erase, undo) edit it.
+ *     reorder, delete one and delete all (leaving a single empty mask). Only the selected layer
+ *     is present on the gradio sketch mask canvas, so all existing editing tools (brush, SAM
+ *     pick, erase, undo) edit it.
  *   - Masks of the layers that are not being edited are overlaid on the picture as blinking
  *     outlines, with their processing order drawn in the middle (50% opacity).
+ *   - Right-clicking the mask edit area opens a menu with the mask actions (new, duplicate,
+ *     clear current, delete current, delete all).
  *   - On Generate the layers are serialized (in list order) into the hidden
  *     #img2img_batch_mask_payload textbox. The backend then inpaints each mask in order, using
- *     the result of the previous inpaint as the input image for the next one. When that
- *     finishes the last result is selected in the output gallery.
+ *     the result of the previous inpaint as the input image for the next one. Only the final
+ *     result of the chain is saved/shown; the intermediate steps are discarded.
  *
  * The layer data is kept as PNG data URLs (the sketch mask canvas alpha channel is the mask),
  * and is only ever written into the canvas on layer switches / image reloads. The gradio value
@@ -40,6 +43,7 @@
         applyToken: 0,
         ghostToken: 0,
         thumbEls: new Map(),
+        menuEl: null,
         progressHooked: false,
         pendingSelectLast: false,
         batchInitialSrc: null, // input image of the running batch-mask generation
@@ -269,41 +273,69 @@
         refreshGhosts();
     }
 
-    let clearConfirmTimer = null;
+    let deleteAllConfirmTimer = null;
 
-    function resetClearAllButton() {
+    function resetDeleteAllButton() {
         const panel = panelEl();
-        const button = panel ? panel.querySelector('[data-act="clear-all"]') : null;
+        const button = panel ? panel.querySelector('[data-act="delete-all"]') : null;
         if (!button) return;
         button.classList.remove("inpbatch-confirm");
-        button.textContent = "\u232B Clear all";
+        button.textContent = "\u232B Delete all";
     }
 
-    function clearAllLayers() {
+    function deleteAllLayers(confirmed) {
         const panel = panelEl();
-        const button = panel ? panel.querySelector('[data-act="clear-all"]') : null;
-        if (!state.layers.length) return;
+        const button = panel ? panel.querySelector('[data-act="delete-all"]') : null;
 
-        // two-step confirmation, so a stray click cannot wipe every mask
-        if (button && !button.classList.contains("inpbatch-confirm")) {
+        // two-step confirmation on the toolbar, so a stray click cannot wipe every mask
+        if (!confirmed && button && !button.classList.contains("inpbatch-confirm")) {
             button.classList.add("inpbatch-confirm");
-            button.textContent = "Confirm clear";
-            clearTimeout(clearConfirmTimer);
-            clearConfirmTimer = setTimeout(resetClearAllButton, 3000);
+            button.textContent = "Confirm delete";
+            clearTimeout(deleteAllConfirmTimer);
+            deleteAllConfirmTimer = setTimeout(resetDeleteAllButton, 3000);
             return;
         }
-        clearTimeout(clearConfirmTimer);
-        resetClearAllButton();
+        clearTimeout(deleteAllConfirmTimer);
+        resetDeleteAllButton();
 
-        state.layers.forEach((layer) => {
+        state.layers = [newLayer()];
+        state.activeId = state.layers[0].id;
+        state.canvasLayerId = null;
+        renderList();
+        updateChrome();
+        applyActiveLayer(true);
+        pushPayload(false); // the fresh mask is empty: clear the payload instead of capturing the blank canvas
+        refreshGhosts();
+    }
+
+    function clearActiveMask() {
+        const layer = state.enabled ? activeLayer() : null;
+        if (layer) {
             layer.dataUrl = "";
             layer.__ghost = null;
             updateThumb(layer);
-        });
-        state.canvasLayerId = null;
-        applyActiveLayer(true);
-        pushPayload(false); // layers are empty: clear the payload instead of capturing the blank canvas
-        refreshGhosts();
+            state.canvasLayerId = null;
+            applyActiveLayer(true);
+            pushPayload(false); // the layer is empty: clear the payload instead of capturing the blank canvas
+            refreshGhosts();
+            return;
+        }
+
+        const p = getParts();
+        if (!p) return;
+        const ctx = p.maskCanvas.getContext("2d");
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, p.maskCanvas.width, p.maskCanvas.height);
+        ctx.restore();
+        refreshSketch(true);
+        pushPayload(false);
+    }
+
+    function deleteActiveMask() {
+        const layer = state.enabled ? activeLayer() : null;
+        if (layer) deleteLayer(layer.id);
+        else clearActiveMask();
     }
 
     function setEnabled(enabled) {
@@ -628,6 +660,76 @@
         else if (action.dataset.act === "delete") deleteLayer(id);
     }
 
+    /* -------------------------------- mask edit area menu ---------------------------- */
+
+    function closeMenu() {
+        if (!state.menuEl) return;
+        state.menuEl.remove();
+        state.menuEl = null;
+    }
+
+    function menuItem(label, action, danger) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = `inpbatch-menu-item${danger ? " inpbatch-menu-danger" : ""}`;
+        item.textContent = label;
+        item.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (action(item) !== "keep") closeMenu();
+        });
+        return item;
+    }
+
+    function confirmDeleteAllFromMenu(item) {
+        if (item.dataset.armed !== "1") {
+            item.dataset.armed = "1";
+            item.textContent = "Confirm delete all";
+            item.classList.add("inpbatch-menu-armed");
+            return "keep";
+        }
+        deleteAllLayers(true);
+        return "close";
+    }
+
+    function showMenu(event) {
+        closeMenu();
+
+        const menu = document.createElement("div");
+        menu.className = "inpbatch-menu";
+        menu.append(
+            menuItem("\uFF0B New mask", () => {
+                if (!state.enabled) setEnabled(true);
+                addLayer();
+            }),
+            menuItem("\u29C9 Duplicate current mask", () => {
+                if (!state.enabled) setEnabled(true);
+                duplicateLayer();
+            }),
+            menuItem("\u232B Clear current mask", clearActiveMask),
+            menuItem("\u2715 Delete current mask", deleteActiveMask, true),
+            menuItem("\u26A0 Delete all masks", confirmDeleteAllFromMenu, true)
+        );
+        const host = app();
+        (host.body || host).appendChild(menu);
+
+        // keep the menu inside the viewport
+        const margin = 6;
+        const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - margin;
+        const maxTop = window.scrollY + document.documentElement.clientHeight - menu.offsetHeight - margin;
+        menu.style.left = `${Math.max(window.scrollX + margin, Math.min(event.pageX, maxLeft))}px`;
+        menu.style.top = `${Math.max(window.scrollY + margin, Math.min(event.pageY, maxTop))}px`;
+
+        state.menuEl = menu;
+    }
+
+    function closeMenuOnOutside(event) {
+        if (!state.menuEl) return;
+        const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+        if (path.length ? path.includes(state.menuEl) : state.menuEl.contains(event.target)) return;
+        closeMenu();
+    }
+
     function buildPanel() {
         const panel = document.createElement("div");
         panel.className = "inpbatch-panel";
@@ -640,16 +742,16 @@
         <div class="inpbatch-toolbar">
           <button type="button" class="inpbatch-btn" data-act="add" title="Create a new empty mask">+ New mask</button>
           <button type="button" class="inpbatch-btn" data-act="duplicate" title="Copy the selected mask">\u29C9 Duplicate</button>
-          <button type="button" class="inpbatch-btn" data-act="clear-all" title="Erase the painted content of every mask (layers are kept)">\u232B Clear all</button>
+          <button type="button" class="inpbatch-btn" data-act="delete-all" title="Delete every mask and keep a single empty one">\u232B Delete all</button>
         </div>
         <div class="inpbatch-order-hint">Applied top \u2192 bottom</div>
         <div class="inpbatch-list"></div>
-        <div class="inpbatch-hint">Generate applies masks top \u2192 bottom, each starting from the previous result. Outlines show the other layers.</div>
+        <div class="inpbatch-hint">Generate applies masks top \u2192 bottom, each starting from the previous result; only the final image is kept. Right-click the picture for mask actions.</div>
       </div>`;
         panel.querySelector("[data-act=toggle]").addEventListener("click", () => setEnabled(!state.enabled));
         panel.querySelector("[data-act=add]").addEventListener("click", addLayer);
         panel.querySelector("[data-act=duplicate]").addEventListener("click", duplicateLayer);
-        panel.querySelector("[data-act=clear-all]").addEventListener("click", clearAllLayers);
+        panel.querySelector("[data-act=delete-all]").addEventListener("click", () => deleteAllLayers(false));
         panel.querySelector(".inpbatch-list").addEventListener("click", onListClick);
         return panel;
     }
@@ -681,6 +783,10 @@
 
     /* ---------------------------------- sketch hooks --------------------------------- */
 
+    // right button press that may turn into a pan: the context menu only opens when the
+    // pointer did not move, so right-drag panning stays free of the mask menu
+    let rightPress = null;
+
     function bindSketchListeners() {
         const p = getParts();
         if (!p || p.root.dataset.inpbatchBound) return;
@@ -693,6 +799,33 @@
         };
         p.root.addEventListener("mouseup", onStrokeEnd, true);
         p.root.addEventListener("touchend", onStrokeEnd, true);
+
+        p.root.addEventListener("mousedown", (event) => {
+            if (event.button !== 2) return;
+            rightPress = {x: event.clientX, y: event.clientY, moved: false};
+        }, true);
+
+        p.root.addEventListener("mousemove", (event) => {
+            if (!rightPress || !(event.buttons & 2)) return;
+            if (Math.abs(event.clientX - rightPress.x) > 4 || Math.abs(event.clientY - rightPress.y) > 4) {
+                rightPress.moved = true;
+            }
+        }, true);
+
+        p.root.addEventListener("contextmenu", (event) => {
+            const press = rightPress;
+            rightPress = null;
+
+            const q = getParts();
+            if (!q || !event.target.closest) return;
+            if (event.target.closest(".inpsam-bar, .inpbatch-panel")) return;
+            const rect = q.maskCanvas.getBoundingClientRect();
+            if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (press && press.moved) return; // right-drag pans the canvas: not a menu request
+            showMenu(event);
+        });
 
         p.root.addEventListener(
             "click",
@@ -825,6 +958,12 @@
     function boot() {
         hookProgress();
         ensure();
+
+        document.addEventListener("mousedown", closeMenuOnOutside, true);
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closeMenu();
+        }, true);
+        document.addEventListener("wheel", () => closeMenu(), {capture: true, passive: true});
 
         window.inpaintBatchMask = {
             // used by the image viewer's "compare with input" button
