@@ -35,7 +35,6 @@ import base64
 import hashlib
 import io
 import json
-import math
 import os
 import re
 import threading
@@ -336,24 +335,29 @@ def _round_grid(value: float, multiple: int = 8) -> int:
 
 def _input_resize_plan(payload: dict, defaults: dict, source_w: int, source_h: int):
     """Target of the optional init-image pre-resize; ``None`` when disabled or a no-op."""
+    from modules import input_resize
+
     mode = str(payload.get("input_resize") or defaults.get("input_resize") or "off").strip().lower()
     if mode not in ("scale", "custom"):
         return None
 
     if mode == "scale":
-        factor = _clamp_float(payload.get("input_resize_scale"), 0.1, 4.0, defaults.get("input_resize_scale", 1.0))
-        width, height = _round_grid(source_w * factor), _round_grid(source_h * factor)
-        fit = "fill"  # the aspect ratio is preserved anyway
+        plan = input_resize.plan_resize(
+            source_w,
+            source_h,
+            "scale",
+            scale=_clamp_float(payload.get("input_resize_scale"), 0.1, 4.0, defaults.get("input_resize_scale", 1.0)),
+        )
     else:
-        width = _clamp_resolution(payload.get("input_resize_w"), _round_grid(source_w))
-        height = _clamp_resolution(payload.get("input_resize_h"), _round_grid(source_h))
-        fit = str(payload.get("input_resize_fit") or defaults.get("input_resize_fit") or "fill").strip().lower()
-        if fit not in ("fill", "stretch"):
-            fit = "fill"
-
-    if (width, height) == (source_w, source_h):
-        return None
-    return {"mode": mode, "width": width, "height": height, "fit": fit}
+        plan = input_resize.plan_resize(
+            source_w,
+            source_h,
+            "size",
+            width=_clamp_resolution(payload.get("input_resize_w"), _round_grid(source_w)),
+            height=_clamp_resolution(payload.get("input_resize_h"), _round_grid(source_h)),
+            fit=str(payload.get("input_resize_fit") or defaults.get("input_resize_fit") or "fill").strip().lower(),
+        )
+    return plan
 
 
 def _apply_input_resize(image, mask, payload: dict, defaults: dict):
@@ -364,36 +368,12 @@ def _apply_input_resize(image, mask, payload: dict, defaults: dict):
     targets fit by 'fill' (cover the box, center-crop; aspect kept) or 'stretch' (distort to the
     exact size). The mask gets the identical geometry, so painted regions stay aligned.
     """
+    from modules import input_resize
+
     plan = _input_resize_plan(payload, defaults, image.width, image.height)
-    if not plan:
+    if plan is None:
         return image, mask, None
-
-    target = (plan["width"], plan["height"])
-    crop = plan["mode"] == "custom" and plan["fit"] == "fill"
-    if crop:
-        downscale = max(target[0] / image.width, target[1] / image.height) < 1
-    else:
-        downscale = target[0] * target[1] < image.width * image.height
-    resample = _RESAMPLING.BOX if downscale else _RESAMPLING.LANCZOS
-    reducing_gap = 2.0 if downscale else None
-
-    def resize_one(item):
-        if crop:
-            ratio = max(target[0] / item.width, target[1] / item.height)
-            scaled = (max(1, math.ceil(item.width * ratio)), max(1, math.ceil(item.height * ratio)))
-            resized = item.resize(scaled, resample, reducing_gap=reducing_gap)
-            left = (resized.width - target[0]) // 2
-            top = (resized.height - target[1]) // 2
-            return resized.crop((left, top, left + target[0], top + target[1]))
-        return item.resize(target, resample, reducing_gap=reducing_gap)
-
-    detail = f"{image.width}x{image.height} -> {plan['width']}x{plan['height']} ({'area' if downscale else 'lanczos'}"
-    if plan["mode"] == "custom":
-        detail += ", aspect fill" if crop else ", stretch"
-    detail += ")"
-
-    resized_mask = resize_one(mask) if mask is not None else None
-    return resize_one(image), resized_mask, detail
+    return input_resize.resize_pair(image, mask, plan)
 
 
 # --------------------------------------------------------------------------- script args
