@@ -4867,6 +4867,27 @@ body.resizing .resize-handle {
     min-width: 0;
 }
 
+.inppose-extend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.inppose-extend input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 40px;
+}
+
+.inppose-extend-val {
+    flex: none;
+    min-width: 30px;
+    font-size: 10px;
+    text-align: right;
+    opacity: 0.7;
+}
+
 .inppose-radius input[type="range"] {
     flex: 1 1 auto;
     min-width: 40px;

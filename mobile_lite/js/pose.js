@@ -9,7 +9,11 @@ function clamp(value, min, max, fallback) {
   return Math.min(max, Math.max(min, numeric));
 }
 
-/** Arguments for ``alwayson['Pose inpaint'].args`` in the order the desktop script expects. */
+/**
+ * Arguments for ``alwayson['Pose inpaint'].args``, in the order the desktop script expects:
+ * enable, parts, radius px, denoise, steps, save intermediate, inpaint size, one pass per part,
+ * radius % of skeleton, hand/foot extend.
+ */
 export function poseInpaintArgs(params = {}) {
   const selected = new Set(Array.isArray(params.poseInpaintParts) ? params.poseInpaintParts : POSE_PARTS);
   const parts = POSE_PARTS.filter((part) => selected.has(part));
@@ -20,6 +24,10 @@ export function poseInpaintArgs(params = {}) {
     clamp(params.poseInpaintDenoise, 0, 1, 0.4),
     Math.round(clamp(params.poseInpaintSteps, 0, 150, 0)),
     Boolean(params.poseInpaintSaveIntermediate),
+    Math.round(clamp(params.poseInpaintSize, 256, 2048, 1024) / 64) * 64,
+    params.poseInpaintSeparate !== false,
+    Math.round(clamp(params.poseInpaintRadiusPercent, 0, 25, 5) * 2) / 2,
+    Math.round(clamp(params.poseInpaintExtend, 0, 2, 0.5) * 20) / 20,
   ];
 }
 
@@ -29,5 +37,8 @@ export function poseInpaintSummary(params = {}) {
   const selected = Array.isArray(params.poseInpaintParts) ? params.poseInpaintParts : POSE_PARTS;
   const count = POSE_PARTS.filter((part) => selected.includes(part)).length;
   if (!count) return 'Pose (no parts)';
-  return `Pose ${count}p r${Math.round(clamp(params.poseInpaintRadius, 8, 400, 40))}`;
+  const percent = Math.round(clamp(params.poseInpaintRadiusPercent, 0, 25, 5) * 2) / 2;
+  const size = Math.round(clamp(params.poseInpaintSize, 256, 2048, 1024) / 64) * 64;
+  const radius = percent > 0 ? `${percent}%` : `${Math.round(clamp(params.poseInpaintRadius, 8, 400, 40))}px`;
+  return `Pose ${count}p r${radius} \u00B7 ${size}px`;
 }

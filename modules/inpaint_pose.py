@@ -23,6 +23,7 @@ import base64
 import glob
 import importlib.util
 import io
+import math
 import os
 import sys
 import threading
@@ -265,12 +266,36 @@ class DetectedPose:
             "right_foot": [],
         }
         for person in self.people:
-            groups["face"].extend(person.face)
-            groups["left_hand"].extend(person.left_hand)
-            groups["right_hand"].extend(person.right_hand)
-            groups["left_foot"].extend(person.left_foot)
-            groups["right_foot"].extend(person.right_foot)
+            for code, points in _region_groups(person).items():
+                groups[code].extend(points)
         return [(code, points) for code, points in groups.items() if _valid_points(points)]
+
+    def skeleton_extent(self) -> float:
+        """Longest side of the bounding box around every usable point (0 when there are none).
+
+        Used to size the repaint circles relative to the figure instead of a fixed pixel radius.
+        """
+        xs = []
+        ys = []
+        for person in self.people:
+            groups = (person.body,) + tuple(_region_groups(person).values())
+            for group in groups:
+                for point in _valid_points(group):
+                    xs.append(float(point[0]))
+                    ys.append(float(point[1]))
+        if not xs:
+            return 0.0
+        return max(max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _region_groups(person) -> dict[str, list]:
+    return {
+        "face": person.face,
+        "left_hand": person.left_hand,
+        "right_hand": person.right_hand,
+        "left_foot": person.left_foot,
+        "right_foot": person.right_foot,
+    }
 
 
 def _valid_points(points) -> list:
@@ -618,37 +643,86 @@ def _expand_region_codes(regions) -> set[str]:
     return allowed
 
 
-def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40) -> dict[str, list]:
+def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0) -> dict[str, list]:
     """Group the usable points of the requested parts by mask region.
 
     Points too close to the frame edge are dropped: pose models often hallucinate
     extremities there on close-up crops, and a circle there would refine empty space.
+
+    ``extend`` walks hand and foot points further out along their limb (in multiples of the
+    last bone, elbow->wrist or knee->ankle) so fingers and toes beyond the detected
+    wrist/ankle are covered as well.  The original points stay and the walk is filled with
+    overlapping circles, so the mask becomes a continuous capsule that only ever grows.
     """
     allowed = _expand_region_codes(regions)
     border = max(3.0, float(radius) * 0.25)
-    collected = {}
+    collected: dict[str, list] = {}
 
-    for code, points in pose.mask_regions():
-        if code not in allowed:
-            continue
-        filtered = [
-            point
-            for point in _valid_points(points)
-            if border <= point[0] <= pose.width - border and border <= point[1] <= pose.height - border
-        ]
-        if filtered:
-            collected[code] = filtered
+    def inside(point):
+        return border <= point[0] <= pose.width - border and border <= point[1] <= pose.height - border
+
+    for person in pose.people:
+        for code, points in _region_groups(person).items():
+            if code not in allowed:
+                continue
+            filtered = [point for point in _valid_points(points) if inside(point)]
+            if not filtered:
+                continue
+            offset = _limb_offset(person.body, code, extend)
+            if offset is not None:
+                walked = []
+                for point in filtered:
+                    walked.extend(_walk(point, offset, radius))
+                filtered = filtered + [point for point in walked if inside(point)]
+            collected.setdefault(code, []).extend(filtered)
 
     return collected
 
 
-def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40):
+LIMB_BONES = {
+    "left_hand": (7, 9),  # COCO elbow -> wrist
+    "right_hand": (8, 10),
+    "left_foot": (13, 15),  # COCO knee -> ankle
+    "right_foot": (14, 16),
+}
+
+
+def _limb_offset(body, code: str, extend: float):
+    """Offset that moves a hand/foot point ``extend`` x its last bone further along the limb."""
+    bone = LIMB_BONES.get(code)
+    if not bone or not extend or float(extend) <= 0:
+        return None
+
+    start, end = bone
+    if start >= len(body) or end >= len(body):
+        return None
+
+    joint, tip = body[start], body[end]
+    if float(joint[2]) < SCORE_THRESHOLD or float(tip[2]) < SCORE_THRESHOLD:
+        return None
+
+    amount = float(extend)
+    return (float(tip[0]) - float(joint[0])) * amount, (float(tip[1]) - float(joint[1])) * amount
+
+
+def _walk(point, offset, radius: int) -> list:
+    """Points between ``point`` and ``point + offset``, spaced so their circles overlap."""
+    dx, dy = offset
+    distance = math.hypot(dx, dy)
+    if distance <= 0:
+        return []
+    steps = max(1, math.ceil(distance / max(1.0, float(radius))))
+    x, y, score = point
+    return [_point(x + dx * step / steps, y + dy * step / steps, score) for step in range(1, steps + 1)]
+
+
+def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0):
     """Single binary mask covering every selected face/hand/foot point.
 
     Returns ``(mask, point_count)``; ``mask`` is None when no usable points exist.
     """
     radius = max(1, min(1024, int(radius)))
-    collected = collect_region_points(pose, regions=regions, radius=radius)
+    collected = collect_region_points(pose, regions=regions, radius=radius, extend=extend)
     if not collected:
         return None, 0
 
@@ -657,14 +731,66 @@ def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40):
     return mask, len(points)
 
 
-def inpaint_crop_size(width: int, height: int, max_size: int = 1024) -> tuple[int, int]:
-    """Sampling size for an only-masked inpaint crop, capped to keep memory use sane."""
-    target = max(64, min(max_size, max(width, height)))
+REGION_MASK_ORDER = ("face", "left_hand", "right_hand", "left_foot", "right_foot")
+
+
+def build_region_masks(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0) -> list[tuple[str, Image.Image, int]]:
+    """One mask per body part, so each part gets its own (small) only-masked inpaint.
+
+    Returns ``[(region code, mask, point count)]`` in ``REGION_MASK_ORDER``; parts without
+    usable points are dropped.
+    """
+    radius = max(1, min(1024, int(radius)))
+    collected = collect_region_points(pose, regions=regions, radius=radius, extend=extend)
+    masks = []
+    for code in REGION_MASK_ORDER:
+        points = collected.get(code)
+        if not points:
+            continue
+        masks.append((code, _draw_l_mask((pose.width, pose.height), points, radius), len(points)))
+    return masks
+
+
+def resolve_radius(pose: DetectedPose, radius: int = 40, percent: float = 0.0) -> int:
+    """Point radius in pixels for this image.
+
+    ``percent`` (> 0) makes the radius follow the figure: that percentage of the skeleton's
+    longest side.  It falls back to the fixed ``radius`` when no skeleton was found.
+    """
+    fixed = max(1, min(1024, int(radius)))
+    if not percent or float(percent) <= 0:
+        return fixed
+
+    extent = pose.skeleton_extent()
+    if extent <= 0:
+        return fixed
+    return max(2, min(1024, round(extent * float(percent) / 100.0)))
+
+
+def _scaled_size(width: int, height: int, target: int) -> tuple[int, int]:
+    """Scale ``width``/``height`` so the long side is ``target``, snapped to the 8px grid."""
     scale = target / max(width, height)
     return (
         max(64, int(width * scale) // 8 * 8),
         max(64, int(height * scale) // 8 * 8),
     )
+
+
+def inpaint_crop_size(width: int, height: int, max_size: int = 1024) -> tuple[int, int]:
+    """Sampling size for an only-masked crop: the crop as-is, capped at ``max_size``."""
+    target = max(64, min(int(max_size), 2048, max(width, height)))
+    return _scaled_size(width, height, target)
+
+
+def region_inpaint_size(mask: Image.Image, inpaint_size: int = 1024, padding: int = 32) -> tuple[int, int]:
+    """Sampling size for one region: its padded box scaled so the long side is ``inpaint_size``."""
+    box = mask.getbbox()
+    if box is None:
+        return (64, 64)
+    x1, y1, x2, y2 = box
+    width = max(1, x2 - x1) + max(0, int(padding)) * 2
+    height = max(1, y2 - y1) + max(0, int(padding)) * 2
+    return _scaled_size(width, height, max(64, min(int(inpaint_size), 2048)))
 
 
 def choose_inpaint_prompt(p, index: int) -> tuple[str, str]:
@@ -783,15 +909,17 @@ def detect_inpaint_regions(
     radius: int = 40,
     backend: str = "auto",
     include_skeleton: bool = True,
+    extend: float = 0.0,
+    radius_percent: float = 0.0,
 ) -> dict:
     started = time.time()
     requested = [code for code in (REGION_CODES if regions is None else regions) if code in REGION_CODES]
     if not requested:
         raise ValueError("no pose region selected")
 
-    radius = max(1, min(1024, int(radius)))
     pose = detect_pose(image, backend=backend)
-    collected = collect_region_points(pose, regions=requested, radius=radius)
+    radius = resolve_radius(pose, radius, radius_percent)
+    collected = collect_region_points(pose, regions=requested, radius=radius, extend=extend)
 
     masks = []
     for code, points in collected.items():
@@ -820,6 +948,7 @@ def detect_inpaint_regions(
     return {
         "backend": pose.backend,
         "people": people,
+        "radius": radius,
         "masks": masks,
         "skeleton": skeleton,
         "elapsed": round(elapsed, 3),

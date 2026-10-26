@@ -22,6 +22,7 @@
 
     const LS = {
         radius: "inppose.radius",
+        extend: "inppose.extend",
         face: "inppose.face",
         hands: "inppose.hands",
         feet: "inppose.feet",
@@ -39,12 +40,15 @@
         buttonEl: null,
         radiusEl: null,
         radiusLabel: null,
+        extendEl: null,
+        extendLabel: null,
         statusFetched: false,
         statusRetry: null,
         skeletonUrl: "",
         drawnUrl: "",
         imageSrc: "",
         width: 40,
+        extend: 0.5,
         parts: {face: true, hands: true, feet: true},
         showSkeleton: true,
     };
@@ -80,6 +84,12 @@
     function readInt(key, fallback) {
         const value = typeof localGet === "function" ? localGet(key, null) : null;
         const number = parseInt(value, 10);
+        return Number.isFinite(number) ? number : fallback;
+    }
+
+    function readFloat(key, fallback) {
+        const value = typeof localGet === "function" ? localGet(key, null) : null;
+        const number = parseFloat(value);
         return Number.isFinite(number) ? number : fallback;
     }
 
@@ -126,6 +136,10 @@
 
     function updateRadiusLabel() {
         if (state.radiusLabel) state.radiusLabel.textContent = `${state.width}px`;
+    }
+
+    function updateExtendLabel() {
+        if (state.extendLabel) state.extendLabel.textContent = Number(state.extend).toFixed(2);
     }
 
     function updateSkeleton() {
@@ -247,6 +261,12 @@
         </label>
       </div>
       <div class="inppose-row">
+        <label class="inppose-extend" title="Push hand and foot points further along the forearm/shin (multiples of that bone) so fingers and toes past the detected wrist/ankle are covered">ext
+          <input type="range" min="0" max="2" step="0.05" value="0.5">
+          <span class="inppose-extend-val">0.50</span>
+        </label>
+      </div>
+      <div class="inppose-row">
         <label title="Show the detected skeleton over the picture"><input type="checkbox" data-toggle="skeleton" checked> skeleton</label>
       </div>
       <div class="inppose-row inppose-getrow" hidden>
@@ -260,9 +280,15 @@
         state.buttonEl = section.querySelector(".inppose-detect");
         state.radiusEl = section.querySelector(".inppose-radius input");
         state.radiusLabel = section.querySelector(".inppose-radius-val");
+        state.extendEl = section.querySelector(".inppose-extend input");
+        state.extendLabel = section.querySelector(".inppose-extend-val");
 
         state.radiusEl.value = String(state.width);
         updateRadiusLabel();
+
+        state.extend = clamp(readFloat(LS.extend, state.extend), 0, 2);
+        state.extendEl.value = String(state.extend);
+        updateExtendLabel();
 
         PARTS.forEach((part) => {
             const input = section.querySelector(`[data-part="${part}"]`);
@@ -285,6 +311,12 @@
             state.width = clamp(parseInt(state.radiusEl.value, 10) || 40, 8, 400);
             updateRadiusLabel();
             if (typeof localSet === "function") localSet(LS.radius, String(state.width));
+        });
+
+        state.extendEl.addEventListener("input", () => {
+            state.extend = clamp(parseFloat(state.extendEl.value) || 0, 0, 2);
+            updateExtendLabel();
+            if (typeof localSet === "function") localSet(LS.extend, String(state.extend));
         });
 
         state.buttonEl.addEventListener("click", () => detect());
@@ -359,6 +391,7 @@
                     input_image: image,
                     regions,
                     radius: state.width,
+                    extend: state.extend,
                     include_skeleton: true,
                 }),
             });

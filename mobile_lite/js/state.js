@@ -39,9 +39,13 @@ export const state = {
     hrStageConfig: '', // multi-stage hires text (one 'scale: .., steps: ..' entry per line)
     poseInpaintEnabled: false, // txt2img: detect face/hand/foot points and inpaint them
     poseInpaintParts: ['Face', 'Hands', 'Feet'], // selected point groups
-    poseInpaintRadius: 40, // point mask radius, same default as the desktop accordion
+    poseInpaintRadius: 40, // fixed point radius in px, used when the relative radius is 0
+    poseInpaintRadiusPercent: 5, // point radius as a percentage of the skeleton's longest side
+    poseInpaintExtend: 0.5, // push hand/foot points along the forearm/shin (multiples of that bone)
     poseInpaintDenoise: 0.4,
     poseInpaintSteps: 0, // 0 = use the base generation steps
+    poseInpaintSize: 1024, // long side of each masked region that is re-generated
+    poseInpaintSeparate: true, // one only-masked pass per part (batch) instead of one pass
     poseInpaintSaveIntermediate: false, // keep the image before the pose inpaint pass
   },
   prompt: {

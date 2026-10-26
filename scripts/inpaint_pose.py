@@ -14,6 +14,8 @@ class InpaintPoseRequest(BaseModel):
     input_image: str
     regions: list[str] = Field(default_factory=lambda: ["face", "hands", "feet"])
     radius: int = 40
+    radius_percent: float = 0.0
+    extend: float = 0.0
     backend: str = "auto"
     include_skeleton: bool = True
 
@@ -47,6 +49,8 @@ def inpaint_pose_api(_: gr.Blocks, app):
                 image,
                 regions=payload.regions,
                 radius=payload.radius,
+                radius_percent=payload.radius_percent,
+                extend=payload.extend,
                 backend=payload.backend,
                 include_skeleton=payload.include_skeleton,
             )

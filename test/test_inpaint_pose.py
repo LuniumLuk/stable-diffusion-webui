@@ -189,6 +189,147 @@ def test_inpaint_crop_size_caps_large_images():
     assert inpaint_pose.inpaint_crop_size(1536, 1024) == (1024, 680)
     assert inpaint_pose.inpaint_crop_size(4096, 512) == (1024, 128)
     assert inpaint_pose.inpaint_crop_size(10, 10) == (64, 64)
+    assert inpaint_pose.inpaint_crop_size(4000, 4000, 512) == (512, 512)
+
+
+def test_build_region_masks_splits_every_part():
+    person = inpaint_pose.PersonPose(
+        body=[(100.0, 100.0, 0.9)] * 17,
+        face=[(100.0, 80.0, 0.9)],
+        left_hand=[(50.0, 120.0, 0.9)],
+        right_hand=[(150.0, 120.0, 0.9)],
+        left_foot=[(80.0, 180.0, 0.9)],
+        right_foot=[(120.0, 180.0, 0.9)],
+    )
+    pose = inpaint_pose.DetectedPose("test", 200, 200, [person])
+
+    masks = inpaint_pose.build_region_masks(pose, radius=10)
+    assert [code for code, _mask, _count in masks] == ["face", "left_hand", "right_hand", "left_foot", "right_foot"]
+    assert [count for _code, _mask, count in masks] == [1, 1, 1, 1, 1]
+    assert masks[0][1].getpixel((100, 80)) == 255
+    assert masks[0][1].getpixel((50, 120)) == 0
+    assert masks[1][1].getpixel((50, 120)) == 255
+    assert masks[4][1].getpixel((120, 180)) == 255
+    assert inpaint_pose.build_region_masks(pose, regions=["face"], radius=10)[0][0] == "face"
+    assert len(inpaint_pose.build_region_masks(pose, regions=["hands"], radius=10)) == 2
+
+
+def test_build_region_masks_empty_without_points():
+    pose = inpaint_pose.DetectedPose("test", 200, 200, [inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17)])
+
+    assert inpaint_pose.build_region_masks(pose, regions=["face"], radius=10) == []
+
+
+def _limbed_person():
+    body = [(100.0, 100.0, 0.9)] * 17
+    body[7] = (60.0, 100.0, 0.9)   # left elbow
+    body[9] = (40.0, 100.0, 0.9)   # left wrist
+    body[13] = (90.0, 160.0, 0.9)  # left knee
+    body[15] = (90.0, 180.0, 0.9)  # left ankle
+    return inpaint_pose.PersonPose(
+        body=body,
+        left_hand=[(40.0, 100.0, 0.9)],
+        left_foot=[(90.0, 180.0, 0.9)],
+    )
+
+
+def test_collect_region_points_extends_hands_and_feet_along_the_limb():
+    pose = inpaint_pose.DetectedPose("test", 400, 400, [_limbed_person()])
+
+    plain = inpaint_pose.collect_region_points(pose, regions=["hands", "feet"], radius=10)
+    assert plain["left_hand"] == [(40.0, 100.0, 0.9)]
+    assert plain["left_foot"] == [(90.0, 180.0, 0.9)]
+
+    # left wrist - left elbow = (-20, 0); left ankle - left knee = (0, 20)
+    extended = inpaint_pose.collect_region_points(pose, regions=["hands", "feet"], radius=10, extend=1.5)
+    hand = extended["left_hand"]
+    foot = extended["left_foot"]
+
+    # the walk starts at the detected point and ends 1.5 bones further along, filled so the
+    # circles overlap (steps <= radius apart)
+    assert hand[0] == (40.0, 100.0, 0.9)
+    assert hand[-1] == (10.0, 100.0, 0.9)
+    assert len(hand) == 4
+    assert all(y == 100.0 for _x, y, _score in hand)
+    assert foot[0] == (90.0, 180.0, 0.9)
+    assert foot[-1] == (90.0, 210.0, 0.9)
+    assert len(foot) == 4
+    assert all(x == 90.0 for x, _y, _score in foot)
+
+
+def test_collect_region_points_extend_is_skipped_for_face_and_unknown_joints():
+    person = _limbed_person()
+    person.face = [(100.0, 80.0, 0.9)]
+    pose = inpaint_pose.DetectedPose("test", 400, 400, [person])
+
+    assert inpaint_pose.collect_region_points(pose, regions=["face"], radius=10, extend=2)["face"] == [(100.0, 80.0, 0.9)]
+
+    # a missing (low-score) elbow leaves the hand point where the detector put it
+    person.body[7] = (60.0, 100.0, 0.0)
+    hidden = inpaint_pose.collect_region_points(pose, regions=["hands"], radius=10, extend=2)
+    assert hidden["left_hand"] == [(40.0, 100.0, 0.9)]
+
+
+def test_build_region_mask_extension_grows_the_mask():
+    pose = inpaint_pose.DetectedPose("test", 400, 400, [_limbed_person()])
+
+    plain, _points = inpaint_pose.build_region_mask(pose, regions=["hands"], radius=10)
+    extended, points = inpaint_pose.build_region_mask(pose, regions=["hands"], radius=10, extend=1.5)
+    assert extended.getpixel((10, 100)) == 255
+    assert plain.getpixel((10, 100)) == 0
+    # the walk fills the gap, so the whole extension is one continuous capsule
+    assert extended.getpixel((25, 100)) == 255
+    assert plain.getpixel((25, 100)) == 0
+    assert points == 4
+
+
+def test_skeleton_extent_uses_the_point_bounding_box():
+    person = inpaint_pose.PersonPose(
+        body=[(100.0, 100.0, 0.9)] * 17,
+        face=[(100.0, 80.0, 0.9)],
+        right_foot=[(300.0, 400.0, 0.9)],
+    )
+    pose = inpaint_pose.DetectedPose("test", 500, 500, [person])
+
+    assert pose.skeleton_extent() == 320.0
+    assert inpaint_pose.DetectedPose("test", 500, 500, []).skeleton_extent() == 0.0
+
+
+def test_resolve_radius_follows_the_skeleton_when_a_percent_is_given():
+    person = inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17, right_foot=[(300.0, 400.0, 0.9)])
+    pose = inpaint_pose.DetectedPose("test", 500, 500, [person])
+
+    assert pose.skeleton_extent() == 300.0
+    assert inpaint_pose.resolve_radius(pose, 40, 0) == 40
+    assert inpaint_pose.resolve_radius(pose, 40, 5) == 15  # 5% of 300
+    assert inpaint_pose.resolve_radius(pose, 40, 50) == 150
+    # no skeleton: keep the fixed radius
+    assert inpaint_pose.resolve_radius(inpaint_pose.DetectedPose("test", 500, 500, []), 40, 5) == 40
+    # clamps
+    assert inpaint_pose.resolve_radius(pose, 4000, 0) == 1024
+    assert inpaint_pose.resolve_radius(pose, 40, 0.01) == 2
+
+
+def test_region_inpaint_size_keeps_region_aspect():
+    mask = Image.new("L", (400, 400), 0)
+    mask.paste(255, (100, 100, 200, 160))  # 100x60 region
+
+    width, height = inpaint_pose.region_inpaint_size(mask, inpaint_size=1024, padding=0)
+    assert (width, height) == (1024, 608)
+    # padding grows both sides of the box
+    assert inpaint_pose.region_inpaint_size(mask, inpaint_size=1024, padding=20) == (1024, 728)
+    # the size setting is honoured, and stays on the 8px grid
+    assert max(inpaint_pose.region_inpaint_size(mask, inpaint_size=512, padding=0)) == 512
+    assert all(dimension % 8 == 0 for dimension in inpaint_pose.region_inpaint_size(mask, inpaint_size=700, padding=0))
+
+
+def test_region_inpaint_size_honours_small_and_empty_regions():
+    tiny = Image.new("L", (400, 400), 0)
+    tiny.paste(255, (100, 100, 110, 110))  # 10x10 region
+
+    assert inpaint_pose.region_inpaint_size(tiny, inpaint_size=1024, padding=0) == (1024, 1024)
+    assert inpaint_pose.region_inpaint_size(tiny, inpaint_size=99999, padding=0) == (2048, 2048)
+    assert inpaint_pose.region_inpaint_size(Image.new("L", (8, 8), 0), inpaint_size=1024) == (64, 64)
 
 
 def test_choose_inpaint_prompt_prefers_compiled_hr_prompt():

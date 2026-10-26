@@ -566,12 +566,20 @@ export function openParamsSheet(kind = 'text') {
       const enabled = !!params.poseInpaintEnabled;
       poseBody.classList.toggle('hidden', !enabled);
       if (!enabled) return;
-      const count = selectedParts().filter((part) => POSE_PARTS.includes(part)).length;
-      poseNote.textContent = count
-        ? 'Runs after generation, using the compiled hires prompt when Hires fix is on. Steps 0 = base steps.'
-        : 'Select at least one part, or the pass is skipped.';
+      const parts = selectedParts();
+      // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right)
+      const masks = (parts.includes('Face') ? 1 : 0)
+        + (parts.includes('Hands') ? 2 : 0)
+        + (parts.includes('Feet') ? 2 : 0);
+      const passes = params.poseInpaintSeparate === false ? 1 : masks;
+      const radius = Number(params.poseInpaintRadiusPercent) > 0
+        ? `${params.poseInpaintRadiusPercent}% of skeleton`
+        : `${params.poseInpaintRadius}px`;
+      poseNote.textContent = !masks
+        ? 'Select at least one part, or the pass is skipped.'
+        : `${passes} only-masked pass${passes > 1 ? 'es' : ''}: r ${radius}, ext ${Number(params.poseInpaintExtend).toFixed(2)}, ${params.poseInpaintSize}px long side.`;
       posePartButtons.forEach((button, index) => {
-        button.classList.toggle('on', selectedParts().includes(POSE_PARTS[index]));
+        button.classList.toggle('on', parts.includes(POSE_PARTS[index]));
       });
     };
 
@@ -589,14 +597,24 @@ export function openParamsSheet(kind = 'text') {
         el('div', { class: 'chips' }, posePartButtons),
       ]),
       sliderRow(params, 'Point radius', 'poseInpaintRadius', 8, 400, 2),
+      sliderRow(params, 'Radius of skeleton (%)', 'poseInpaintRadiusPercent', 0, 25, 0.5),
+      sliderRow(params, 'Hand/foot extend (\u00D7 bone)', 'poseInpaintExtend', 0, 2, 0.05, { format: (value) => Number(value).toFixed(2) }),
       sliderRow(params, 'Denoising strength', 'poseInpaintDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
       sliderRow(params, 'Steps (0 = base)', 'poseInpaintSteps', 0, 150, 1),
+      sliderRow(params, 'Inpaint size (long side, px)', 'poseInpaintSize', 256, 2048, 64),
+      segmented('One pass per part', [
+        { value: 'on', label: 'On' },
+        { value: 'off', label: 'Off' },
+      ], params.poseInpaintSeparate === false ? 'off' : 'on', (value) => {
+        setParam('poseInpaintSeparate', value === 'on');
+        refreshPose();
+      }),
       segmented('Save intermediate image', [
         { value: 'off', label: 'Off' },
         { value: 'on', label: 'On' },
       ], params.poseInpaintSaveIntermediate ? 'on' : 'off', (value) => setParam('poseInpaintSaveIntermediate', value === 'on')),
       poseNote,
-      el('div', { class: 'small muted', text: 'Uses the local pose detector; DWPose models give the best anime hands/feet.' }),
+      el('div', { class: 'small muted', text: 'Radius 0% = use the fixed px radius. Hand/foot extend pushes the masks past the wrist/ankle. DWPose models give the best anime hands/feet.' }),
     );
     body.append(poseToggle.node, poseBody);
     poseUnsubscribe = on('params', refreshPose);
