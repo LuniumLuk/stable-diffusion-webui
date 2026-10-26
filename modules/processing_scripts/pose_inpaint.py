@@ -1,4 +1,4 @@
-"""Automatic pose detection + inpaint pass after txt2img / hires fix / refiner."""
+"""Automatic pose detection + inpaint pass after txt2img / hires fix / refiner / img2img."""
 
 import threading
 
@@ -58,7 +58,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         return "Pose inpaint"
 
     def show(self, is_img2img):
-        return scripts.AlwaysVisible if not is_img2img else False
+        return scripts.AlwaysVisible
 
     def ui(self, is_img2img):
         with InputAccordion(False, label="Pose inpaint", elem_id=self.elem_id("pose_inpaint_enable")) as enable_pose_inpaint:
@@ -133,10 +133,16 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 )
 
             gr.Markdown(
-                "Runs after Hires. fix and Refiner. Uses the compiled hires prompt when Hires. fix is enabled, "
-                "otherwise the compiled main prompt. Each part is inpainted with its own mask, original masked "
-                "content, only-masked area and latent upscale. DWPose models from the Inpaint tab's Pose masks "
-                "panel give the best anime face/hand/foot points.",
+                "Runs after the txt2img result (including Hires. fix and Refiner) using the compiled hires prompt "
+                "when Hires. fix is enabled, otherwise the compiled main prompt."
+                if not is_img2img
+                else "Runs after the img2img result is composited, using the compiled main prompt.",
+                elem_id=self.elem_id("pose_inpaint_when"),
+            )
+            gr.Markdown(
+                "Each part is inpainted with its own mask, original masked content, only-masked area and latent "
+                "upscale. DWPose models from the Inpaint tab's Pose masks panel give the best anime "
+                "face/hand/foot points.",
                 elem_id=self.elem_id("pose_inpaint_hint"),
             )
 

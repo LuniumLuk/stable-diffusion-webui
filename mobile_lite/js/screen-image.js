@@ -4,6 +4,7 @@ import { api, randomTaskId, ROOT } from './api.js';
 import { isJobActive, runJob } from './job.js';
 import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
+import { poseInpaintArgs, poseInpaintSummary, poseMaskRadiusLabel, poseMaskRequest } from './pose.js';
 import { createPromptEditor } from './prompt.js';
 import { planInputResize } from './resize-plan.js';
 import { on, persist, imageParams, resolveOutputSize, setParam, state } from './state.js';
@@ -17,9 +18,10 @@ const mask = {
   drawing: false,
   last: null,
   currentOp: null, // stroke op being painted (pinch start removes it again)
-  ops: [], // {type:'stroke', erase, brush, points:[[x,y]]} | {type:'sam', dataUrl}
+  ops: [], // {type:'stroke', erase, brush, points:[[x,y]]} | {type:'sam'|'pose', dataUrl}
   samAvailable: null,
   samBusy: false,
+  poseBusy: false,
   lastPick: null, // { point, masks: [dataUrl], applied: opIndex }
 };
 
@@ -180,7 +182,7 @@ async function replayMask() {
   for (const op of mask.ops) {
     if (op.type === 'stroke') {
       drawStroke(op);
-    } else if (op.type === 'sam') {
+    } else if (op.type === 'sam' || op.type === 'pose') {
       if (!op.canvas) op.canvas = await samToWhiteMask(op.dataUrl, maskCanvas.width, maskCanvas.height);
       if (op.canvas) {
         maskCtx.save();
@@ -436,6 +438,8 @@ function updateSummary() {
     params.batch > 1 ? `×${params.batch}` : '',
   ].filter(Boolean);
   if (isInpaint()) parts.splice(1, 0, params.inpaintFullRes ? 'only masked' : 'whole picture');
+  const pose = poseInpaintSummary(params);
+  if (pose) parts.push(pose);
   for (const part of parts) summaryMain.append(el('span', { text: part }));
   summaryMain.append(el('span', { class: 'muted', text: '\u2699' }));
 
@@ -874,6 +878,11 @@ function buildToolsRow() {
     make('erase', '\u{1F9F9}'),
     make('sam', '\u2728'),
     el('button', {
+      class: 'btn tiny pose-mask-btn', type: 'button', text: '\u{1F9B4}',
+      title: 'Pose masks - detect face/hand/foot points and add them to the mask',
+      onClick: () => poseMasks(),
+    }),
+    el('button', {
       class: 'btn tiny', type: 'button', text: '\u21B6', title: 'Undo',
       onClick: async () => { mask.ops.pop(); await replayMask(); },
     }),
@@ -885,6 +894,13 @@ function buildToolsRow() {
     el('div', { class: 'row tight', style: { flex: '0 0 auto', gap: '4px' } }, candidateButtons),
   ]);
 
+  poseAvailable().then((status) => {
+    if (status) {
+      const button = row.querySelector('.pose-mask-btn');
+      if (button) button.title = `${button.title} (${status.backend === 'dwpose' ? 'DWPose' : 'COCO 17'})`;
+    }
+  });
+
   ensureSam().then((available) => {
     toolButtons.sam.classList.toggle('hidden', !available);
     if (!available) {
@@ -893,6 +909,68 @@ function buildToolsRow() {
   });
 
   return row;
+}
+
+/** Pose masks (local pose network): paint the detected face/hand/foot points into the mask. */
+async function poseMasks() {
+  if (mask.poseBusy) return;
+  const source = activeSource();
+  if (!source) {
+    toast('load an image first', 'warn');
+    return;
+  }
+
+  const request = poseMaskRequest(source.dataUrl, {
+    parts: state.ui.poseParts,
+    radius: state.ui.poseRadius,
+    radiusPercent: state.ui.poseRadiusPercent,
+    extend: state.ui.poseExtend,
+  });
+  if (!request.regions.length) {
+    toast('pick face, hands or feet in the inpaint parameters', 'warn');
+    return;
+  }
+
+  mask.poseBusy = true;
+  try {
+    const response = await fetch(`${ROOT}/inpaint-pose/detect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || data.msg || `HTTP ${response.status}`);
+    }
+
+    const masks = Array.isArray(data.masks) ? data.masks : [];
+    if (!masks.length) {
+      toast(data.msg || 'no face/hand/foot points found', 'warn', 4000);
+      return;
+    }
+
+    for (const item of masks) {
+      mask.ops.push({ type: 'pose', dataUrl: item.data, name: item.name });
+    }
+    await replayMask();
+    const radius = poseMaskRadiusLabel({ radius: request.radius, radiusPercent: request.radius_percent });
+    toast(`${masks.length} pose mask${masks.length === 1 ? '' : 's'} \u00B7 ${radius}`, 'ok', 2500);
+  } catch (error) {
+    toast(`pose masks failed: ${error.message}`, 'err', 5000);
+  } finally {
+    mask.poseBusy = false;
+  }
+}
+
+async function poseAvailable() {
+  try {
+    const response = await fetch(`${ROOT}/inpaint-pose/status`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.available ? data : null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 // ------------------------------------------------------------------ generate
@@ -943,6 +1021,9 @@ async function generate() {
     payload.inpaint_full_res_padding = Number(params.inpaintPadding) || 0;
     payload.invert_mask = !!params.invertMask;
   }
+  if (params.poseInpaintEnabled) {
+    payload.alwayson = { 'Pose inpaint': { args: poseInpaintArgs(params) } };
+  }
 
   generateButton.disabled = true;
   try {
@@ -983,9 +1064,9 @@ export function init(container) {
   maskColorInput.addEventListener('input', async () => {
     state.ui.maskColor = maskColorInput.value;
     persist();
-    // existing SAM ops cached their canvas with the old colour - rebuild them
+    // existing SAM / pose ops cached their canvas with the old colour - rebuild them
     for (const op of mask.ops) {
-      if (op.type === 'sam') delete op.canvas;
+      if (op.type === 'sam' || op.type === 'pose') delete op.canvas;
     }
     await replayMask();
   });

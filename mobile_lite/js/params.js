@@ -43,8 +43,47 @@ function sliderRow(store, label, key, min, max, step, { format = (value) => valu
   ]);
 }
 
-function selectRow(label, options, value, onChange) {
-  const select = el('select', {}, options.map((option) => {
+/**
+ * Integer field without a slider: for ranges that are too wide (and too uneven) for a thumb,
+ * where typing the exact value is easier - e.g. batch count 1..64. ``presets`` render as
+ * chips under the input (1 = reset), the active value stays highlighted.
+ */
+function intField(store, label, key, min, max, step, { presets = [], note = '' } = {}) {
+  const input = el('input', { type: 'number', min, max, step, value: store[key], inputmode: 'numeric' });
+
+  const highlight = (value) => chips.forEach((chip, index) => {
+    chip.classList.toggle('on', Number(presets[index]) === value);
+  });
+
+  const apply = (value) => {
+    const numeric = Number(value);
+    const fallback = Number(store[key]);
+    const bounded = Math.min(max, Math.max(min, Math.round(Number.isFinite(numeric) ? numeric : fallback || min)));
+    input.value = String(bounded);
+    setParam(key, bounded, store);
+    highlight(bounded);
+  };
+
+  const chips = presets.map((preset) => el('button', {
+    class: 'chip',
+    type: 'button',
+    text: String(preset),
+    title: preset === 1 ? 'Reset to 1' : `${preset} images`,
+    onClick: () => apply(preset),
+  }));
+
+  input.addEventListener('change', () => apply(input.value));
+  highlight(Number(store[key]));
+
+  return el('div', { class: 'field' }, [
+    el('label', { text: label }),
+    el('div', { class: 'row tight' }, [input]),
+    chips.length ? el('div', { class: 'chips' }, chips) : null,
+    note ? el('div', { class: 'small muted', text: note }) : null,
+  ].filter(Boolean));
+}
+
+function selectRow(label, options, value, onChange) {  const select = el('select', {}, options.map((option) => {
     const optionValue = typeof option === 'string' ? option : option.value;
     const optionLabel = typeof option === 'string' ? option : option.label;
     return el('option', { value: optionValue, text: optionLabel, selected: optionValue === value });
@@ -222,6 +261,93 @@ function openKrea2ParamsSheet() {
   openSheet({ title: 'Krea 2 params', body });
 }
 
+/**
+ * Pose inpaint controls, shared by the Text sheet and both Image modes.
+ * `store` is the parameter set the sheet edits (state.params for txt2img, imageParams() for
+ * img2img/inpaint). Returns the unsubscribe callback for the live note.
+ */
+function appendPoseInpaint(body, store, when) {
+  const details = el('div');
+  const note = el('div', { class: 'small muted' });
+  const selectedParts = () => (Array.isArray(store.poseInpaintParts) ? store.poseInpaintParts : POSE_PARTS);
+  const partButtons = POSE_PARTS.map((part) => el('button', {
+    class: `chip ${selectedParts().includes(part) ? 'on' : ''}`,
+    type: 'button',
+    text: part,
+    onClick: () => {
+      const next = new Set(selectedParts());
+      if (next.has(part)) next.delete(part);
+      else next.add(part);
+      setParam('poseInpaintParts', POSE_PARTS.filter((item) => next.has(item)), store);
+      refresh();
+    },
+  }));
+
+  const refresh = () => {
+    details.classList.toggle('hidden', !store.poseInpaintEnabled);
+    partButtons.forEach((button, index) => {
+      button.classList.toggle('on', selectedParts().includes(POSE_PARTS[index]));
+    });
+    if (!store.poseInpaintEnabled) return;
+    // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right)
+    const parts = selectedParts();
+    const masks = (parts.includes('Face') ? 1 : 0)
+      + (parts.includes('Hands') ? 2 : 0)
+      + (parts.includes('Feet') ? 2 : 0);
+    const passes = store.poseInpaintSeparate === false ? 1 : masks;
+    const radius = Number(store.poseInpaintRadiusPercent) > 0
+      ? `${store.poseInpaintRadiusPercent}% of skeleton`
+      : `${store.poseInpaintRadius}px`;
+    note.textContent = !masks
+      ? 'Select at least one part, or the pass is skipped.'
+      : `${passes} only-masked pass${passes > 1 ? 'es' : ''}: r ${radius}, ext ${Number(store.poseInpaintExtend).toFixed(2)}, ${store.poseInpaintSize}px long side.`;
+  };
+
+  const toggle = segmentedControl('Pose inpaint', [
+    { value: 'off', label: 'Off' },
+    { value: 'on', label: 'On' },
+  ], store.poseInpaintEnabled ? 'on' : 'off', (value) => {
+    setParam('poseInpaintEnabled', value === 'on', store);
+    refresh();
+  });
+
+  details.append(
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Parts' }),
+      el('div', { class: 'chips' }, partButtons),
+    ]),
+    sliderRow(store, 'Point radius', 'poseInpaintRadius', 8, 400, 2),
+    sliderRow(store, 'Radius of skeleton (%)', 'poseInpaintRadiusPercent', 0, 25, 0.5),
+    sliderRow(store, 'Hand/foot extend (\u00D7 bone)', 'poseInpaintExtend', 0, 2, 0.05, { format: (value) => Number(value).toFixed(2) }),
+    sliderRow(store, 'Denoising strength', 'poseInpaintDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
+    sliderRow(store, 'Steps (0 = base)', 'poseInpaintSteps', 0, 150, 1),
+    sliderRow(store, 'Inpaint size (long side, px)', 'poseInpaintSize', 256, 2048, 64),
+    segmented('One pass per part', [
+      { value: 'on', label: 'On' },
+      { value: 'off', label: 'Off' },
+    ], store.poseInpaintSeparate === false ? 'off' : 'on', (value) => {
+      setParam('poseInpaintSeparate', value === 'on', store);
+      refresh();
+    }),
+    segmented('Save intermediate image', [
+      { value: 'off', label: 'Off' },
+      { value: 'on', label: 'On' },
+    ], store.poseInpaintSaveIntermediate ? 'on' : 'off', (value) => {
+      setParam('poseInpaintSaveIntermediate', value === 'on', store);
+    }),
+    note,
+    el('div', { class: 'small muted', text: 'Radius 0% = use the fixed px radius. Hand/foot extend pushes the masks past the wrist/ankle. DWPose models give the best anime hands/feet.' }),
+  );
+
+  body.append(
+    toggle.node,
+    el('div', { class: 'small muted', text: when }),
+    details,
+  );
+  refresh();
+  return on('params', refresh);
+}
+
 export function openParamsSheet(kind = 'text') {
   if (kind === 'qwen') {
     openQwenParamsSheet();
@@ -248,7 +374,7 @@ export function openParamsSheet(kind = 'text') {
 
   body.append(sliderRow(params, 'Sampling steps', 'steps', 1, 80, 1));
   body.append(sliderRow(params, 'CFG scale', 'cfg', 1, 20, 0.5, { format: (value) => Number(value).toFixed(1) }));
-  body.append(sliderRow(params, 'Batch count', 'batch', 1, 8, 1));
+  body.append(intField(params, 'Batch count', 'batch', 1, 64, 1, { presets: [1, 8, 16, 24, 32, 64] }));
 
   // Size block -------------------------------------------------------------
   const widthInput = el('input', { type: 'number', value: params.width, min: 64, max: 2048, step: 8, inputmode: 'numeric' });
@@ -545,81 +671,7 @@ export function openParamsSheet(kind = 'text') {
     refreshHires();
   }
 
-  // Pose inpaint (txt2img only) --------------------------------------------
-  if (kind === 'text') {
-    const poseBody = el('div');
-    const poseNote = el('div', { class: 'small muted' });
-    const selectedParts = () => (Array.isArray(params.poseInpaintParts) ? params.poseInpaintParts : POSE_PARTS);
-    const posePartButtons = POSE_PARTS.map((part) => el('button', {
-      class: `chip ${selectedParts().includes(part) ? 'on' : ''}`,
-      type: 'button',
-      text: part,
-      onClick: () => {
-        const next = new Set(selectedParts());
-        if (next.has(part)) next.delete(part);
-        else next.add(part);
-        setParam('poseInpaintParts', POSE_PARTS.filter((item) => next.has(item)));
-      },
-    }));
-
-    const refreshPose = () => {
-      const enabled = !!params.poseInpaintEnabled;
-      poseBody.classList.toggle('hidden', !enabled);
-      if (!enabled) return;
-      const parts = selectedParts();
-      // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right)
-      const masks = (parts.includes('Face') ? 1 : 0)
-        + (parts.includes('Hands') ? 2 : 0)
-        + (parts.includes('Feet') ? 2 : 0);
-      const passes = params.poseInpaintSeparate === false ? 1 : masks;
-      const radius = Number(params.poseInpaintRadiusPercent) > 0
-        ? `${params.poseInpaintRadiusPercent}% of skeleton`
-        : `${params.poseInpaintRadius}px`;
-      poseNote.textContent = !masks
-        ? 'Select at least one part, or the pass is skipped.'
-        : `${passes} only-masked pass${passes > 1 ? 'es' : ''}: r ${radius}, ext ${Number(params.poseInpaintExtend).toFixed(2)}, ${params.poseInpaintSize}px long side.`;
-      posePartButtons.forEach((button, index) => {
-        button.classList.toggle('on', parts.includes(POSE_PARTS[index]));
-      });
-    };
-
-    const poseToggle = segmentedControl('Pose inpaint', [
-      { value: 'off', label: 'Off' },
-      { value: 'on', label: 'On' },
-    ], params.poseInpaintEnabled ? 'on' : 'off', (value) => {
-      setParam('poseInpaintEnabled', value === 'on');
-      refreshPose();
-    });
-
-    poseBody.append(
-      el('div', { class: 'field' }, [
-        el('label', { text: 'Parts' }),
-        el('div', { class: 'chips' }, posePartButtons),
-      ]),
-      sliderRow(params, 'Point radius', 'poseInpaintRadius', 8, 400, 2),
-      sliderRow(params, 'Radius of skeleton (%)', 'poseInpaintRadiusPercent', 0, 25, 0.5),
-      sliderRow(params, 'Hand/foot extend (\u00D7 bone)', 'poseInpaintExtend', 0, 2, 0.05, { format: (value) => Number(value).toFixed(2) }),
-      sliderRow(params, 'Denoising strength', 'poseInpaintDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
-      sliderRow(params, 'Steps (0 = base)', 'poseInpaintSteps', 0, 150, 1),
-      sliderRow(params, 'Inpaint size (long side, px)', 'poseInpaintSize', 256, 2048, 64),
-      segmented('One pass per part', [
-        { value: 'on', label: 'On' },
-        { value: 'off', label: 'Off' },
-      ], params.poseInpaintSeparate === false ? 'off' : 'on', (value) => {
-        setParam('poseInpaintSeparate', value === 'on');
-        refreshPose();
-      }),
-      segmented('Save intermediate image', [
-        { value: 'off', label: 'Off' },
-        { value: 'on', label: 'On' },
-      ], params.poseInpaintSaveIntermediate ? 'on' : 'off', (value) => setParam('poseInpaintSaveIntermediate', value === 'on')),
-      poseNote,
-      el('div', { class: 'small muted', text: 'Radius 0% = use the fixed px radius. Hand/foot extend pushes the masks past the wrist/ankle. DWPose models give the best anime hands/feet.' }),
-    );
-    body.append(poseToggle.node, poseBody);
-    poseUnsubscribe = on('params', refreshPose);
-    refreshPose();
-  }
+  // Pose inpaint (txt2img and both image modes) ----------------------------
 
   // img2img extras ---------------------------------------------------------
   if (kind === 'image') {
@@ -686,8 +738,38 @@ export function openParamsSheet(kind = 'text') {
         { value: 'masked', label: 'Inpaint masked' },
         { value: 'inverted', label: 'Inpaint not masked' },
       ], params.invertMask ? 'inverted' : 'masked', (value) => setParam('invertMask', value === 'inverted', params)));
+
+      // Pose masks: the mask toolbar's bone button paints these into the mask
+      const uiPoseParts = () => (Array.isArray(state.ui.poseParts) ? state.ui.poseParts : POSE_PARTS);
+      const uiPoseChips = POSE_PARTS.map((part) => el('button', {
+        class: `chip ${uiPoseParts().includes(part) ? 'on' : ''}`,
+        type: 'button',
+        text: part,
+        onClick: () => {
+          const next = new Set(uiPoseParts());
+          if (next.has(part)) next.delete(part);
+          else next.add(part);
+          const parts = POSE_PARTS.filter((item) => next.has(item));
+          setParam('poseParts', parts, state.ui);
+          uiPoseChips.forEach((chip, index) => chip.classList.toggle('on', next.has(POSE_PARTS[index])));
+        },
+      }));
+      body.append(
+        el('div', { class: 'field' }, [
+          el('label', { text: 'Pose mask parts' }),
+          el('div', { class: 'chips' }, uiPoseChips),
+        ]),
+        sliderRow(state.ui, 'Pose radius of skeleton (%)', 'poseRadiusPercent', 0, 25, 0.5),
+        sliderRow(state.ui, 'Pose hand/foot extend (\u00D7 bone)', 'poseExtend', 0, 2, 0.05, { format: (value) => Number(value).toFixed(2) }),
+        el('div', { class: 'small muted', text: 'Tap the bone button in the mask toolbar to paint the detected face/hand/foot points into the mask. Radius 0% uses the fixed px radius.' }),
+      );
     }
   }
+
+  // Pose inpaint runs after this job's image is ready (txt2img and both image modes)
+  poseUnsubscribe = appendPoseInpaint(body, params, kind === 'text'
+    ? 'Runs after Hires fix with the compiled hires prompt when it is on, otherwise the main prompt.'
+    : 'Runs after the img2img/inpaint result is composited, using the compiled main prompt.');
 
   openSheet({
     title: kind === 'image' ? 'Image parameters' : 'Text parameters',

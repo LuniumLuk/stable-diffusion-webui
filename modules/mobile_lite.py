@@ -541,7 +541,7 @@ def _common_args(payload: dict, tab: str) -> dict:
         "subseed": -1,
         "subseed_strength": 0.0,
         "batch_size": 1,
-        "n_iter": _payload_number(payload, "batch", 1, 8, defaults["batch"]),
+        "n_iter": _payload_number(payload, "batch", 1, 64, defaults["batch"]),
         "restore_faces": False,
         "tiling": False,
     }
@@ -648,9 +648,11 @@ def _run_job(payload: dict, tab: str) -> dict:
             progress_module.finish_task(task_id)
 
     # The optional pose-inpaint intermediate is a gallery artifact, not a result tile.
+    # A batch can be up to 64 images, so the scan window has to grow with it.
+    requested = max(1, int(getattr(p, "n_iter", 1) or 1)) * max(1, int(getattr(p, "batch_size", 1) or 1))
     saved = [
         path
-        for path in _collect_saved_images(outpath_samples, started)
+        for path in _collect_saved_images(outpath_samples, started, limit=max(48, requested + 8))
         if "-before-pose-inpaint" not in os.path.basename(path)
     ]
     seeds = list(getattr(processed, "all_seeds", []) or [])

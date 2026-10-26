@@ -42,3 +42,27 @@ export function poseInpaintSummary(params = {}) {
   const radius = percent > 0 ? `${percent}%` : `${Math.round(clamp(params.poseInpaintRadius, 8, 400, 40))}px`;
   return `Pose ${count}p r${radius} \u00B7 ${size}px`;
 }
+
+/** Mask-editor region codes for the selected parts (Face -> "face", Hands -> "hands"). */
+export function poseMaskRegions(parts) {
+  const selected = new Set(Array.isArray(parts) ? parts : POSE_PARTS);
+  return POSE_PARTS.filter((part) => selected.has(part)).map((part) => part.toLowerCase());
+}
+
+/** Payload for ``/inpaint-pose/detect`` from the inpaint mask editor settings. */
+export function poseMaskRequest(inputImage, options = {}) {
+  return {
+    input_image: inputImage,
+    regions: poseMaskRegions(options.parts),
+    radius: Math.round(clamp(options.radius, 8, 400, 40)),
+    radius_percent: Math.round(clamp(options.radiusPercent, 0, 25, 5) * 2) / 2,
+    extend: Math.round(clamp(options.extend, 0, 2, 0.5) * 20) / 20,
+    include_skeleton: false,
+  };
+}
+
+/** Editor hint for the current settings ("5% of skeleton", "40px"). */
+export function poseMaskRadiusLabel(options = {}) {
+  const percent = Math.round(clamp(options.radiusPercent, 0, 25, 5) * 2) / 2;
+  return percent > 0 ? `${percent}% of skeleton` : `${Math.round(clamp(options.radius, 8, 400, 40))}px`;
+}

@@ -88,6 +88,10 @@ export const state = {
     maskColor: '#00e0ff', // display colour of the painted / SAM mask
     maskOutlineColor: '#ffffff', // blinking border drawn around the mask
     maskBlink: true,
+    poseParts: ['Face', 'Hands', 'Feet'], // pose-mask button: parts painted into the mask
+    poseRadius: 40, // pose mask radius in px, used when poseRadiusPercent is 0
+    poseRadiusPercent: 5, // pose mask radius as a percentage of the skeleton's longest side
+    poseExtend: 0.5, // push hand/foot points along the forearm/shin (multiples of that bone)
     composeTool: 'move', // active Compose tool: move / brush / eraser
     composePaintColor: '#ff3366', // brush colour (desktop Composer default)
     composePaintSize: 40, // brush / eraser size in CSS px under the finger
@@ -221,7 +225,7 @@ export function resolveOutputSize(source = state.image.source, params = imagePar
 }
 
 export function addResult(result) {
-  state.results = [result, ...state.results].slice(0, 30);
+  state.results = [result, ...state.results].slice(0, 64);
   emit('results', state.results);
 }
 
