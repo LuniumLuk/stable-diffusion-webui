@@ -443,8 +443,9 @@ def _apply_alwayson_overrides(script_args: tuple, tab: str, overrides) -> tuple:
         runner = scripts.scripts_txt2img if tab == "txt2img" else scripts.scripts_img2img
         args = list(script_args)
         for name, spec in dict(overrides).items():
-            script = next((s for s in runner.scripts if s.name == name), None)
-            if script is None or isinstance(spec, dict) is False:
+            wanted = str(name).strip().lower()
+            script = next((s for s in runner.scripts if s.name and s.name.lower() == wanted), None)
+            if script is None or script.args_from is None or script.args_to is None or isinstance(spec, dict) is False:
                 continue
             values = spec.get("args")
             if not isinstance(values, list):
@@ -646,7 +647,12 @@ def _run_job(payload: dict, tab: str) -> dict:
             shared.total_tqdm.clear()
             progress_module.finish_task(task_id)
 
-    saved = _collect_saved_images(outpath_samples, started)
+    # The optional pose-inpaint intermediate is a gallery artifact, not a result tile.
+    saved = [
+        path
+        for path in _collect_saved_images(outpath_samples, started)
+        if "-before-pose-inpaint" not in os.path.basename(path)
+    ]
     seeds = list(getattr(processed, "all_seeds", []) or [])
     infotexts = list(getattr(processed, "infotexts", []) or [])
 
@@ -2503,6 +2509,13 @@ def register_routes(app):
             {"title": info.title, "name": info.model_name}
             for info in sd_models.checkpoints_list.values()
         ]
+        from modules import model_registry
+
+        if getattr(shared.opts, "anima_enabled", True):
+            models.extend(
+                {"title": model.label, "name": model.name, "family": model.family}
+                for model in model_registry.list_models()
+            )
         hidden = set(shared.opts.hide_samplers or [])
         samplers = [entry[0] for entry in sd_samplers.all_samplers if entry[0] not in hidden]
         schedulers = [scheduler.label for scheduler in sd_schedulers.schedulers]
@@ -2727,7 +2740,12 @@ def register_routes(app):
                 applied.append("mobile_lite_mode")
         if payload.get("sd_model_checkpoint"):
             title = str(payload["sd_model_checkpoint"])
-            if title not in sd_models.checkpoint_aliases:
+            from modules import model_registry
+
+            if model_registry.is_dit_title(title):
+                if model_registry.resolve_title(title) is None:
+                    raise HTTPException(status_code=422, detail=f"model {title!r} not found")
+            elif title not in sd_models.checkpoint_aliases:
                 raise HTTPException(status_code=422, detail=f"model {title!r} not found")
             shared.opts.set("sd_model_checkpoint", title)
             applied.append("sd_model_checkpoint")

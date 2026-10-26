@@ -48,6 +48,11 @@ def _failure_hint(details: str) -> str:
             "This checkpoint looks like Anima 2.9B; stable-diffusion.cpp builds the text adapter "
             "1024 wide and rejects the 2048-wide tensors. Use a 2B Anima model (Nova Anime AM v4.0 or earlier)"
         )
+    if "cannot make enough memory available" in details or "reported free 0.00" in details:
+        return (
+            "the GPU ran out of free VRAM; the SD checkpoint is parked automatically, so close other "
+            "GPU apps or lower the resolution"
+        )
     return ""
 
 
@@ -94,6 +99,12 @@ class SdcppServer:
                 return response.status == 200
         except Exception:
             return False
+
+    def ready_for(self, model: str, text_encoder: str, vae: str) -> bool:
+        """True when this process already serves exactly this model configuration."""
+        config = (os.path.abspath(model), os.path.abspath(text_encoder), os.path.abspath(vae), get_port())
+        with self._lock:
+            return self._proc is not None and self._proc.poll() is None and self._config == config
 
     # --------------------------------------------------------------- process
     @staticmethod
@@ -216,7 +227,16 @@ class SdcppServer:
                     pass
                 raise SdcppError("cancelled")
 
-            status = self.poll(job_id)
+            try:
+                status = self.poll(job_id)
+            except Exception as error:
+                if not self.is_alive():
+                    raise SdcppError("stable-diffusion.cpp stopped while generating", self._log_tail()) from error
+                if time.time() - started > timeout:
+                    raise SdcppError("sd.cpp job timed out") from error
+                time.sleep(POLL_INTERVAL)
+                continue
+
             state = str(status.get("status") or "")
             if state in ("completed", "failed", "cancelled"):
                 if state != "completed":

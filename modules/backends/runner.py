@@ -40,6 +40,22 @@ def _extra_params(text_encoder, flow_shift):
     return params
 
 
+def _park_sd_model() -> None:
+    """Move the loaded SD checkpoint to CPU so the sidecar gets the VRAM.
+
+    The model object survives, and A1111's process_images_inner() already calls
+    ensure_model_on_device() before the next SD job, so switching back is cheap.
+    """
+    from modules import sd_models
+
+    if shared.sd_model is None:
+        return
+
+    shared.state.textinfo = "parking the SD checkpoint"
+    sd_models.send_model_to_cpu(shared.sd_model)
+    devices.torch_gc()
+
+
 def process_images_via_anima(p, model: model_registry.DitModel):
     from modules import processing  # local import: processing imports this package
 
@@ -55,6 +71,8 @@ def process_images_via_anima(p, model: model_registry.DitModel):
 
     shared.state.job = "Anima"
     shared.state.textinfo = f"loading {model.name}"
+    if not server.ready_for(model.path, text_encoder, vae):
+        _park_sd_model()
     server.ensure_running(model.path, text_encoder, vae)
 
     p.fill_fields_from_opts()

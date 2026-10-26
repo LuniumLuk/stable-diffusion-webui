@@ -5,6 +5,7 @@ import { hrFinalSize } from './hires.js';
 import { historyControls } from './history.js';
 import { isJobActive, runJob } from './job.js';
 import { openParamsSheet } from './params.js';
+import { poseInpaintArgs, poseInpaintSummary } from './pose.js';
 import { createPromptEditor } from './prompt.js';
 import { on, setParam, state } from './state.js';
 import { el, toast } from './ui.js';
@@ -27,6 +28,7 @@ function refreshSummary() {
     `CFG ${params.cfg}`,
     params.sampler || '-',
     params.batch > 1 ? `×${params.batch}` : '',
+    poseInpaintSummary(params),
     params.seedLock ? `\u{1F512} ${params.seed}` : '\u{1F3B2} random',
   ].filter(Boolean);
   for (const part of parts) summaryMain.append(el('span', { text: part }));
@@ -153,6 +155,9 @@ async function generate() {
     hr_denoise: params.hrDenoise,
     hr_stage_config: params.hrStageConfig,
   };
+  if (params.poseInpaintEnabled) {
+    payload.alwayson = { 'Pose inpaint': { args: poseInpaintArgs(params) } };
+  }
 
   generateButton.disabled = true;
   try {

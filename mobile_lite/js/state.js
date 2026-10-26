@@ -37,6 +37,12 @@ export const state = {
     hrSteps: 0, // hires steps; 0 = same as the base pass
     hrDenoise: 0.7, // hires denoising strength
     hrStageConfig: '', // multi-stage hires text (one 'scale: .., steps: ..' entry per line)
+    poseInpaintEnabled: false, // txt2img: detect face/hand/foot points and inpaint them
+    poseInpaintParts: ['Face', 'Hands', 'Feet'], // selected point groups
+    poseInpaintRadius: 40, // point mask radius, same default as the desktop accordion
+    poseInpaintDenoise: 0.4,
+    poseInpaintSteps: 0, // 0 = use the base generation steps
+    poseInpaintSaveIntermediate: false, // keep the image before the pose inpaint pass
   },
   prompt: {
     text: '',

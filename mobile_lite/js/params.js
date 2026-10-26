@@ -2,6 +2,7 @@
 
 import { api_ } from './api.js';
 import { hrFinalSize, hrStagePlan } from './hires.js';
+import { POSE_PARTS } from './pose.js';
 import { planInputResize, resolveInputSize, round8 } from './resize-plan.js';
 import { closeSheet, el, openSheet, toast } from './ui.js';
 import { emit, imageParams, krea2Params, on, qwenParams, resolveOutputSize, setParam, state } from './state.js';
@@ -488,6 +489,7 @@ export function openParamsSheet(kind = 'text') {
 
   // Hires. fix (txt2img only) ----------------------------------------------
   let hrUnsubscribe = null;
+  let poseUnsubscribe = null;
   if (kind === 'text') {
     const upscalers = (state.boot && state.boot.upscalers) || ['Latent'];
     const hrPreview = el('div', { class: 'size-preview' });
@@ -541,6 +543,64 @@ export function openParamsSheet(kind = 'text') {
     // keep the target preview live for slider/size changes made in this sheet
     hrUnsubscribe = on('params', refreshHires);
     refreshHires();
+  }
+
+  // Pose inpaint (txt2img only) --------------------------------------------
+  if (kind === 'text') {
+    const poseBody = el('div');
+    const poseNote = el('div', { class: 'small muted' });
+    const selectedParts = () => (Array.isArray(params.poseInpaintParts) ? params.poseInpaintParts : POSE_PARTS);
+    const posePartButtons = POSE_PARTS.map((part) => el('button', {
+      class: `chip ${selectedParts().includes(part) ? 'on' : ''}`,
+      type: 'button',
+      text: part,
+      onClick: () => {
+        const next = new Set(selectedParts());
+        if (next.has(part)) next.delete(part);
+        else next.add(part);
+        setParam('poseInpaintParts', POSE_PARTS.filter((item) => next.has(item)));
+      },
+    }));
+
+    const refreshPose = () => {
+      const enabled = !!params.poseInpaintEnabled;
+      poseBody.classList.toggle('hidden', !enabled);
+      if (!enabled) return;
+      const count = selectedParts().filter((part) => POSE_PARTS.includes(part)).length;
+      poseNote.textContent = count
+        ? 'Runs after generation, using the compiled hires prompt when Hires fix is on. Steps 0 = base steps.'
+        : 'Select at least one part, or the pass is skipped.';
+      posePartButtons.forEach((button, index) => {
+        button.classList.toggle('on', selectedParts().includes(POSE_PARTS[index]));
+      });
+    };
+
+    const poseToggle = segmentedControl('Pose inpaint', [
+      { value: 'off', label: 'Off' },
+      { value: 'on', label: 'On' },
+    ], params.poseInpaintEnabled ? 'on' : 'off', (value) => {
+      setParam('poseInpaintEnabled', value === 'on');
+      refreshPose();
+    });
+
+    poseBody.append(
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Parts' }),
+        el('div', { class: 'chips' }, posePartButtons),
+      ]),
+      sliderRow(params, 'Point radius', 'poseInpaintRadius', 8, 400, 2),
+      sliderRow(params, 'Denoising strength', 'poseInpaintDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
+      sliderRow(params, 'Steps (0 = base)', 'poseInpaintSteps', 0, 150, 1),
+      segmented('Save intermediate image', [
+        { value: 'off', label: 'Off' },
+        { value: 'on', label: 'On' },
+      ], params.poseInpaintSaveIntermediate ? 'on' : 'off', (value) => setParam('poseInpaintSaveIntermediate', value === 'on')),
+      poseNote,
+      el('div', { class: 'small muted', text: 'Uses the local pose detector; DWPose models give the best anime hands/feet.' }),
+    );
+    body.append(poseToggle.node, poseBody);
+    poseUnsubscribe = on('params', refreshPose);
+    refreshPose();
   }
 
   // img2img extras ---------------------------------------------------------
@@ -615,6 +675,9 @@ export function openParamsSheet(kind = 'text') {
     title: kind === 'image' ? 'Image parameters' : 'Text parameters',
     body,
     actions: [{ label: 'Done', primary: true, onClick: () => closeSheet() }],
-    onClose: () => { if (hrUnsubscribe) hrUnsubscribe(); },
+    onClose: () => {
+      if (hrUnsubscribe) hrUnsubscribe();
+      if (poseUnsubscribe) poseUnsubscribe();
+    },
   });
 }

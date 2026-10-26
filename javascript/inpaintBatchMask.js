@@ -34,7 +34,7 @@
 
     const state = {
         enabled: false,
-        layers: [], // {id, name, dataUrl, __ghost}
+        layers: [], // {id, name, dataUrl, origin, __ghost}
         activeId: null,
         canvasLayerId: null, // layer whose mask is currently drawn on the sketch canvas
         counter: 0,
@@ -203,9 +203,9 @@
         refreshGhosts();
     }
 
-    function newLayer(name) {
+    function newLayer(name, origin) {
         state.counter += 1;
-        return {id: `inpbatch-${Date.now().toString(36)}-${state.counter}`, name: name || `Mask ${state.counter}`, dataUrl: ""};
+        return {id: `inpbatch-${Date.now().toString(36)}-${state.counter}`, name: name || `Mask ${state.counter}`, dataUrl: "", origin: origin || null};
     }
 
     function addLayer() {
@@ -364,6 +364,91 @@
         updateChrome();
         pushPayload();
         refreshGhosts();
+    }
+
+    function canvasHasInk() {
+        const p = getParts();
+        if (!p) return false;
+        try {
+            const data = p.maskCanvas.getContext("2d").getImageData(0, 0, p.maskCanvas.width, p.maskCanvas.height).data;
+            for (let i = 3; i < data.length; i += 4) {
+                if (data[i] > 8) return true;
+            }
+        } catch (e) {
+            return false;
+        }
+        return false;
+    }
+
+    // Add externally generated masks (pose points, etc.) as regular batch layers.
+    // Layers created here are tagged with `origin` so a later run can replace its own
+    // masks without touching masks the user painted by hand.
+    function addMasks(entries, options = {}) {
+        const list = (entries || []).filter((entry) => entry && entry.dataUrl);
+        const origin = options.origin || "external";
+        const replaceOrigin = options.replaceOrigin !== false;
+
+        if (!list.length) {
+            // a detection run that found nothing must still remove the previous run's
+            // masks, otherwise old face/hand/foot masks silently stay in the chain
+            if (replaceOrigin) clearOrigin(origin);
+            return 0;
+        }
+
+        const hadInk = canvasHasInk();
+
+        captureActiveLayer();
+        if (!state.enabled) setEnabled(true);
+
+        // enabling batch mode snapshots the painted mask into a layer; drop that blank
+        // placeholder when the picture had no mask before the generated masks arrived
+        if (!hadInk && state.layers.length === 1 && !state.layers[0].origin) {
+            state.layers = [];
+        }
+        if (replaceOrigin) {
+            state.layers = state.layers.filter((layer) => layer.origin !== origin);
+        }
+
+        const created = [];
+        list.forEach((entry) => {
+            const layer = newLayer(entry.name, origin);
+            layer.dataUrl = entry.dataUrl;
+            state.layers.push(layer);
+            created.push(layer);
+        });
+
+        state.activeId = created[0].id;
+        state.canvasLayerId = null;
+        renderList();
+        updateChrome();
+        applyActiveLayer(true);
+        pushPayload(false);
+        refreshGhosts();
+        return created.length;
+    }
+
+    function clearOrigin(origin) {
+        if (!origin) return 0;
+        const removed = state.layers.filter((layer) => layer.origin === origin);
+        if (!removed.length) return 0;
+
+        state.layers = state.layers.filter((layer) => layer.origin !== origin);
+        if (!state.layers.length) {
+            const layer = newLayer();
+            state.layers.push(layer);
+            state.activeId = layer.id;
+            state.canvasLayerId = null;
+            applyActiveLayer(true);
+        } else if (!state.layers.some((layer) => layer.id === state.activeId)) {
+            state.activeId = state.layers[0].id;
+            state.canvasLayerId = null;
+            applyActiveLayer(true);
+        }
+        renderList();
+        updateChrome();
+        pushPayload(false); // removal only: never overwrite stored masks from the current canvas
+        refreshGhosts();
+        return removed.length;
     }
 
     /* ------------------------------- other layers overlay ----------------------------- */
@@ -968,6 +1053,9 @@
         window.inpaintBatchMask = {
             // used by the image viewer's "compare with input" button
             initialImageFor: (src) => state.batchInitials.get(normSrc(src)) || null,
+            // used by javascript/inpaintPoseMask.js (and any other mask generator)
+            addMasks,
+            clearOrigin,
         };
 
         // Generate reads the hidden textbox; refresh it before gradio's own click handler runs.
