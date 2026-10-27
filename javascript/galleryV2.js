@@ -5,6 +5,7 @@
 
   var ROOT_ID = 'gallery-v2-root';
   var PAGE = 60;
+  var FOLD_KEYS = ['options', 'groups', 'albums', 'sources', 'tags', 'views'];
   var SORTS = [
     ['time_desc', 'Newest first'],
     ['time_asc', 'Oldest first'],
@@ -76,7 +77,8 @@
     promptVariant: 'source', // 'source' or 'compiled' - which prompt the info panel shows / sends
     sendDefaults: {}, // bare send action -> variation id used by a plain click
     busy: false,
-    loadedOnce: false
+    loadedOnce: false,
+    folds: { options: false, groups: false, albums: false, sources: false, tags: false, views: false }
   };
 
   function el(id) { return document.getElementById(id); }
@@ -648,6 +650,21 @@
       esc(label) + '</button>';
   }
 
+  // Foldable toolbar section: the header stays visible (and shrinks to a pill
+  // when folded) while the body is hidden, so the frequently used rows above
+  // keep their space.
+  function foldSection(key, label, bodyHtml) {
+    return '<section class="gv2-fold" data-fold="' + key + '">' +
+      '<button type="button" class="gv2-fold-head" data-fold-toggle="' + key + '" aria-expanded="true" ' +
+        'title="Fold or unfold ' + esc(label) + '">' +
+        '<span class="gv2-fold-caret" aria-hidden="true">\u25BE</span>' +
+        '<span class="gv2-row-label">' + esc(label) + '</span>' +
+        '<span class="gv2-fold-n" id="gv2-fold-n-' + key + '"></span>' +
+      '</button>' +
+      bodyHtml +
+    '</section>';
+  }
+
   function buildChrome(root) {
     root.innerHTML =
       '<div class="gv2-toolbar">' +
@@ -670,6 +687,10 @@
           '<select id="gv2-res" class="gv2-select" title="Resolution">' +
             RESOLUTIONS.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') +
           '</select>' +
+        '</div>' +
+        '<div class="gv2-row gv2-row-states">' +
+          '<div class="gv2-states-inline" id="gv2-states"></div>' +
+          '<span class="gv2-adv-sep"></span>' +
           '<button id="gv2-sync" class="gv2-btn" title="Re-index output folders into the gallery store">Sync</button>' +
           '<button id="gv2-empty-trash" class="gv2-btn gv2-btn-danger" title="Permanently delete all trashed metadata rows">Empty Trash</button>' +
           '<button id="gv2-trash-disliked" class="gv2-btn gv2-btn-danger" title="Move every disliked item to trash (original files and media are deleted; metadata kept)">\u{1F5D1} Trash Disliked</button>' +
@@ -677,34 +698,35 @@
           '<button id="gv2-archive-unrated" class="gv2-btn gv2-btn-danger" title="Archive every unrated active item, including albumed ones (staged items are kept; leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Unrated</button>' +
           '<button id="gv2-archive-current" class="gv2-btn gv2-btn-danger" title="Archive all items matching the current filter (leaves the active view; auto-trashed after 24 h unless endorsed)">\u{1F4E6} Archive Current</button>' +
         '</div>' +
-        '<div class="gv2-row gv2-row-adv">' +
-          '<span class="gv2-row-label">Options</span>' +
-          '<select id="gv2-page-mode" class="gv2-select" title="How results load">' +
-            '<option value="scroll">\u221E Infinite scroll</option>' +
-            '<option value="pages">\u{1F4C4} Paged</option>' +
-          '</select>' +
-          '<select id="gv2-page-size" class="gv2-select" title="Items per page / per scroll batch">' +
-            [24, 48, 60, 96, 120].map(function (v) { return '<option value="' + v + '">' + v + ' / page</option>'; }).join('') +
-          '</select>' +
-          '<select id="gv2-thumb-size" class="gv2-select" title="Thumbnail size">' +
-            '<option value="xs">Thumb: Mini</option>' +
-            '<option value="s">Thumb: Small</option>' +
-            '<option value="m">Thumb: Medium</option>' +
-            '<option value="l">Thumb: Large</option>' +
-          '</select>' +
-          '<span class="gv2-adv-sep"></span>' +
-          '<span class="gv2-row-label">Date</span>' +
-          '<input type="date" id="gv2-date-from" class="gv2-date" title="From date (inclusive)">' +
-          '<span class="gv2-adv-dash">\u2013</span>' +
-          '<input type="date" id="gv2-date-to" class="gv2-date" title="To date (inclusive)">' +
-          '<button id="gv2-date-clear" class="gv2-btn gv2-btn-quiet" title="Clear the custom date range">\u2715 Clear dates</button>' +
+        '<div class="gv2-folds">' +
+          foldSection('options', 'Options',
+            '<div class="gv2-row gv2-row-adv gv2-fold-body" id="gv2-options">' +
+              '<select id="gv2-page-mode" class="gv2-select" title="How results load">' +
+                '<option value="scroll">\u221E Infinite scroll</option>' +
+                '<option value="pages">\u{1F4C4} Paged</option>' +
+              '</select>' +
+              '<select id="gv2-page-size" class="gv2-select" title="Items per page / per scroll batch">' +
+                [24, 48, 60, 96, 120].map(function (v) { return '<option value="' + v + '">' + v + ' / page</option>'; }).join('') +
+              '</select>' +
+              '<select id="gv2-thumb-size" class="gv2-select" title="Thumbnail size">' +
+                '<option value="xs">Thumb: Mini</option>' +
+                '<option value="s">Thumb: Small</option>' +
+                '<option value="m">Thumb: Medium</option>' +
+                '<option value="l">Thumb: Large</option>' +
+              '</select>' +
+              '<span class="gv2-adv-sep"></span>' +
+              '<span class="gv2-row-label">Date</span>' +
+              '<input type="date" id="gv2-date-from" class="gv2-date" title="From date (inclusive)">' +
+              '<span class="gv2-adv-dash">\u2013</span>' +
+              '<input type="date" id="gv2-date-to" class="gv2-date" title="To date (inclusive)">' +
+              '<button id="gv2-date-clear" class="gv2-btn gv2-btn-quiet" title="Clear the custom date range">\u2715 Clear dates</button>' +
+            '</div>') +
+          foldSection('groups', 'Quick filters', '<div class="gv2-row gv2-fold-body" id="gv2-groups"></div>') +
+          foldSection('albums', 'Albums', '<div class="gv2-row gv2-albums gv2-fold-body" id="gv2-albums"></div>') +
+          foldSection('sources', 'Sources', '<div class="gv2-row gv2-fold-body" id="gv2-sources"></div>') +
+          foldSection('tags', 'Tags', '<div class="gv2-row gv2-fold-body" id="gv2-tags"></div>') +
+          foldSection('views', 'Saved filters', '<div class="gv2-row gv2-fold-body" id="gv2-views"></div>') +
         '</div>' +
-        '<div class="gv2-row" id="gv2-states"></div>' +
-        '<div class="gv2-row" id="gv2-groups"></div>' +
-        '<div class="gv2-row gv2-albums" id="gv2-albums"></div>' +
-        '<div class="gv2-row" id="gv2-sources"></div>' +
-        '<div class="gv2-row" id="gv2-tags"></div>' +
-        '<div class="gv2-row" id="gv2-views"></div>' +
         '<div class="gv2-row gv2-row-status">' +
           '<span id="gv2-count" class="gv2-count"></span>' +
           '<button id="gv2-select" class="gv2-btn gv2-btn-quiet" ' +
@@ -722,6 +744,8 @@
       '<div id="gv2-more-wrap" class="gv2-more-wrap"><button id="gv2-more" class="gv2-btn gv2-more">Load more</button></div>' +
       '<div id="gv2-batch" class="gv2-batch gv2-batch-hidden">' +
         '<span id="gv2-batch-count"></span>' +
+        '<button class="gv2-btn gv2-btn-quiet gv2-batch-exit" data-batch="exitselect" title="Leave select mode (Esc)">\u2715 Exit select</button>' +
+        '<span class="gv2-adv-sep gv2-batch-sep"></span>' +
         '<button class="gv2-btn gv2-btn-quiet" data-batch="selectpage" title="Select all items currently loaded in the grid">Select shown</button>' +
         '<button class="gv2-btn" data-batch="endorse">Endorse</button>' +
         '<button class="gv2-btn" data-batch="dislike">Dislike</button>' +
@@ -826,6 +850,7 @@
       var action = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-batch') : null;
       if (!action) return;
       if (action === 'clear') { setSelection([]); return; }
+      if (action === 'exitselect') { setSelectMode(false); return; }
       if (action === 'selectpage') { selectPage(); return; }
       if (action === 'copy-censored') { copySelectedToCensored(); return; }
       if (action === 'album') {
@@ -863,6 +888,7 @@
       renderFacetChips();
       renderGroupChips();
       renderStateChips();
+      applyFolds();
     });
   }
 
@@ -893,7 +919,7 @@
     if (!box) return;
     var list = state.albums || [];
     var activeIds = (state.filters.albums || []).filter(function (v) { return typeof v === 'number'; });
-    var html = '<div class="gv2-albums-head"><span class="gv2-row-label">Albums</span>';
+    var html = '<div class="gv2-albums-head">';
     var noneActive = (state.filters.albums || []).indexOf('none') >= 0;
     html += countChip('No album', null, noneActive, 'data-album="none" title="items not in any album"');
     html += countChip('Show albumed', null, !!state.filters.show_albumed,
@@ -982,6 +1008,7 @@
     if (removeBtn) removeBtn.addEventListener('click', removeAlbumForm);
     var cancelBtn = el('gv2-album-cancel');
     if (cancelBtn) cancelBtn.addEventListener('click', hideAlbumForm);
+    applyFolds();
   }
 
   function openAlbumForm() {
@@ -1137,7 +1164,7 @@
   function renderFacetChips() {
     var srcBox = el('gv2-sources');
     if (!srcBox || !state.facets) return;
-    var html = '<span class="gv2-row-label">Sources</span>';
+    var html = '';
     (state.facets.sources || []).forEach(function (src) {
       var active = (state.filters.sources || []).indexOf(src.id) >= 0;
       html += countChip(src.label, src.count, active, 'data-source="' + esc(src.id) + '"');
@@ -1147,7 +1174,7 @@
     var tagBox = el('gv2-tags');
     if (tagBox) {
       var tags = (state.facets.workflow_tags || []).slice(0, 24);
-      var html2 = '<span class="gv2-row-label">Tags</span>';
+      var html2 = '';
       tags.forEach(function (tag) {
         var active = ((state.filters.tags || {}).workflow || []).indexOf(tag.name) >= 0;
         html2 += countChip(tag.name, tag.count, active, 'data-tag="' + esc(tag.name) + '"');
@@ -1160,7 +1187,7 @@
   function renderGroupChips() {
     var box = el('gv2-groups');
     if (!box || !state.facets) return;
-    var html = '<span class="gv2-row-label">Quick filters</span>';
+    var html = '';
     (state.facets.groups || []).forEach(function (group) {
       var emoji = GROUP_EMOJI[group.id];
       html += countChip((emoji ? emoji + ' ' : '') + group.label, group.count, groupActive(group),
@@ -1236,6 +1263,7 @@
     renderGroupChips();
     renderAlbums();
     renderFacetChips();
+    applyFolds();
   }
 
   function canonFilters(f) {
@@ -1270,7 +1298,7 @@
   function renderViews() {
     var box = el('gv2-views');
     if (!box) return;
-    var html = '<span class="gv2-row-label">Saved filters</span>';
+    var html = '';
     html += '<button class="gv2-btn gv2-btn-quiet" id="gv2-save-view" ' +
       'title="Save the current filter combination for one-click reuse">Save current</button>';
     (state.views || []).forEach(function (view) {
@@ -1313,6 +1341,7 @@
         if (ev.key === 'Enter') saveCurrentView();
       });
     }
+    applyFolds();
   }
 
   function saveCurrentView() {
@@ -1429,6 +1458,11 @@
       if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
       if (prefs.detailMediaLeft === true) state.detailMediaLeft = true;
       if (prefs.promptVariant === 'compiled') state.promptVariant = 'compiled';
+      if (prefs.folds && typeof prefs.folds === 'object') {
+        FOLD_KEYS.forEach(function (key) {
+          if (prefs.folds[key] === true) state.folds[key] = true;
+        });
+      }
       if (prefs.sendDefaults && typeof prefs.sendDefaults === 'object') {
         ['img2img', 'inpaint'].forEach(function (action) {
           var only = prefs.sendDefaults[action];
@@ -1446,7 +1480,8 @@
         thumbSize: state.thumbSize,
         detailMediaLeft: !!state.detailMediaLeft,
         promptVariant: state.promptVariant === 'compiled' ? 'compiled' : 'source',
-        sendDefaults: state.sendDefaults
+        sendDefaults: state.sendDefaults,
+        folds: state.folds
       }));
     } catch (err) { /* ignore */ }
   }
@@ -1580,10 +1615,17 @@
   function updateCountLine() {
     var line = el('gv2-count');
     if (!line) return;
-    var parts = [state.total + ' item(s)'];
-    if (activeFilterCount() > 0) parts.push(activeFilterCount() + ' filter(s)');
-    if (state.rows.length < state.total) parts.push('showing ' + state.rows.length);
-    line.textContent = parts.join(' \u00b7 ');
+    var filters = activeFilterCount();
+    var html = '<span class="gv2-count-total">' + state.total + ' item(s)</span>';
+    if (filters > 0) {
+      html += '<span class="gv2-count-dot">\u00B7</span>' +
+        '<span class="gv2-count-filters">' + filters + ' filter(s)</span>';
+    }
+    if (state.rows.length < state.total) {
+      html += '<span class="gv2-count-dot">\u00B7</span>' +
+        '<span class="gv2-count-shown">showing ' + state.rows.length + '</span>';
+    }
+    line.innerHTML = html;
   }
 
   // ---------------------------------------------------------------- cards
@@ -1697,6 +1739,7 @@
     if (count) count.textContent = state.selected.size + ' selected';
     bar.classList.toggle('gv2-batch-hidden', !(state.selectMode || state.selected.size > 0));
     bar.classList.toggle('gv2-batch-off', state.selected.size === 0);
+    bar.classList.toggle('gv2-batch-selecting', state.selectMode);
   }
 
   function setSelectMode(on) {
@@ -1714,6 +1757,61 @@
     } else {
       setSelection([]);
     }
+  }
+
+  // ---------------------------------------------------------------- folds
+
+  function foldActiveCount(key) {
+    var f = state.filters || {};
+    if (key === 'options') return (f.since ? 1 : 0) + (f.until ? 1 : 0);
+    if (key === 'groups') {
+      var active = 0;
+      ((state.facets || {}).groups || []).forEach(function (group) {
+        if (groupActive(group)) active++;
+      });
+      return active;
+    }
+    if (key === 'albums') return (f.albums || []).length + (f.show_albumed ? 1 : 0);
+    if (key === 'sources') return (f.sources || []).length;
+    if (key === 'tags') {
+      var tags = f.tags || {};
+      return Object.keys(tags).reduce(function (n, k) { return n + (tags[k] || []).length; }, 0);
+    }
+    if (key === 'views') return (state.views || []).some(viewIsActive) ? 1 : 0;
+    return 0;
+  }
+
+  function applyFolds() {
+    var root = el(ROOT_ID);
+    if (!root) return;
+    FOLD_KEYS.forEach(function (key) {
+      var section = root.querySelector('.gv2-fold[data-fold="' + key + '"]');
+      if (!section) return;
+      var folded = !!state.folds[key];
+      section.classList.toggle('gv2-fold-collapsed', folded);
+      var head = section.querySelector('.gv2-fold-head');
+      if (head) head.setAttribute('aria-expanded', folded ? 'false' : 'true');
+      var badge = el('gv2-fold-n-' + key);
+      if (badge) {
+        var n = foldActiveCount(key);
+        badge.textContent = n > 0 ? n + ' active' : '';
+      }
+    });
+  }
+
+  function toggleFold(key) {
+    if (FOLD_KEYS.indexOf(key) < 0) return;
+    state.folds[key] = !state.folds[key];
+    savePrefs();
+    applyFolds();
+  }
+
+  function wireFolds(root) {
+    root.addEventListener('click', function (ev) {
+      var head = ev.target.closest ? ev.target.closest('[data-fold-toggle]') : null;
+      if (!head) return;
+      toggleFold(head.getAttribute('data-fold-toggle'));
+    });
   }
 
   // The shortcuts are advertised in the toolbar's top row (#gv2-keys):
@@ -2687,6 +2785,8 @@
     buildChrome(root);
     applyThumbSize();
     wireChips(root);
+    wireFolds(root);
+    applyFolds();
     wireGrid(root);
     wireCtxMenu();
     document.addEventListener('keydown', gv2Hotkeys);
