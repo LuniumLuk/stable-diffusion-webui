@@ -28,6 +28,7 @@ checkpoints_list = {}
 checkpoint_aliases = {}
 checkpoint_alisases = checkpoint_aliases  # for compatibility with old name
 checkpoints_loaded = collections.OrderedDict()
+checkpoints_lock = threading.RLock()
 
 
 class ModelType(enum.Enum):
@@ -102,10 +103,12 @@ class CheckpointInfo:
         if self.shorthash:
             self.ids += [self.shorthash, self.sha256, f'{self.name} [{self.shorthash}]', f'{self.name_for_extra} [{self.shorthash}]']
 
-    def register(self):
-        checkpoints_list[self.title] = self
+    def register(self, checkpoints=None, aliases=None):
+        checkpoints = checkpoints_list if checkpoints is None else checkpoints
+        aliases = checkpoint_aliases if aliases is None else aliases
+        checkpoints[self.title] = self
         for id in self.ids:
-            checkpoint_aliases[id] = self
+            aliases[id] = self
 
     def calculate_shorthash(self):
         self.sha256 = hashes.sha256(self.filename, f"checkpoint/{self.name}")
@@ -150,7 +153,92 @@ def setup_model():
 
 
 def checkpoint_tiles(use_short=False):
-    return [x.short_title if use_short else x.title for x in checkpoints_list.values()]
+    with checkpoints_lock:
+        return [x.short_title if use_short else x.title for x in checkpoints_list.values()]
+
+
+def checkpoint_infos() -> list["CheckpointInfo"]:
+    """Snapshot of the registered checkpoints, safe against a concurrent rescan."""
+    with checkpoints_lock:
+        return list(checkpoints_list.values())
+
+
+def prune_missing_checkpoints() -> list[str]:
+    """Drop checkpoints whose file was deleted from disk; returns the removed titles.
+
+    Cheap (one stat per checkpoint, no re-hash), unlike the full :func:`list_models` rescan,
+    so the UI can call it whenever it builds the checkpoint choices.
+    """
+    removed = []
+    with checkpoints_lock:
+        for title, info in list(checkpoints_list.items()):
+            if os.path.isfile(info.filename):
+                continue
+            del checkpoints_list[title]
+            removed.append(title)
+            for alias, value in list(checkpoint_aliases.items()):
+                if value is info:
+                    del checkpoint_aliases[alias]
+    return removed
+
+
+def available_checkpoint_titles(use_short=False) -> list[str]:
+    """Every selectable title: SD checkpoint files first, then DiT sidecar models."""
+    prune_missing_checkpoints()
+    titles = checkpoint_tiles(use_short)
+    try:
+        from modules import model_registry
+
+        if getattr(shared.opts, "anima_enabled", True):
+            titles = titles + model_registry.checkpoint_tiles()
+    except Exception:
+        pass
+    return titles
+
+
+def checkpoint_is_available(title) -> bool:
+    """True when ``title`` still resolves to a file on disk (DiT models included)."""
+    if not title:
+        return False
+
+    info = checkpoint_aliases.get(title)
+    if info is not None:
+        return os.path.isfile(info.filename)
+
+    from modules import model_registry
+
+    if model_registry.is_dit_title(title):
+        return model_registry.resolve_title(title) is not None
+
+    # partial names ("sdxl") are resolved by the same substring match the loader uses
+    match = get_closet_checkpoint_match(title)
+    return match is not None and os.path.isfile(match.filename)
+
+
+def sync_checkpoint_selection() -> "str | None":
+    """Re-point a saved checkpoint that no longer exists at the first available one.
+
+    Deleting model files leaves ``sd_model_checkpoint`` dangling; without this the dropdowns
+    keep showing the missing model and every generation logs a fallback warning.
+    """
+    configured = shared.opts.sd_model_checkpoint
+    if configured and not checkpoints_list:
+        # called before the startup scan: look at disk before declaring the model missing
+        list_models()
+
+    if checkpoint_is_available(configured):
+        return configured
+
+    title = next(iter(available_checkpoint_titles()), None)
+    if configured != title:
+        if configured:
+            print(f'Checkpoint "{configured}" is gone; selecting "{title or "none"}" instead', file=sys.stderr)
+        shared.opts.data["sd_model_checkpoint"] = title
+        try:
+            shared.opts.save(shared.config_filename)
+        except (OSError, AssertionError) as error:
+            print(f"Could not save the checkpoint selection: {error}", file=sys.stderr)
+    return title
 
 
 DIFFUSERS_COMPONENT_DIRS = {"unet", "vae", "text_encoder", "text_encoder_2", "safety_checker", "feature_extractor", "scheduler", "tokenizer"}
@@ -164,9 +252,6 @@ def is_diffusers_component_file(filename):
 
 
 def list_models():
-    checkpoints_list.clear()
-    checkpoint_aliases.clear()
-
     cmd_ckpt = shared.cmd_opts.ckpt
     if shared.cmd_opts.no_download_sd_model or cmd_ckpt != shared.sd_model_file or os.path.exists(cmd_ckpt):
         model_url = None
@@ -178,9 +263,13 @@ def list_models():
     model_list = modelloader.load_models(model_path=model_path, model_url=model_url, command_path=shared.cmd_opts.ckpt_dir, ext_filter=[".ckpt", ".safetensors"], download_name="v1-5-pruned-emaonly.safetensors", ext_blacklist=[".vae.ckpt", ".vae.safetensors"], hash_prefix=expected_sha256)
     model_list = [filename for filename in model_list if not is_diffusers_component_file(filename)]
 
+    # scan into fresh maps and swap them in one step: readers never see a half-empty list
+    new_checkpoints = {}
+    new_aliases = {}
+
     if os.path.exists(cmd_ckpt):
         checkpoint_info = CheckpointInfo(cmd_ckpt)
-        checkpoint_info.register()
+        checkpoint_info.register(new_checkpoints, new_aliases)
 
         shared.opts.data['sd_model_checkpoint'] = checkpoint_info.title
     elif cmd_ckpt is not None and cmd_ckpt != shared.default_sd_model_file:
@@ -188,7 +277,13 @@ def list_models():
 
     for filename in model_list:
         checkpoint_info = CheckpointInfo(filename)
-        checkpoint_info.register()
+        checkpoint_info.register(new_checkpoints, new_aliases)
+
+    with checkpoints_lock:
+        checkpoints_list.clear()
+        checkpoints_list.update(new_checkpoints)
+        checkpoint_aliases.clear()
+        checkpoint_aliases.update(new_aliases)
 
 
 re_strip_checksum = re.compile(r"\s*\[[^]]+]\s*$")

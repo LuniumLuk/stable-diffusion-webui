@@ -486,6 +486,25 @@ def _hr_upscaler_choices() -> list:
     return [*shared.latent_upscale_modes, *[item.name for item in shared.sd_upscalers]]
 
 
+def _checkpoint_choices(refresh: bool = False) -> list:
+    """Checkpoint entries for the lite model picker; deleted files are rescanned away."""
+    from modules import model_registry, sd_models, shared
+
+    if refresh or any(not os.path.isfile(info.filename) for info in sd_models.checkpoint_infos()):
+        sd_models.list_models()
+
+    models = [
+        {"title": info.title, "name": info.model_name}
+        for info in sd_models.checkpoint_infos()
+    ]
+    if getattr(shared.opts, "anima_enabled", True):
+        models.extend(
+            {"title": model.label, "name": model.name, "family": model.family}
+            for model in model_registry.list_models()
+        )
+    return models
+
+
 def _resolve_hr_upscaler(raw, defaults: dict) -> str:
     """Unknown names (stale ui-config, typo) fall back to the desktop default."""
     from modules import shared
@@ -2487,17 +2506,8 @@ def register_routes(app):
         import modules.shared as shared
         from modules import sd_models, sd_samplers, sd_schedulers
 
-        models = [
-            {"title": info.title, "name": info.model_name}
-            for info in sd_models.checkpoints_list.values()
-        ]
-        from modules import model_registry
-
-        if getattr(shared.opts, "anima_enabled", True):
-            models.extend(
-                {"title": model.label, "name": model.name, "family": model.family}
-                for model in model_registry.list_models()
-            )
+        current_model = sd_models.sync_checkpoint_selection()
+        models = _checkpoint_choices()
         hidden = set(shared.opts.hide_samplers or [])
         samplers = [entry[0] for entry in sd_samplers.all_samplers if entry[0] not in hidden]
         schedulers = [scheduler.label for scheduler in sd_schedulers.schedulers]
@@ -2507,7 +2517,7 @@ def register_routes(app):
             "version": 1,
             "mode": _mode(),
             "mode_choices": MODE_CHOICES,
-            "model": str(shared.opts.sd_model_checkpoint or ""),
+            "model": str(current_model or ""),
             "models": models,
             "samplers": samplers,
             "schedulers": schedulers,
@@ -2539,6 +2549,15 @@ def register_routes(app):
             "page_size": 48,
             "qwen": _qwen_status_payload(),
         }
+
+    @app.get("/mlite/api/models")
+    def mlite_models(refresh: bool = False):
+        """Checkpoint list for the model picker; `refresh=1` rescans the models folder."""
+        from modules import sd_models
+
+        current_model = sd_models.sync_checkpoint_selection()
+        models = _checkpoint_choices(refresh=refresh)
+        return {"model": str(current_model or ""), "models": models}
 
     @app.get("/mlite/api/status")
     def mlite_status():
@@ -2722,12 +2741,7 @@ def register_routes(app):
                 applied.append("mobile_lite_mode")
         if payload.get("sd_model_checkpoint"):
             title = str(payload["sd_model_checkpoint"])
-            from modules import model_registry
-
-            if model_registry.is_dit_title(title):
-                if model_registry.resolve_title(title) is None:
-                    raise HTTPException(status_code=422, detail=f"model {title!r} not found")
-            elif title not in sd_models.checkpoint_aliases:
+            if not sd_models.checkpoint_is_available(title):
                 raise HTTPException(status_code=422, detail=f"model {title!r} not found")
             shared.opts.set("sd_model_checkpoint", title)
             applied.append("sd_model_checkpoint")

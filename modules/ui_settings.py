@@ -12,6 +12,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 def get_value_for_setting(key):
     value = getattr(opts, key)
 
+    if key == "sd_model_checkpoint":
+        # a page (re)load picks up checkpoints deleted since the server started
+        value = sd_models.sync_checkpoint_selection()
+
     info = opts.data_labels[key]
     args = info.component_args() if callable(info.component_args) else info.component_args or {}
     args = {k: v for k, v in args.items() if k not in {'precision'}}
@@ -41,14 +45,17 @@ def create_setting_component(key, is_quicksettings=False):
 
     elem_id = f"setting_{key}"
 
+    # the checkpoint refresh also re-points a selection whose file was deleted
+    result_args = shared_items.checkpoint_refresh_update if key == "sd_model_checkpoint" else None
+
     if info.refresh is not None:
         if is_quicksettings:
             res = comp(label=info.label, value=fun(), elem_id=elem_id, **(args or {}))
-            ui_common.create_refresh_button(res, info.refresh, info.component_args, f"refresh_{key}")
+            ui_common.create_refresh_button(res, info.refresh, info.component_args, f"refresh_{key}", result_args)
         else:
             with FormRow():
                 res = comp(label=info.label, value=fun(), elem_id=elem_id, **(args or {}))
-                ui_common.create_refresh_button(res, info.refresh, info.component_args, f"refresh_{key}")
+                ui_common.create_refresh_button(res, info.refresh, info.component_args, f"refresh_{key}", result_args)
     else:
         res = comp(label=info.label, value=fun(), elem_id=elem_id, **(args or {}))
 

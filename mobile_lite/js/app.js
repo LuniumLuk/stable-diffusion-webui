@@ -59,14 +59,24 @@ function updateModelChip() {
   chip.title = model;
 }
 
+/** Apply a /mlite/api/models payload to the boot state (and the header chip). */
+function syncBootModels(data) {
+  if (!data) return;
+  if (Array.isArray(data.models)) state.boot.models = data.models;
+  if (typeof data.model === 'string') state.boot.model = data.model;
+  updateModelChip();
+}
+
 function openModelSheet() {
   const list = el('div', { class: 'option-list' });
   const search = el('input', { type: 'search', placeholder: 'filter…', autocapitalize: 'off', spellcheck: false });
+  const status = el('div', { class: 'small muted' });
+  let models = state.boot.models || [];
 
   const renderList = (filter = '') => {
     list.replaceChildren();
-    const models = (state.boot.models || []).filter((model) => model.title.toLowerCase().includes(filter.toLowerCase()));
-    for (const model of models.slice(0, 400)) {
+    const matches = models.filter((model) => model.title.toLowerCase().includes(filter.toLowerCase()));
+    for (const model of matches.slice(0, 400)) {
       const current = state.boot.model === model.title;
       list.append(el('button', {
         class: `option-item ${current ? 'on' : ''}`,
@@ -77,12 +87,38 @@ function openModelSheet() {
         current ? el('span', { class: 'sub', text: 'current' }) : null,
       ]));
     }
-    if (!models.length) list.append(el('div', { class: 'empty-hint', text: 'no match' }));
+    if (!matches.length) list.append(el('div', { class: 'empty-hint', text: 'no match' }));
+    status.textContent = `${matches.length} of ${models.length} checkpoint(s)`;
   };
+
+  const reload = el('button', {
+    class: 'option-item', type: 'button', text: '\u21BB Reload checkpoint list',
+    title: 'Rescan the models folder and drop checkpoints whose files were deleted',
+    onClick: async () => {
+      status.textContent = 'scanning the models folder\u2026';
+      try {
+        syncBootModels(await api_.models(true));
+        models = state.boot.models || [];
+        renderList(search.value);
+        toast('checkpoint list reloaded', 'ok', 1800);
+      } catch (error) {
+        status.textContent = `reload failed: ${error.message}`;
+      }
+    },
+  });
+
   search.addEventListener('input', debounce(() => renderList(search.value), 200));
   renderList();
 
-  openSheet({ title: 'Checkpoint', body: el('div', {}, [search, list]) });
+  // pick up files deleted/added since the page booted; the server only rescans when a
+  // listed checkpoint file is gone, so this stays cheap
+  api_.models(false).then((data) => {
+    syncBootModels(data);
+    models = state.boot.models || [];
+    renderList(search.value);
+  }).catch(() => { status.textContent = `${models.length} checkpoint(s) \u00B7 list may be stale`; });
+
+  openSheet({ title: 'Checkpoint', body: el('div', {}, [search, status, list, reload]) });
 }
 
 function openSettingsSheet() {

@@ -82,6 +82,7 @@ export function randomTaskId() {
 
 export const api_ = {
   bootstrap: () => api('/mlite/api/bootstrap'),
+  models: (refresh = false) => api(`/mlite/api/models${refresh ? '?refresh=1' : ''}`),
   status: () => api('/mlite/api/status'),
   progress: (payload) => api('/mlite/api/progress', { method: 'POST', body: payload }),
   interrupt: (action = 'interrupt') => api('/mlite/api/interrupt', { method: 'POST', body: { action } }),

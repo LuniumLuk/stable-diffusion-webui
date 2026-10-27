@@ -54,21 +54,21 @@ def refresh_unet_list():
 
 def list_checkpoint_tiles(use_short=False):
     import modules.sd_models
-    import modules.model_registry
-    from modules import shared
 
-    tiles = modules.sd_models.checkpoint_tiles(use_short)
-    try:
-        if getattr(shared.opts, "anima_enabled", True):
-            tiles = tiles + modules.model_registry.checkpoint_tiles()
-    except Exception:
-        pass
-    return tiles
+    return modules.sd_models.available_checkpoint_titles(use_short)
 
 
 def refresh_checkpoints():
+    """Rescan the models folder and drop a saved checkpoint whose file was deleted."""
     import modules.sd_models
-    return modules.sd_models.list_models()
+
+    modules.sd_models.list_models()
+    return modules.sd_models.sync_checkpoint_selection()
+
+
+def checkpoint_refresh_update(title):
+    """Extra refresh-button args: also update the selected value when the old model vanished."""
+    return {"value": title}
 
 
 def list_samplers():

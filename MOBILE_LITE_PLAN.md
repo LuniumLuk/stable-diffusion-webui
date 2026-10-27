@@ -198,6 +198,9 @@ GET  /mlite/<asset>          → js/css/svg/webmanifest (no-store, traversal-gua
 
 GET  /mlite/api/bootstrap    → models, current model, samplers, schedulers, defaults
                                (from ui-config.json), mode, flags
+GET  /mlite/api/models       → checkpoint list for the model picker (+ ?refresh=1 rescans the
+                               models folder); deleted files drop out and a dangling selection
+                               falls back to the first available checkpoint
 GET  /mlite/api/status       → progress.global_status_api() (queue/VRAM/ETA)
 POST /mlite/api/progress     → wrapper over progress.progressapi (live preview + step/ETA)
 POST /mlite/api/interrupt    → interrupt / skip

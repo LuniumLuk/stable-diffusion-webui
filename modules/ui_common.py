@@ -404,7 +404,7 @@ def create_output_panel(tabname, outdir, toprow=None):
     return res
 
 
-def create_refresh_button(refresh_component, refresh_method, refreshed_args, elem_id):
+def create_refresh_button(refresh_component, refresh_method, refreshed_args, elem_id, refreshed_result_args=None):
     refresh_components = refresh_component if isinstance(refresh_component, list) else [refresh_component]
 
     label = None
@@ -414,8 +414,12 @@ def create_refresh_button(refresh_component, refresh_method, refreshed_args, ele
             break
 
     def refresh():
-        refresh_method()
+        result = refresh_method()
         args = refreshed_args() if callable(refreshed_args) else refreshed_args
+
+        if refreshed_result_args is not None:
+            # lets a refresh also correct the component's value (e.g. a deleted checkpoint)
+            args = {**(args or {}), **(refreshed_result_args(result) or {})}
 
         for k, v in args.items():
             for comp in refresh_components:

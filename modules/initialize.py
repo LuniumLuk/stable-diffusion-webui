@@ -103,6 +103,7 @@ def initialize_rest(*, reload_script_modules=False):
 
     from modules import sd_models
     sd_models.list_models()
+    sd_models.sync_checkpoint_selection()
     startup_timer.record("list SD models")
 
     from modules import localization
