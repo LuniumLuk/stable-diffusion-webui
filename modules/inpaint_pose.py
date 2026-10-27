@@ -28,6 +28,7 @@ import os
 import sys
 import threading
 import time
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
@@ -41,6 +42,18 @@ REGION_LABELS = {
     "right_foot": "Right foot",
 }
 SUPPORTED_BACKENDS = ("auto", "dwpose", "torchvision")
+BACKEND_LABELS = {
+    "auto": "Auto",
+    "dwpose": "DWPose",
+    "torchvision": "COCO 17",
+}
+
+# Point size and inpaint size can be given in pixels or relative to the figure/mask.
+DEFAULT_INPAINT_SCALE = 2.0
+DEFAULT_MAX_PEOPLE = 4
+MAX_PEOPLE_LIMIT = 16
+MIN_INPAINT_SIZE = 64
+MAX_INPAINT_SIZE = 2048
 
 SCORE_THRESHOLD = 0.30
 PERSON_THRESHOLD = 0.60
@@ -148,14 +161,22 @@ def _hf_url(url: str) -> str:
 
 def _download_file(url: str, destination: str, timeout: float = 120.0) -> None:
     import shutil
-    from urllib.request import Request, urlopen
+    from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+    # HF mirrors answer with 308; urllib only follows 301/302/303/307 before Python 3.11.
+    class MirrorRedirect(HTTPRedirectHandler):
+        def http_error_308(self, req, fp, code, msg, headers):
+            return self.http_error_302(req, fp, code, msg, headers)
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return super().redirect_request(req, fp, 302 if code == 308 else code, msg, headers, newurl)
 
     os.makedirs(os.path.dirname(destination), exist_ok=True)
     temporary = destination + ".part"
 
-    request = Request(url, headers={"User-Agent": "stable-diffusion-webui-inpaint-pose"})
+    request = Request(url, headers={"User-Agent": "stable-diffusion-webui-inpaint-pose", "Accept": "*/*"})
     try:
-        with urlopen(request, timeout=timeout) as response, open(temporary, "wb") as handle:
+        with build_opener(MirrorRedirect).open(request, timeout=timeout) as response, open(temporary, "wb") as handle:
             shutil.copyfileobj(response, handle)
     except Exception as error:
         if os.path.exists(temporary):
@@ -229,6 +250,7 @@ def backend_status() -> dict:
         "torchvision": torchvision_available,
         "torchvision_weights": _torchvision_weights_cached(),
         "regions": list(REGION_CODES),
+        "backends": list(SUPPORTED_BACKENDS),
     }
 
 
@@ -245,6 +267,31 @@ class PersonPose:
         self.left_foot = list(left_foot or [])
         self.right_foot = list(right_foot or [])
 
+    def points(self) -> list:
+        """Every usable keypoint of this skeleton."""
+        groups = (self.body, self.face, self.left_hand, self.right_hand, self.left_foot, self.right_foot)
+        return [point for group in groups for point in _valid_points(group)]
+
+    def extent(self) -> float:
+        """Longest side of the bounding box around this skeleton (0 when it has no points)."""
+        points = self.points()
+        if not points:
+            return 0.0
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        return max(max(xs) - min(xs), max(ys) - min(ys))
+
+    def confidence(self) -> float:
+        """Mean keypoint score; used to rank skeletons when a limit is applied."""
+        points = self.points()
+        if not points:
+            return 0.0
+        return sum(float(point[2]) for point in points) / len(points)
+
+    def rank(self) -> float:
+        """Confidence weighted by the skeleton size, for ``max_people`` selection."""
+        return self.confidence() * math.sqrt(max(0.0, self.extent()))
+
 
 class DetectedPose:
     __slots__ = ("backend", "height", "people", "warnings", "width")
@@ -255,6 +302,14 @@ class DetectedPose:
         self.height = height
         self.people = list(people or [])
         self.warnings = list(warnings or [])
+
+    def limit_people(self, max_people) -> DetectedPose:
+        """At most ``max_people`` skeletons; the most confident / largest ones are kept."""
+        limit = clamp_max_people(max_people)
+        if not limit or len(self.people) <= limit:
+            return self
+        people = sorted(self.people, key=lambda person: person.rank(), reverse=True)[:limit]
+        return DetectedPose(self.backend, self.width, self.height, people, self.warnings)
 
     def mask_regions(self) -> list[tuple[str, list]]:
         """Return (region code, points) pairs; each pair becomes its own mask layer."""
@@ -278,11 +333,9 @@ class DetectedPose:
         xs = []
         ys = []
         for person in self.people:
-            groups = (person.body,) + tuple(_region_groups(person).values())
-            for group in groups:
-                for point in _valid_points(group):
-                    xs.append(float(point[0]))
-                    ys.append(float(point[1]))
+            for point in person.points():
+                xs.append(float(point[0]))
+                ys.append(float(point[1]))
         if not xs:
             return 0.0
         return max(max(xs) - min(xs), max(ys) - min(ys))
@@ -300,6 +353,43 @@ def _region_groups(person) -> dict[str, list]:
 
 def _valid_points(points) -> list:
     return [pt for pt in (points or []) if pt is not None and len(pt) >= 3 and float(pt[2]) >= SCORE_THRESHOLD]
+
+
+def clamp_max_people(value) -> int:
+    """Skeleton limit: 0 = unlimited, otherwise 1..MAX_PEOPLE_LIMIT."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if number <= 0:
+        return 0
+    return min(MAX_PEOPLE_LIMIT, number)
+
+
+def canonical_radius_mode(mode) -> str:
+    """Normalize the point-size toggle (``px`` or ``percent``)."""
+    text = str(mode or "").strip().lower()
+    if text in ("px", "pixel", "pixels", "absolute", "abs"):
+        return "px"
+    return "percent"
+
+
+def canonical_inpaint_mode(mode) -> str:
+    """Normalize the inpaint-size toggle (``px`` or ``scale``)."""
+    text = str(mode or "").strip().lower()
+    if text in ("scale", "relative", "ratio", "x"):
+        return "scale"
+    return "px"
+
+
+def canonical_backend(backend) -> str:
+    """Normalize the provider toggle (``auto``, ``dwpose`` or ``torchvision``)."""
+    text = str(backend or "").strip().lower()
+    if text in ("dwpose", "dw", "onnx"):
+        return "dwpose"
+    if text in ("torchvision", "coco", "coco 17", "keypoint r-cnn", "keypointrcnn"):
+        return "torchvision"
+    return "auto"
 
 
 def _point(x, y, score):
@@ -587,9 +677,7 @@ def _detect_torchvision(image: Image.Image) -> DetectedPose:
 
 
 def detect_pose(image: Image.Image, backend: str = "auto") -> DetectedPose:
-    backend = (backend or "auto").lower()
-    if backend not in SUPPORTED_BACKENDS:
-        raise ValueError(f"unknown pose backend: {backend}")
+    backend = canonical_backend(backend)
 
     warnings = []
     if backend in ("auto", "dwpose") and dwpose_model_dir():
@@ -643,7 +731,7 @@ def _expand_region_codes(regions) -> set[str]:
     return allowed
 
 
-def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0) -> dict[str, list]:
+def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0, people=None) -> dict[str, list]:
     """Group the usable points of the requested parts by mask region.
 
     Points too close to the frame edge are dropped: pose models often hallucinate
@@ -653,6 +741,8 @@ def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, ex
     last bone, elbow->wrist or knee->ankle) so fingers and toes beyond the detected
     wrist/ankle are covered as well.  The original points stay and the walk is filled with
     overlapping circles, so the mask becomes a continuous capsule that only ever grows.
+
+    ``people`` restricts the collection to a subset of the detected skeletons.
     """
     allowed = _expand_region_codes(regions)
     border = max(3.0, float(radius) * 0.25)
@@ -661,7 +751,7 @@ def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, ex
     def inside(point):
         return border <= point[0] <= pose.width - border and border <= point[1] <= pose.height - border
 
-    for person in pose.people:
+    for person in pose.people if people is None else people:
         for code, points in _region_groups(person).items():
             if code not in allowed:
                 continue
@@ -734,37 +824,102 @@ def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40, extend
 REGION_MASK_ORDER = ("face", "left_hand", "right_hand", "left_foot", "right_foot")
 
 
-def build_region_masks(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0) -> list[tuple[str, Image.Image, int]]:
-    """One mask per body part, so each part gets its own (small) only-masked inpaint.
+class RegionPoints(NamedTuple):
+    """Point cloud of one body part of one detected skeleton (no pixels allocated yet)."""
 
-    Returns ``[(region code, mask, point count)]`` in ``REGION_MASK_ORDER``; parts without
-    usable points are dropped.
-    """
-    radius = max(1, min(1024, int(radius)))
-    collected = collect_region_points(pose, regions=regions, radius=radius, extend=extend)
-    masks = []
-    for code in REGION_MASK_ORDER:
-        points = collected.get(code)
-        if not points:
-            continue
-        masks.append((code, _draw_l_mask((pose.width, pose.height), points, radius), len(points)))
-    return masks
+    person: int
+    region: str
+    label: str
+    points: list
+    radius: int
 
 
-def resolve_radius(pose: DetectedPose, radius: int = 40, percent: float = 0.0) -> int:
-    """Point radius in pixels for this image.
+class RegionMask(NamedTuple):
+    """One mask for one body part of one detected skeleton."""
 
-    ``percent`` (> 0) makes the radius follow the figure: that percentage of the skeleton's
-    longest side.  It falls back to the fixed ``radius`` when no skeleton was found.
+    person: int
+    region: str
+    label: str
+    mask: Image.Image
+    points: int
+    radius: int
+
+
+def collect_person_region_points(
+    pose: DetectedPose,
+    regions=None,
+    radius: int = 40,
+    extend: float = 0.0,
+    radius_percent: float = 0.0,
+    radius_mode=None,
+) -> list[RegionPoints]:
+    """Points of every body part of every used skeleton, one entry per part and person.
+
+    Ordered by person, then ``REGION_MASK_ORDER``; parts without usable points are dropped.
+    Labels get a person number only when several skeletons are used, so a single-person
+    image keeps the plain part names.
     """
     fixed = max(1, min(1024, int(radius)))
-    if not percent or float(percent) <= 0:
-        return fixed
+    percent = 0.0 if canonical_radius_mode(radius_mode) == "px" else max(0.0, float(radius_percent or 0.0))
+    single = len(pose.people) <= 1
 
-    extent = pose.skeleton_extent()
-    if extent <= 0:
+    collected = []
+    for index, person in enumerate(pose.people, start=1):
+        person_radius = resolve_person_radius(person, fixed, percent)
+        groups = collect_region_points(pose, regions=regions, radius=person_radius, extend=extend, people=[person])
+        for code in REGION_MASK_ORDER:
+            points = groups.get(code)
+            if not points:
+                continue
+            label = REGION_LABELS[code] if single else f"{REGION_LABELS[code]} {index}"
+            collected.append(RegionPoints(index, code, label, points, person_radius))
+    return collected
+
+
+def build_region_masks(
+    pose: DetectedPose,
+    regions=None,
+    radius: int = 40,
+    extend: float = 0.0,
+    radius_percent: float = 0.0,
+    radius_mode=None,
+) -> list[RegionMask]:
+    """One mask per body part *and per person*, so separate skeletons never share a mask."""
+    return [
+        RegionMask(
+            item.person,
+            item.region,
+            item.label,
+            _draw_l_mask((pose.width, pose.height), item.points, item.radius),
+            len(item.points),
+            item.radius,
+        )
+        for item in collect_person_region_points(pose, regions, radius, extend, radius_percent, radius_mode)
+    ]
+
+
+def _percent_radius(extent: float, percent, fixed: int) -> int:
+    if not percent or float(percent) <= 0 or extent <= 0:
         return fixed
-    return max(2, min(1024, round(extent * float(percent) / 100.0)))
+    return max(2, min(1024, round(float(extent) * float(percent) / 100.0)))
+
+
+def resolve_person_radius(person, radius: int = 40, percent: float = 0.0) -> int:
+    """Point radius in pixels for one skeleton: ``percent`` of that skeleton's longest side."""
+    return _percent_radius(person.extent(), percent, max(1, min(1024, int(radius))))
+
+
+def resolve_radius(pose: DetectedPose, radius: int = 40, percent: float = 0.0, mode=None) -> int:
+    """Point radius in pixels for this image.
+
+    With ``mode="percent"`` (default) ``percent`` (> 0) makes the radius follow the figure:
+    that percentage of the skeleton's longest side.  It falls back to the fixed ``radius``
+    when no skeleton was found or ``mode="px"``.
+    """
+    fixed = max(1, min(1024, int(radius)))
+    if canonical_radius_mode(mode) == "px":
+        return fixed
+    return _percent_radius(pose.skeleton_extent(), percent, fixed)
 
 
 def _scaled_size(width: int, height: int, target: int) -> tuple[int, int]:
@@ -782,15 +937,27 @@ def inpaint_crop_size(width: int, height: int, max_size: int = 1024) -> tuple[in
     return _scaled_size(width, height, target)
 
 
-def region_inpaint_size(mask: Image.Image, inpaint_size: int = 1024, padding: int = 32) -> tuple[int, int]:
-    """Sampling size for one region: its padded box scaled so the long side is ``inpaint_size``."""
+def region_inpaint_size(mask: Image.Image, inpaint_size: int = 1024, padding: int = 32, mode=None, scale: float = DEFAULT_INPAINT_SCALE) -> tuple[int, int]:
+    """Sampling size for one region, from the padded bounding box of its mask.
+
+    ``mode="px"`` (default) makes the long side exactly ``inpaint_size``.  ``mode="scale"``
+    measures the mask box in pixels first and multiplies it by ``scale`` (2x by default), so
+    a small face is not blown up to the full size and a large one is not downscaled below it.
+    """
     box = mask.getbbox()
     if box is None:
         return (64, 64)
     x1, y1, x2, y2 = box
     width = max(1, x2 - x1) + max(0, int(padding)) * 2
     height = max(1, y2 - y1) + max(0, int(padding)) * 2
-    return _scaled_size(width, height, max(64, min(int(inpaint_size), 2048)))
+
+    if canonical_inpaint_mode(mode) == "scale":
+        factor = max(1.0, min(4.0, float(scale or DEFAULT_INPAINT_SCALE)))
+        target = max(width, height) * factor
+    else:
+        target = float(inpaint_size)
+
+    return _scaled_size(width, height, int(max(MIN_INPAINT_SIZE, min(target, MAX_INPAINT_SIZE))))
 
 
 def choose_inpaint_prompt(p, index: int) -> tuple[str, str]:
@@ -911,44 +1078,65 @@ def detect_inpaint_regions(
     include_skeleton: bool = True,
     extend: float = 0.0,
     radius_percent: float = 0.0,
+    radius_mode=None,
+    max_people=DEFAULT_MAX_PEOPLE,
 ) -> dict:
     started = time.time()
     requested = [code for code in (REGION_CODES if regions is None else regions) if code in REGION_CODES]
     if not requested:
         raise ValueError("no pose region selected")
 
-    pose = detect_pose(image, backend=backend)
-    radius = resolve_radius(pose, radius, radius_percent)
-    collected = collect_region_points(pose, regions=requested, radius=radius, extend=extend)
+    detected = detect_pose(image, backend=backend)
+    detected_people = len(detected.people)
+    pose = detected.limit_people(max_people)
+    percent = 0.0 if canonical_radius_mode(radius_mode) == "px" else radius_percent
 
     masks = []
-    for code, points in collected.items():
-        mask = _draw_point_mask((pose.width, pose.height), points, radius)
+    for item in collect_person_region_points(
+        pose,
+        regions=requested,
+        radius=radius,
+        extend=extend,
+        radius_percent=percent,
+        radius_mode=radius_mode,
+    ):
         masks.append(
             {
-                "region": code,
-                "name": REGION_LABELS[code],
-                "points": len(points),
-                "data": encode_png_data_url(mask),
+                "region": item.region,
+                "name": item.label,
+                "person": item.person,
+                "points": len(item.points),
+                "radius": item.radius,
+                "data": encode_png_data_url(_draw_point_mask((pose.width, pose.height), item.points, item.radius)),
             }
         )
 
     skeleton = encode_png_data_url(render_skeleton(pose)) if include_skeleton else None
     elapsed = time.time() - started
     people = len(pose.people)
-    print(f"Inpaint pose: {pose.backend} found {people} person(s), {len(masks)} mask(s) in {elapsed:.2f}s")
+    radius = max((mask["radius"] for mask in masks), default=resolve_radius(pose, radius, percent, radius_mode))
+    limited = people < detected_people
+    print(
+        f"Inpaint pose: {pose.backend} found {detected_people} person(s)"
+        f"{f', using {people}' if limited else ''}, {len(masks)} mask(s) in {elapsed:.2f}s"
+    )
 
     if masks:
-        message = f"{len(masks)} mask(s) from {people} person(s)"
+        message = f"{len(masks)} mask(s) from {people} person(s)" if not limited else f"{len(masks)} mask(s) from {people} of {detected_people} person(s)"
     elif people:
         message = "No face/hand/foot points found"
+    elif detected_people:
+        message = "No face/hand/foot points found in the used skeletons"
     else:
         message = "No person detected"
 
     return {
         "backend": pose.backend,
         "people": people,
+        "people_total": detected_people,
+        "limited": limited,
         "radius": radius,
+        "radius_mode": canonical_radius_mode(radius_mode),
         "masks": masks,
         "skeleton": skeleton,
         "elapsed": round(elapsed, 3),

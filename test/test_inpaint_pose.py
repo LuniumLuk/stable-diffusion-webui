@@ -204,13 +204,14 @@ def test_build_region_masks_splits_every_part():
     pose = inpaint_pose.DetectedPose("test", 200, 200, [person])
 
     masks = inpaint_pose.build_region_masks(pose, radius=10)
-    assert [code for code, _mask, _count in masks] == ["face", "left_hand", "right_hand", "left_foot", "right_foot"]
-    assert [count for _code, _mask, count in masks] == [1, 1, 1, 1, 1]
-    assert masks[0][1].getpixel((100, 80)) == 255
-    assert masks[0][1].getpixel((50, 120)) == 0
-    assert masks[1][1].getpixel((50, 120)) == 255
-    assert masks[4][1].getpixel((120, 180)) == 255
-    assert inpaint_pose.build_region_masks(pose, regions=["face"], radius=10)[0][0] == "face"
+    assert [item.region for item in masks] == ["face", "left_hand", "right_hand", "left_foot", "right_foot"]
+    assert [item.points for item in masks] == [1, 1, 1, 1, 1]
+    assert [item.person for item in masks] == [1, 1, 1, 1, 1]
+    assert masks[0].mask.getpixel((100, 80)) == 255
+    assert masks[0].mask.getpixel((50, 120)) == 0
+    assert masks[1].mask.getpixel((50, 120)) == 255
+    assert masks[4].mask.getpixel((120, 180)) == 255
+    assert inpaint_pose.build_region_masks(pose, regions=["face"], radius=10)[0].region == "face"
     assert len(inpaint_pose.build_region_masks(pose, regions=["hands"], radius=10)) == 2
 
 
@@ -218,6 +219,39 @@ def test_build_region_masks_empty_without_points():
     pose = inpaint_pose.DetectedPose("test", 200, 200, [inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17)])
 
     assert inpaint_pose.build_region_masks(pose, regions=["face"], radius=10) == []
+
+
+def test_build_region_masks_separates_each_skeleton():
+    first = inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17, face=[(100.0, 80.0, 0.9)])
+    second = inpaint_pose.PersonPose(body=[(300.0, 300.0, 0.9)] * 17, face=[(300.0, 280.0, 0.9)])
+    pose = inpaint_pose.DetectedPose("test", 400, 400, [first, second])
+
+    masks = inpaint_pose.build_region_masks(pose, regions=["face"], radius=10)
+    assert [(item.person, item.region, item.label) for item in masks] == [
+        (1, "face", "Face 1"),
+        (2, "face", "Face 2"),
+    ]
+    assert masks[0].mask.getpixel((100, 80)) == 255
+    assert masks[0].mask.getpixel((300, 280)) == 0
+    assert masks[1].mask.getpixel((300, 280)) == 255
+    assert masks[1].mask.getpixel((100, 80)) == 0
+
+
+def test_limit_people_keeps_the_most_confident_and_largest():
+    small_low = inpaint_pose.PersonPose(body=[(10.0, 10.0, 0.4)] + [(12.0, 12.0, 0.4)] * 16)
+    large_high = inpaint_pose.PersonPose(body=[(50.0, 50.0, 0.9)] + [(250.0, 250.0, 0.9)] * 16)
+    mid = inpaint_pose.PersonPose(body=[(300.0, 300.0, 0.7)] + [(360.0, 360.0, 0.7)] * 16)
+    pose = inpaint_pose.DetectedPose("test", 400, 400, [small_low, large_high, mid])
+
+    limited = pose.limit_people(2)
+    assert limited.people == [large_high, mid]
+    assert limited is not pose
+    # 0 / None mean "no limit"; a limit above the count changes nothing
+    assert pose.limit_people(0).people == [small_low, large_high, mid]
+    assert pose.limit_people(None) is pose
+    assert pose.limit_people(99) is pose
+    assert inpaint_pose.clamp_max_people(1000) == inpaint_pose.MAX_PEOPLE_LIMIT
+    assert inpaint_pose.clamp_max_people(-4) == 0
 
 
 def _limbed_person():
@@ -332,6 +366,43 @@ def test_region_inpaint_size_honours_small_and_empty_regions():
     assert inpaint_pose.region_inpaint_size(Image.new("L", (8, 8), 0), inpaint_size=1024) == (64, 64)
 
 
+def test_region_inpaint_size_relative_scales_the_mask_box():
+    mask = Image.new("L", (400, 400), 0)
+    mask.paste(255, (100, 100, 200, 160))  # 100x60 region
+
+    # the padded mask box (164x124) x 2, snapped to the 8px grid
+    assert inpaint_pose.region_inpaint_size(mask, padding=32, mode="scale", scale=2.0) == (328, 248)
+    assert inpaint_pose.region_inpaint_size(mask, padding=0, mode="scale", scale=2.0) == (200, 120)
+    assert inpaint_pose.region_inpaint_size(mask, padding=0, mode="scale", scale=1.5) == (144, 88)
+    # a full-frame mask stays within the sampling limits
+    assert inpaint_pose.region_inpaint_size(Image.new("L", (4000, 4000), 255), padding=0, mode="scale", scale=4.0) == (2048, 2048)
+    assert inpaint_pose.region_inpaint_size(Image.new("L", (8, 8), 0), mode="scale", scale=2.0) == (64, 64)
+
+
+def test_resolve_radius_honours_the_mode_toggle():
+    person = inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17, right_foot=[(300.0, 400.0, 0.9)])
+    pose = inpaint_pose.DetectedPose("test", 500, 500, [person])
+
+    assert inpaint_pose.resolve_radius(pose, 40, 5, mode="px") == 40
+    assert inpaint_pose.resolve_radius(pose, 40, 5, mode="percent") == 15
+    assert inpaint_pose.resolve_person_radius(person, 40, 0) == 40
+    assert inpaint_pose.resolve_person_radius(person, 40, 5) == 15
+    # each skeleton is measured on its own, so a distant figure gets smaller circles
+    other = inpaint_pose.PersonPose(body=[(300.0, 300.0, 0.9)] + [(360.0, 360.0, 0.9)] * 16, right_foot=[(360.0, 420.0, 0.9)])
+    assert inpaint_pose.resolve_person_radius(other, 40, 5) == 6
+
+
+def test_build_region_masks_uses_per_person_radius():
+    big = inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] + [(160.0, 160.0, 0.9)] * 16, face=[(130.0, 130.0, 0.9)])
+    small = inpaint_pose.PersonPose(body=[(300.0, 300.0, 0.9)] + [(320.0, 320.0, 0.9)] * 16, face=[(320.0, 300.0, 0.9)])
+    pose = inpaint_pose.DetectedPose("test", 400, 400, [big, small])
+
+    masks = inpaint_pose.build_region_masks(pose, regions=["face"], radius_percent=10, radius_mode="percent")
+    assert [item.radius for item in masks] == [6, 2]  # 10% of each skeleton's own extent
+    fixed = inpaint_pose.build_region_masks(pose, regions=["face"], radius=30, radius_percent=10, radius_mode="px")
+    assert [item.radius for item in fixed] == [30, 30]
+
+
 def test_choose_inpaint_prompt_prefers_compiled_hr_prompt():
     p = SimpleNamespace(
         enable_hr=True,
@@ -415,6 +486,49 @@ def test_detect_regions_rejects_empty_selection(monkeypatch):
         inpaint_pose.detect_inpaint_regions(Image.new("RGB", (10, 10)), regions=[])
 
 
+def test_detect_regions_limits_skeletons(monkeypatch):
+    positions = [(100.0, 100.0), (300.0, 300.0), (500.0, 500.0)]
+    people = [
+        inpaint_pose.PersonPose(body=[(x, y, 0.9)] * 17, face=[(x, y - 20, 0.9)])
+        for x, y in positions
+    ]
+    monkeypatch.setattr(
+        inpaint_pose,
+        "detect_pose",
+        lambda image, backend="auto": inpaint_pose.DetectedPose("test", 600, 600, people),
+    )
+
+    result = inpaint_pose.detect_inpaint_regions(Image.new("RGB", (600, 600)), regions=["face"], radius=10, max_people=2)
+    assert [mask["name"] for mask in result["masks"]] == ["Face 1", "Face 2"]
+    assert [mask["person"] for mask in result["masks"]] == [1, 2]
+    assert result["people"] == 2
+    assert result["people_total"] == 3
+    assert result["limited"] is True
+    assert result["msg"] == "2 mask(s) from 2 of 3 person(s)"
+
+    unlimited = inpaint_pose.detect_inpaint_regions(Image.new("RGB", (600, 600)), regions=["face"], radius=10, max_people=0)
+    assert [mask["name"] for mask in unlimited["masks"]] == ["Face 1", "Face 2", "Face 3"]
+    assert unlimited["limited"] is False
+    assert unlimited["msg"] == "3 mask(s) from 3 person(s)"
+
+
+def test_detect_regions_percent_mode_ignores_the_percent_in_px_mode(monkeypatch):
+    person = inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17, face=[(100.0, 80.0, 0.9)])
+    monkeypatch.setattr(
+        inpaint_pose,
+        "detect_pose",
+        lambda image, backend="auto": inpaint_pose.DetectedPose("test", 200, 200, [person]),
+    )
+
+    fixed = inpaint_pose.detect_inpaint_regions(Image.new("RGB", (200, 200)), regions=["face"], radius=20, radius_mode="px", radius_percent=10)
+    assert fixed["radius"] == 20
+    assert fixed["masks"][0]["radius"] == 20
+
+    relative = inpaint_pose.detect_inpaint_regions(Image.new("RGB", (200, 200)), regions=["face"], radius=20, radius_mode="percent", radius_percent=10)
+    assert relative["radius"] == 2  # 10% of a 20px skeleton, clamped to the 2px minimum
+    assert relative["masks"][0]["radius"] == 2
+
+
 def test_decode_image_data_url(tmp_path):
     path = tmp_path / "test.png"
     Image.new("RGB", (8, 6), (12, 34, 56)).save(path)
@@ -471,5 +585,44 @@ def test_download_dwpose_models(monkeypatch, tmp_path):
 
 def test_backend_status_shape():
     status = inpaint_pose.backend_status()
-    assert set(status) >= {"available", "backend", "message", "dwpose", "dwpose_ready", "torchvision", "regions"}
+    assert set(status) >= {"available", "backend", "message", "dwpose", "dwpose_ready", "torchvision", "regions", "backends"}
     assert status["regions"] == ["face", "hands", "feet"]
+    assert status["backends"] == ["auto", "dwpose", "torchvision"]
+
+
+def test_canonical_backend_accepts_ui_labels():
+    assert inpaint_pose.canonical_backend("Auto") == "auto"
+    assert inpaint_pose.canonical_backend("DWPose") == "dwpose"
+    assert inpaint_pose.canonical_backend("dw") == "dwpose"
+    assert inpaint_pose.canonical_backend("COCO 17") == "torchvision"
+    assert inpaint_pose.canonical_backend("torchvision") == "torchvision"
+    assert inpaint_pose.canonical_backend(None) == "auto"
+    assert inpaint_pose.canonical_backend("nonsense") == "auto"
+
+
+def test_detect_pose_accepts_provider_labels(monkeypatch):
+    monkeypatch.setattr(inpaint_pose, "dwpose_model_dir", lambda: None)
+
+    def fake_torchvision(image):
+        return inpaint_pose.DetectedPose("torchvision", image.width, image.height, [])
+
+    monkeypatch.setattr(inpaint_pose, "_detect_torchvision", fake_torchvision)
+
+    assert inpaint_pose.detect_pose(Image.new("RGB", (8, 8)), backend="COCO 17").backend == "torchvision"
+    assert inpaint_pose.detect_pose(Image.new("RGB", (8, 8)), backend="auto").backend == "torchvision"
+    # forcing DWPose without its models must fail instead of silently falling back
+    with pytest.raises(inpaint_pose.PoseModelUnavailable):
+        inpaint_pose.detect_pose(Image.new("RGB", (8, 8)), backend="DWPose")
+
+
+def test_detect_regions_forwards_the_provider(monkeypatch):
+    seen = {}
+
+    def fake_detect(image, backend="auto"):
+        seen["backend"] = backend
+        return inpaint_pose.DetectedPose("torchvision", image.width, image.height, [])
+
+    monkeypatch.setattr(inpaint_pose, "detect_pose", fake_detect)
+
+    inpaint_pose.detect_inpaint_regions(Image.new("RGB", (10, 10)), regions=["face"], backend="torchvision")
+    assert seen["backend"] == "torchvision"

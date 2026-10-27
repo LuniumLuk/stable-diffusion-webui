@@ -4,7 +4,7 @@ import { api, randomTaskId, ROOT } from './api.js';
 import { isJobActive, runJob } from './job.js';
 import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
-import { poseInpaintArgs, poseInpaintSummary, poseMaskRadiusLabel, poseMaskRequest } from './pose.js';
+import { poseInpaintArgs, poseInpaintSummary, poseMaskRequest } from './pose.js';
 import { createPromptEditor } from './prompt.js';
 import { planInputResize } from './resize-plan.js';
 import { on, persist, imageParams, resolveOutputSize, setParam, state } from './state.js';
@@ -873,6 +873,48 @@ function buildToolsRow() {
     },
   }));
 
+  const poseModeButton = el('button', {
+    class: 'btn tiny pose-mode-btn', type: 'button',
+    title: 'Pose point size: tap to switch between fixed pixels and a percentage of each skeleton',
+    onClick: () => {
+      state.ui.poseRadiusMode = state.ui.poseRadiusMode === 'px' ? 'percent' : 'px';
+      persist();
+      updatePoseModeButton();
+    },
+  });
+  const updatePoseModeButton = () => {
+    const percent = state.ui.poseRadiusMode !== 'px';
+    poseModeButton.textContent = percent
+      ? `R ${Number(state.ui.poseRadiusPercent)}%`
+      : `R ${Math.round(state.ui.poseRadius)}px`;
+    poseModeButton.classList.toggle('on', percent);
+  };
+  updatePoseModeButton();
+  on('params', updatePoseModeButton);
+
+  const poseProviderButton = el('button', {
+    class: 'btn tiny pose-provider-btn', type: 'button',
+    title: 'Pose provider: tap to cycle Auto -> DWPose -> COCO 17',
+    onClick: () => {
+      const order = ['auto', 'dwpose', 'torchvision'];
+      const current = order.indexOf(state.ui.poseBackend);
+      state.ui.poseBackend = order[(current + 1) % order.length];
+      persist();
+      updatePoseProviderButton();
+    },
+  });
+  const poseProviderLabel = () => {
+    if (state.ui.poseBackend === 'dwpose') return 'DW';
+    if (state.ui.poseBackend === 'torchvision') return 'COCO';
+    return 'AUTO';
+  };
+  const updatePoseProviderButton = () => {
+    poseProviderButton.textContent = poseProviderLabel();
+    poseProviderButton.classList.toggle('on', state.ui.poseBackend !== 'auto');
+  };
+  updatePoseProviderButton();
+  on('params', updatePoseProviderButton);
+
   const row = el('div', { class: 'mask-tools' }, [
     make('paint', '\u{1F58C}'),
     make('erase', '\u{1F9F9}'),
@@ -882,6 +924,8 @@ function buildToolsRow() {
       title: 'Pose masks - detect face/hand/foot points and add them to the mask',
       onClick: () => poseMasks(),
     }),
+    poseModeButton,
+    poseProviderButton,
     el('button', {
       class: 'btn tiny', type: 'button', text: '\u21B6', title: 'Undo',
       onClick: async () => { mask.ops.pop(); await replayMask(); },
@@ -923,8 +967,11 @@ async function poseMasks() {
   const request = poseMaskRequest(source.dataUrl, {
     parts: state.ui.poseParts,
     radius: state.ui.poseRadius,
+    radiusMode: state.ui.poseRadiusMode,
     radiusPercent: state.ui.poseRadiusPercent,
     extend: state.ui.poseExtend,
+    maxPeople: state.ui.poseMaxPeople,
+    backend: state.ui.poseBackend,
   });
   if (!request.regions.length) {
     toast('pick face, hands or feet in the inpaint parameters', 'warn');
@@ -953,8 +1000,12 @@ async function poseMasks() {
       mask.ops.push({ type: 'pose', dataUrl: item.data, name: item.name });
     }
     await replayMask();
-    const radius = poseMaskRadiusLabel({ radius: request.radius, radiusPercent: request.radius_percent });
-    toast(`${masks.length} pose mask${masks.length === 1 ? '' : 's'} \u00B7 ${radius}`, 'ok', 2500);
+    const radius = request.radius_mode === 'px'
+      ? `${data.radius}px`
+      : `${request.radius_percent}% of skeleton (${data.radius}px)`;
+    const people = data.limited ? `${data.people}/${data.people_total} skel` : `${data.people} skel`;
+    const provider = data.backend === 'torchvision' ? 'COCO 17' : 'DWPose';
+    toast(`${masks.length} pose mask${masks.length === 1 ? '' : 's'} \u00B7 ${people} \u00B7 ${radius} \u00B7 ${provider}`, 'ok', 2500);
   } catch (error) {
     toast(`pose masks failed: ${error.message}`, 'err', 5000);
   } finally {

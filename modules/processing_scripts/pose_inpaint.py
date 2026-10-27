@@ -17,6 +17,15 @@ PART_LABELS = {
 }
 _PART_CODES = set(PART_LABELS.values())
 
+RADIUS_MODE_LABELS = {
+    "px": "Pixels",
+    "percent": "Skeleton %",
+}
+INPAINT_MODE_LABELS = {
+    "scale": "Relative",
+    "px": "Pixels",
+}
+
 _STATE_FIELDS = (
     "job",
     "job_no",
@@ -69,6 +78,31 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                     label="Parts",
                     elem_id=self.elem_id("pose_inpaint_parts"),
                 )
+                pose_radius_mode = gr.Radio(
+                    choices=list(RADIUS_MODE_LABELS.values()),
+                    value=RADIUS_MODE_LABELS["percent"],
+                    label="Point size",
+                    elem_id=self.elem_id("pose_inpaint_radius_mode"),
+                    tooltip="Pixels uses a fixed radius; skeleton scales the radius to each detected figure",
+                )
+                pose_backend = gr.Radio(
+                    choices=list(inpaint_pose.BACKEND_LABELS.values()),
+                    value=inpaint_pose.BACKEND_LABELS["auto"],
+                    label="Provider",
+                    elem_id=self.elem_id("pose_inpaint_backend"),
+                    tooltip="Auto prefers DWPose when its models are installed; COCO 17 always uses torchvision Keypoint R-CNN",
+                )
+                pose_max_people = gr.Slider(
+                    1,
+                    inpaint_pose.MAX_PEOPLE_LIMIT,
+                    value=inpaint_pose.DEFAULT_MAX_PEOPLE,
+                    step=1,
+                    label="Max skeletons",
+                    elem_id=self.elem_id("pose_inpaint_max_people"),
+                    tooltip="Keep only the most confident and largest skeletons; each one gets its own masks",
+                )
+
+            with gr.Row():
                 pose_radius = gr.Slider(
                     8,
                     400,
@@ -76,16 +110,17 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                     step=2,
                     label="Point radius, px",
                     elem_id=self.elem_id("pose_inpaint_radius"),
-                    tooltip="Fixed radius, used when 'Radius of skeleton' is 0",
+                    visible=False,
+                    tooltip="Fixed radius of the circle drawn around every detected point",
                 )
                 pose_radius_percent = gr.Slider(
-                    0.0,
+                    0.5,
                     25.0,
                     value=5.0,
                     step=0.5,
                     label="Radius of skeleton, %",
                     elem_id=self.elem_id("pose_inpaint_radius_percent"),
-                    tooltip="Radius follows the figure: this percentage of the skeleton's longest side. 0 = use the fixed radius",
+                    tooltip="Radius follows each figure: this percentage of that skeleton's longest side",
                 )
                 pose_extend = gr.Slider(
                     0.0,
@@ -108,13 +143,30 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                     elem_id=self.elem_id("pose_inpaint_steps"),
                     tooltip="0 = use the main generation steps",
                 )
+                pose_inpaint_mode = gr.Radio(
+                    choices=list(INPAINT_MODE_LABELS.values()),
+                    value=INPAINT_MODE_LABELS["scale"],
+                    label="Inpaint size",
+                    elem_id=self.elem_id("pose_inpaint_size_mode"),
+                    tooltip="Pixels sets the long side directly; Relative multiplies the mask's pixel bounding size",
+                )
+                pose_inpaint_scale = gr.Slider(
+                    1.0,
+                    4.0,
+                    value=inpaint_pose.DEFAULT_INPAINT_SCALE,
+                    step=0.1,
+                    label="Inpaint size scale",
+                    elem_id=self.elem_id("pose_inpaint_scale"),
+                    tooltip="Sampling size = the mask's pixel bounding size x this factor (2x regenerates at twice the mask size)",
+                )
                 pose_size = gr.Slider(
                     256,
                     2048,
                     value=1024,
                     step=64,
-                    label="Inpaint size",
+                    label="Inpaint size, px",
                     elem_id=self.elem_id("pose_inpaint_size"),
+                    visible=False,
                     tooltip="Long side of each masked region that is re-generated (only masked, latent upscale)",
                 )
 
@@ -123,7 +175,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                     True,
                     label="One inpaint per part",
                     elem_id=self.elem_id("pose_inpaint_separate"),
-                    tooltip="Batch one only-masked pass per detected part (face, each hand, each foot) instead of one pass over all points",
+                    tooltip="Batch one only-masked pass per part of every used skeleton instead of one pass over all points",
                 )
                 pose_save_intermediate = gr.Checkbox(
                     False,
@@ -140,11 +192,23 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 elem_id=self.elem_id("pose_inpaint_when"),
             )
             gr.Markdown(
-                "Each part is inpainted with its own mask, original masked content, only-masked area and latent "
-                "upscale. DWPose models from the Inpaint tab's Pose masks panel give the best anime "
-                "face/hand/foot points.",
+                "Each part of every used skeleton is inpainted with its own mask, original masked content, "
+                "only-masked area and latent upscale. DWPose models from the Inpaint tab's Pose masks panel "
+                "give the best anime face/hand/foot points.",
                 elem_id=self.elem_id("pose_inpaint_hint"),
             )
+
+        def switch_radius_mode(selected):
+            percent = inpaint_pose.canonical_radius_mode(selected) == "percent"
+            return gr.update(visible=not percent), gr.update(visible=percent)
+
+        pose_radius_mode.change(fn=switch_radius_mode, inputs=[pose_radius_mode], outputs=[pose_radius, pose_radius_percent], show_progress=False)
+
+        def switch_inpaint_mode(selected):
+            relative = inpaint_pose.canonical_inpaint_mode(selected) == "scale"
+            return gr.update(visible=relative), gr.update(visible=not relative)
+
+        pose_inpaint_mode.change(fn=switch_inpaint_mode, inputs=[pose_inpaint_mode], outputs=[pose_inpaint_scale, pose_size], show_progress=False)
 
         self.infotext_fields = [
             PasteField(enable_pose_inpaint, lambda d: "Pose inpaint" in d),
@@ -161,9 +225,32 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             pose_separate,
             pose_radius_percent,
             pose_extend,
+            pose_radius_mode,
+            pose_inpaint_mode,
+            pose_inpaint_scale,
+            pose_max_people,
+            pose_backend,
         )
 
-    def setup(self, p, enable, parts, radius, denoising, steps, save_intermediate, inpaint_size=1024, separate_masks=True, radius_percent=0.0, extend=0.0):
+    def setup(
+        self,
+        p,
+        enable,
+        parts,
+        radius,
+        denoising,
+        steps,
+        save_intermediate,
+        inpaint_size=1024,
+        separate_masks=True,
+        radius_percent=0.0,
+        extend=0.0,
+        radius_mode=None,
+        inpaint_mode=None,
+        inpaint_scale=None,
+        max_people=None,
+        backend=None,
+    ):
         p.pose_inpaint_enabled = bool(enable)
         p.pose_inpaint_results = {}
 
@@ -175,6 +262,13 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         size_value = 1024 if inpaint_size is None else int(inpaint_size)
         percent_value = 0.0 if radius_percent is None else float(radius_percent)
         extend_value = 0.0 if extend is None else float(extend)
+        # Older payloads / saved infotext have no mode: a non-zero percentage meant percent mode.
+        if radius_mode is None:
+            radius_mode = "percent" if percent_value > 0 else "px"
+        radius_mode_value = inpaint_pose.canonical_radius_mode(radius_mode)
+        inpaint_mode_value = inpaint_pose.canonical_inpaint_mode(inpaint_mode)
+        scale_value = inpaint_pose.DEFAULT_INPAINT_SCALE if inpaint_scale is None else float(inpaint_scale)
+        people_value = inpaint_pose.DEFAULT_MAX_PEOPLE if max_people is None else max_people
         p.pose_inpaint_config = {
             "parts": codes,
             "radius": max(1, min(1024, int(radius or 40))),
@@ -184,7 +278,12 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             "inpaint_size": max(256, min(2048, size_value)),
             "separate_masks": True if separate_masks is None else bool(separate_masks),
             "radius_percent": max(0.0, min(50.0, percent_value)),
+            "radius_mode": radius_mode_value,
             "extend": max(0.0, min(2.0, extend_value)),
+            "inpaint_mode": inpaint_mode_value,
+            "inpaint_scale": max(1.0, min(4.0, scale_value)),
+            "max_people": inpaint_pose.clamp_max_people(people_value),
+            "backend": inpaint_pose.canonical_backend(backend),
         }
         p.extra_generation_params["Pose inpaint"] = _pose_infotext_for_image
 
@@ -231,14 +330,20 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
 
     def _run(self, p, pp, batch_index, global_index, config):
         image = pp.image.convert("RGB")
+        backend = inpaint_pose.canonical_backend(config.get("backend"))
 
         try:
-            pose = inpaint_pose.detect_pose(image, backend="auto")
+            detected = inpaint_pose.detect_pose(image, backend=backend)
         except inpaint_pose.PoseModelUnavailable as error:
-            self._record(p, global_index, "skipped (no local pose model)")
+            if backend == "auto":
+                self._record(p, global_index, "skipped (no local pose model)")
+            else:
+                label = inpaint_pose.BACKEND_LABELS.get(backend, "pose")
+                self._record(p, global_index, f"skipped ({label} model unavailable)")
             print(f"Pose inpaint skipped: {error}")
             return
 
+        pose = detected.limit_people(config.get("max_people"))
         passes, points, radius = self._plan_passes(image, pose, config)
         if not passes:
             self._record(p, global_index, "skipped (no face/hand/foot points)")
@@ -254,7 +359,8 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         steps = config.get("steps") or p.steps or 20
         denoising = config["denoising"]
         print(
-            f"Pose inpaint: {pose.backend}, {points} points in {len(passes)} mask(s), r={radius}px, "
+            f"Pose inpaint: {pose.backend}, {len(pose.people)} of {len(detected.people)} person(s), "
+            f"{points} points in {len(passes)} mask(s), r={radius}px, "
             f"extend={config.get('extend', 0):.2f}, prompt={prompt[:60]!r}"
         )
 
@@ -264,12 +370,17 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             return
 
         pp.image = result
-        percent = config.get("radius_percent", 0)
+        percent = config.get("radius_percent", 0) if config.get("radius_mode") == "percent" else 0
         radius_note = f"{percent:g}% of skeleton" if percent > 0 else "fixed"
+        if config.get("inpaint_mode") == "scale":
+            size_note = f"x{config.get('inpaint_scale', 2):g} of mask"
+        else:
+            size_note = f"{config['inpaint_size']}px"
+        people_note = f"{len(pose.people)}/{len(detected.people)} person(s)"
         self._record(
             p,
             global_index,
-            f"{pose.backend}, {points} points, {len(passes)} pass(es), size={config['inpaint_size']}, "
+            f"{pose.backend}, {people_note}, {points} points, {len(passes)} pass(es), size={size_note}, "
             f"r={radius}px ({radius_note}), extend={config.get('extend', 0):.2f}, "
             f"denoise={denoising:.2f}, steps={steps}",
         )
@@ -279,21 +390,35 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         """``([(label, mask, width, height)], point count, radius px)`` - one pass per part, or one combined."""
         padding = 32
         size = config.get("inpaint_size", 1024)
-        radius = inpaint_pose.resolve_radius(pose, config["radius"], config.get("radius_percent", 0))
+        percent = config.get("radius_percent", 0) if config.get("radius_mode", "percent") == "percent" else 0
+        mode = config.get("inpaint_mode", "px")
+        scale = config.get("inpaint_scale", inpaint_pose.DEFAULT_INPAINT_SCALE)
         extend = config.get("extend", 0)
 
-        if config.get("separate_masks", True):
-            built = inpaint_pose.build_region_masks(pose, regions=config["parts"], radius=radius, extend=extend)
-            passes = [
-                (code, mask, *inpaint_pose.region_inpaint_size(mask, size, padding))
-                for code, mask, _count in built
-            ]
-            return passes, sum(count for _code, _mask, count in built), radius
+        def pass_size(mask):
+            return inpaint_pose.region_inpaint_size(mask, size, padding, mode=mode, scale=scale)
 
+        if config.get("separate_masks", True):
+            built = inpaint_pose.build_region_masks(
+                pose,
+                regions=config["parts"],
+                radius=config["radius"],
+                extend=extend,
+                radius_percent=percent,
+                radius_mode=config.get("radius_mode"),
+            )
+            passes = [(item.label, item.mask, *pass_size(item.mask)) for item in built]
+            radius = max((item.radius for item in built), default=0)
+            return passes, sum(item.points for item in built), radius
+
+        radius = inpaint_pose.resolve_radius(pose, config["radius"], percent, mode=config.get("radius_mode"))
         mask, points = inpaint_pose.build_region_mask(pose, regions=config["parts"], radius=radius, extend=extend)
         if mask is None:
             return [], 0, radius
-        width, height = inpaint_pose.inpaint_crop_size(image.width, image.height, size)
+        if mode == "scale":
+            width, height = pass_size(mask)
+        else:
+            width, height = inpaint_pose.inpaint_crop_size(image.width, image.height, size)
         return [("all", mask, width, height)], points, radius
 
     def _save_intermediate(self, p, image, batch_index):

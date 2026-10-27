@@ -39,12 +39,17 @@ export const state = {
     hrStageConfig: '', // multi-stage hires text (one 'scale: .., steps: ..' entry per line)
     poseInpaintEnabled: false, // txt2img: detect face/hand/foot points and inpaint them
     poseInpaintParts: ['Face', 'Hands', 'Feet'], // selected point groups
-    poseInpaintRadius: 40, // fixed point radius in px, used when the relative radius is 0
-    poseInpaintRadiusPercent: 5, // point radius as a percentage of the skeleton's longest side
+    poseInpaintRadiusMode: 'percent', // point size: 'px' = fixed radius, 'percent' = share of each skeleton
+    poseInpaintRadius: 40, // fixed point radius in px (px mode)
+    poseInpaintRadiusPercent: 5, // point radius as a percentage of each skeleton's longest side (percent mode)
     poseInpaintExtend: 0.5, // push hand/foot points along the forearm/shin (multiples of that bone)
     poseInpaintDenoise: 0.4,
     poseInpaintSteps: 0, // 0 = use the base generation steps
-    poseInpaintSize: 1024, // long side of each masked region that is re-generated
+    poseInpaintSizeMode: 'scale', // inpaint size: 'px' = fixed long side, 'scale' = mask bbox x factor
+    poseInpaintSize: 1024, // long side of each masked region that is re-generated (px mode)
+    poseInpaintScale: 2, // sampling size = the mask's pixel bounding size x this factor (scale mode)
+    poseInpaintMaxPeople: 4, // keep only the most confident / largest skeletons
+    poseInpaintBackend: 'auto', // pose provider: auto | dwpose | torchvision
     poseInpaintSeparate: true, // one only-masked pass per part (batch) instead of one pass
     poseInpaintSaveIntermediate: false, // keep the image before the pose inpaint pass
   },
@@ -89,9 +94,12 @@ export const state = {
     maskOutlineColor: '#ffffff', // blinking border drawn around the mask
     maskBlink: true,
     poseParts: ['Face', 'Hands', 'Feet'], // pose-mask button: parts painted into the mask
-    poseRadius: 40, // pose mask radius in px, used when poseRadiusPercent is 0
-    poseRadiusPercent: 5, // pose mask radius as a percentage of the skeleton's longest side
+    poseRadiusMode: 'percent', // pose mask point size: 'px' = fixed radius, 'percent' = share of each skeleton
+    poseRadius: 40, // pose mask radius in px (px mode)
+    poseRadiusPercent: 5, // pose mask radius as a percentage of each skeleton's longest side (percent mode)
     poseExtend: 0.5, // push hand/foot points along the forearm/shin (multiples of that bone)
+    poseMaxPeople: 4, // pose-mask button: keep only the most confident / largest skeletons
+    poseBackend: 'auto', // pose-mask button: pose provider (auto | dwpose | torchvision)
     composeTool: 'move', // active Compose tool: move / brush / eraser
     composePaintColor: '#ff3366', // brush colour (desktop Composer default)
     composePaintSize: 40, // brush / eraser size in CSS px under the finger

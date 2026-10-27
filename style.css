@@ -4901,6 +4901,59 @@ body.resizing .resize-handle {
     opacity: 0.7;
 }
 
+.inppose-mode-title {
+    font-size: 10px;
+    opacity: 0.65;
+}
+
+.inppose-mode {
+    padding: 1px 7px;
+    border: 1px solid var(--border-color-primary, #555);
+    border-radius: 5px;
+    background: var(--input-background-fill, rgba(255, 255, 255, 0.06));
+    color: inherit;
+    font-size: 10px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.inppose-mode:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.inppose-mode:disabled,
+.inppose-mode.inppose-mode-off {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.inppose-mode.inppose-mode-on {
+    background: var(--button-primary-background-fill, #ff7c1f);
+    border-color: var(--button-primary-background-fill, #ff7c1f);
+    color: var(--button-primary-text-color, #fff);
+}
+
+.inppose-people {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.inppose-people input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 40px;
+}
+
+.inppose-people-val {
+    flex: none;
+    min-width: 16px;
+    font-size: 10px;
+    text-align: right;
+    opacity: 0.7;
+}
+
 .inppose-status {
     min-height: 13px;
     font-size: 10px;

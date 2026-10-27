@@ -283,25 +283,70 @@ function appendPoseInpaint(body, store, when) {
     },
   }));
 
+  const radiusMode = () => (store.poseInpaintRadiusMode === 'px' ? 'px' : 'percent');
+  const sizeMode = () => (store.poseInpaintSizeMode === 'px' ? 'px' : 'scale');
+  const radiusPxRow = sliderRow(store, 'Point radius (px)', 'poseInpaintRadius', 8, 400, 2);
+  const radiusPercentRow = sliderRow(store, 'Point radius of skeleton (%)', 'poseInpaintRadiusPercent', 0.5, 25, 0.5);
+  const sizePxRow = sliderRow(store, 'Inpaint size (long side, px)', 'poseInpaintSize', 256, 2048, 64);
+  const sizeScaleRow = sliderRow(store, 'Inpaint size scale (\u00D7 mask box)', 'poseInpaintScale', 1, 4, 0.1, {
+    format: (value) => `${Number(value).toFixed(1)}\u00D7`,
+  });
+
   const refresh = () => {
     details.classList.toggle('hidden', !store.poseInpaintEnabled);
     partButtons.forEach((button, index) => {
       button.classList.toggle('on', selectedParts().includes(POSE_PARTS[index]));
     });
     if (!store.poseInpaintEnabled) return;
-    // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right)
+
+    const pxRadius = radiusMode() === 'px';
+    radiusPxRow.classList.toggle('hidden', !pxRadius);
+    radiusPercentRow.classList.toggle('hidden', pxRadius);
+    const pxSize = sizeMode() === 'px';
+    sizePxRow.classList.toggle('hidden', !pxSize);
+    sizeScaleRow.classList.toggle('hidden', pxSize);
+
+    // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right), per skeleton
     const parts = selectedParts();
     const masks = (parts.includes('Face') ? 1 : 0)
       + (parts.includes('Hands') ? 2 : 0)
       + (parts.includes('Feet') ? 2 : 0);
     const passes = store.poseInpaintSeparate === false ? 1 : masks;
-    const radius = Number(store.poseInpaintRadiusPercent) > 0
-      ? `${store.poseInpaintRadiusPercent}% of skeleton`
-      : `${store.poseInpaintRadius}px`;
+    const radius = pxRadius
+      ? `${store.poseInpaintRadius}px`
+      : `${store.poseInpaintRadiusPercent}% of skeleton`;
+    const size = pxSize
+      ? `${store.poseInpaintSize}px long side`
+      : `${Number(store.poseInpaintScale).toFixed(1)}\u00D7 the mask box`;
     note.textContent = !masks
       ? 'Select at least one part, or the pass is skipped.'
-      : `${passes} only-masked pass${passes > 1 ? 'es' : ''}: r ${radius}, ext ${Number(store.poseInpaintExtend).toFixed(2)}, ${store.poseInpaintSize}px long side.`;
+      : `${passes} only-masked pass${passes > 1 ? 'es' : ''}: r ${radius}, ext ${Number(store.poseInpaintExtend).toFixed(2)}, ${size}, \u2264${store.poseInpaintMaxPeople} skeleton(s).`;
   };
+
+  const radiusModeToggle = segmented('Point size', [
+    { value: 'percent', label: '% of skeleton' },
+    { value: 'px', label: 'Pixels' },
+  ], radiusMode(), (value) => {
+    setParam('poseInpaintRadiusMode', value === 'px' ? 'px' : 'percent', store);
+    refresh();
+  });
+
+  const sizeModeToggle = segmented('Inpaint size', [
+    { value: 'scale', label: 'Relative' },
+    { value: 'px', label: 'Pixels' },
+  ], sizeMode(), (value) => {
+    setParam('poseInpaintSizeMode', value === 'px' ? 'px' : 'scale', store);
+    refresh();
+  });
+
+  const providerToggle = segmented('Pose provider', [
+    { value: 'auto', label: 'Auto' },
+    { value: 'dwpose', label: 'DWPose' },
+    { value: 'torchvision', label: 'COCO 17' },
+  ], store.poseInpaintBackend === 'dwpose' || store.poseInpaintBackend === 'torchvision' ? store.poseInpaintBackend : 'auto', (value) => {
+    setParam('poseInpaintBackend', value, store);
+    refresh();
+  });
 
   const toggle = segmentedControl('Pose inpaint', [
     { value: 'off', label: 'Off' },
@@ -316,12 +361,17 @@ function appendPoseInpaint(body, store, when) {
       el('label', { text: 'Parts' }),
       el('div', { class: 'chips' }, partButtons),
     ]),
-    sliderRow(store, 'Point radius', 'poseInpaintRadius', 8, 400, 2),
-    sliderRow(store, 'Radius of skeleton (%)', 'poseInpaintRadiusPercent', 0, 25, 0.5),
+    radiusModeToggle,
+    radiusPxRow,
+    radiusPercentRow,
     sliderRow(store, 'Hand/foot extend (\u00D7 bone)', 'poseInpaintExtend', 0, 2, 0.05, { format: (value) => Number(value).toFixed(2) }),
     sliderRow(store, 'Denoising strength', 'poseInpaintDenoise', 0, 1, 0.01, { format: (value) => Number(value).toFixed(2) }),
     sliderRow(store, 'Steps (0 = base)', 'poseInpaintSteps', 0, 150, 1),
-    sliderRow(store, 'Inpaint size (long side, px)', 'poseInpaintSize', 256, 2048, 64),
+    sizeModeToggle,
+    sizePxRow,
+    sizeScaleRow,
+    sliderRow(store, 'Max skeletons', 'poseInpaintMaxPeople', 1, 16, 1),
+    providerToggle,
     segmented('One pass per part', [
       { value: 'on', label: 'On' },
       { value: 'off', label: 'Off' },
@@ -336,7 +386,7 @@ function appendPoseInpaint(body, store, when) {
       setParam('poseInpaintSaveIntermediate', value === 'on', store);
     }),
     note,
-    el('div', { class: 'small muted', text: 'Radius 0% = use the fixed px radius. Hand/foot extend pushes the masks past the wrist/ankle. DWPose models give the best anime hands/feet.' }),
+    el('div', { class: 'small muted', text: 'Every used skeleton gets its own masks. Relative inpaint size is the mask\'s pixel bounding box x the scale (2x by default). Hand/foot extend pushes the masks past the wrist/ankle. DWPose models give the best anime hands/feet.' }),
   );
 
   body.append(
@@ -754,15 +804,41 @@ export function openParamsSheet(kind = 'text') {
           uiPoseChips.forEach((chip, index) => chip.classList.toggle('on', next.has(POSE_PARTS[index])));
         },
       }));
+      const uiRadiusMode = () => (state.ui.poseRadiusMode === 'px' ? 'px' : 'percent');
+      const uiRadiusPxRow = sliderRow(state.ui, 'Pose point radius (px)', 'poseRadius', 8, 400, 2);
+      const uiRadiusPercentRow = sliderRow(state.ui, 'Pose radius of skeleton (%)', 'poseRadiusPercent', 0.5, 25, 0.5);
+      const syncPoseRows = () => {
+        const percent = uiRadiusMode() === 'percent';
+        uiRadiusPxRow.classList.toggle('hidden', percent);
+        uiRadiusPercentRow.classList.toggle('hidden', !percent);
+      };
+      const uiPoseModeToggle = segmentedControl('Pose point size', [
+        { value: 'percent', label: '% of skeleton' },
+        { value: 'px', label: 'Pixels' },
+      ], uiRadiusMode(), (value) => {
+        setParam('poseRadiusMode', value === 'px' ? 'px' : 'percent', state.ui);
+        syncPoseRows();
+      });
       body.append(
         el('div', { class: 'field' }, [
           el('label', { text: 'Pose mask parts' }),
           el('div', { class: 'chips' }, uiPoseChips),
         ]),
-        sliderRow(state.ui, 'Pose radius of skeleton (%)', 'poseRadiusPercent', 0, 25, 0.5),
+        uiPoseModeToggle.node,
+        uiRadiusPxRow,
+        uiRadiusPercentRow,
         sliderRow(state.ui, 'Pose hand/foot extend (\u00D7 bone)', 'poseExtend', 0, 2, 0.05, { format: (value) => Number(value).toFixed(2) }),
-        el('div', { class: 'small muted', text: 'Tap the bone button in the mask toolbar to paint the detected face/hand/foot points into the mask. Radius 0% uses the fixed px radius.' }),
+        sliderRow(state.ui, 'Pose max skeletons', 'poseMaxPeople', 1, 16, 1),
+        segmented('Pose provider', [
+          { value: 'auto', label: 'Auto' },
+          { value: 'dwpose', label: 'DWPose' },
+          { value: 'torchvision', label: 'COCO 17' },
+        ], state.ui.poseBackend === 'dwpose' || state.ui.poseBackend === 'torchvision' ? state.ui.poseBackend : 'auto', (value) => {
+          setParam('poseBackend', value, state.ui);
+        }),
+        el('div', { class: 'small muted', text: 'Tap the bone button in the mask toolbar to paint the detected face/hand/foot points into the mask. Each skeleton gets its own mask.' }),
       );
+      syncPoseRows();
     }
   }
 

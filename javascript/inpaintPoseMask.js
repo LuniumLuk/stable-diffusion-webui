@@ -22,6 +22,10 @@
 
     const LS = {
         radius: "inppose.radius",
+        radiusMode: "inppose.radiusMode",
+        radiusPercent: "inppose.radiusPercent",
+        maxPeople: "inppose.maxPeople",
+        backend: "inppose.backend",
         extend: "inppose.extend",
         face: "inppose.face",
         hands: "inppose.hands",
@@ -30,6 +34,7 @@
     };
 
     const PARTS = ["face", "hands", "feet"];
+    const BACKENDS = ["auto", "dwpose", "torchvision"];
 
     const state = {
         booted: false,
@@ -40,6 +45,11 @@
         buttonEl: null,
         radiusEl: null,
         radiusLabel: null,
+        modeEls: [],
+        backendEls: [],
+        dwposeReady: false,
+        peopleEl: null,
+        peopleLabel: null,
         extendEl: null,
         extendLabel: null,
         statusFetched: false,
@@ -48,6 +58,10 @@
         drawnUrl: "",
         imageSrc: "",
         width: 40,
+        radiusMode: "percent",
+        radiusPercent: 5,
+        maxPeople: 4,
+        backend: "auto",
         extend: 0.5,
         parts: {face: true, hands: true, feet: true},
         showSkeleton: true,
@@ -93,6 +107,11 @@
         return Number.isFinite(number) ? number : fallback;
     }
 
+    function readString(key, fallback) {
+        const value = typeof localGet === "function" ? localGet(key, null) : null;
+        return value === null || value === undefined ? fallback : String(value);
+    }
+
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
     }
@@ -135,11 +154,51 @@
     }
 
     function updateRadiusLabel() {
-        if (state.radiusLabel) state.radiusLabel.textContent = `${state.width}px`;
+        if (!state.radiusLabel) return;
+        state.radiusLabel.textContent = state.radiusMode === "percent"
+            ? `${Number(state.radiusPercent).toFixed(1)}%`
+            : `${state.width}px`;
+    }
+
+    function applyRadiusMode() {
+        state.modeEls.forEach((button) => {
+            button.classList.toggle("inppose-mode-on", button.dataset.mode === state.radiusMode);
+        });
+        if (state.radiusEl) {
+            if (state.radiusMode === "percent") {
+                state.radiusEl.min = "0.5";
+                state.radiusEl.max = "25";
+                state.radiusEl.step = "0.5";
+                state.radiusEl.value = String(state.radiusPercent);
+            } else {
+                state.radiusEl.min = "8";
+                state.radiusEl.max = "400";
+                state.radiusEl.step = "2";
+                state.radiusEl.value = String(state.width);
+            }
+        }
+        updateRadiusLabel();
     }
 
     function updateExtendLabel() {
         if (state.extendLabel) state.extendLabel.textContent = Number(state.extend).toFixed(2);
+    }
+
+    function updatePeopleLabel() {
+        if (state.peopleLabel) state.peopleLabel.textContent = String(state.maxPeople);
+    }
+
+    function applyBackend() {
+        state.backendEls.forEach((button) => {
+            const name = button.dataset.backend;
+            button.classList.toggle("inppose-mode-on", name === state.backend);
+            const missing = name === "dwpose" && !state.dwposeReady;
+            button.disabled = missing;
+            button.classList.toggle("inppose-mode-off", missing);
+            button.title = missing
+                ? "DWPose models are not installed - press Get DWPose below"
+                : (button.dataset.tip || "");
+        });
     }
 
     function updateSkeleton() {
@@ -205,6 +264,7 @@
             const response = await fetch(STATUS_URL);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
+            state.dwposeReady = !!data.dwpose_ready;
             const el = state.section ? state.section.querySelector(".inppose-backend") : null;
             if (el) {
                 el.textContent = data.available ? backendLabel(data.backend) : "unavailable";
@@ -213,6 +273,7 @@
             }
             const getRow = state.section ? state.section.querySelector(".inppose-getrow") : null;
             if (getRow) getRow.hidden = !!data.dwpose;
+            applyBackend();
         } catch (error) {
             state.statusFetched = false;
             const el = state.section ? state.section.querySelector(".inppose-backend") : null;
@@ -237,6 +298,20 @@
         return PARTS.filter((part) => state.parts[part]);
     }
 
+    function bindSection(section) {
+        state.section = section;
+        state.statusEl = section.querySelector(".inppose-status");
+        state.buttonEl = section.querySelector(".inppose-detect");
+        state.radiusEl = section.querySelector(".inppose-radius input");
+        state.radiusLabel = section.querySelector(".inppose-radius-val");
+        state.modeEls = Array.from(section.querySelectorAll(".inppose-mode[data-mode]"));
+        state.backendEls = Array.from(section.querySelectorAll(".inppose-provider"));
+        state.peopleEl = section.querySelector(".inppose-people input");
+        state.peopleLabel = section.querySelector(".inppose-people-val");
+        state.extendEl = section.querySelector(".inppose-extend input");
+        state.extendLabel = section.querySelector(".inppose-extend-val");
+    }
+
     function buildSection() {
         const section = document.createElement("div");
         section.className = "inppose-section";
@@ -249,13 +324,24 @@
         <button type="button" class="inppose-btn inppose-detect" title="Find face/hand/foot points with the local pose network">Detect pose</button>
         <button type="button" class="inppose-btn inppose-clear" title="Remove the masks generated by Detect pose">Clear</button>
       </div>
+      <div class="inppose-row inppose-providers">
+        <span class="inppose-mode-title" title="Pose provider used by Detect pose">provider</span>
+        <button type="button" class="inppose-mode inppose-provider" data-backend="auto" data-tip="Prefer DWPose when its models are installed, otherwise COCO 17">auto</button>
+        <button type="button" class="inppose-mode inppose-provider" data-backend="dwpose" data-tip="DWPose ONNX: 68 face points, 21 per hand, 3 per foot">DWPose</button>
+        <button type="button" class="inppose-mode inppose-provider" data-backend="torchvision" data-tip="torchvision Keypoint R-CNN (COCO 17); no extra models needed">COCO</button>
+      </div>
       <div class="inppose-row inppose-parts">
         <label title="Cover the detected face points"><input type="checkbox" data-part="face" checked> face</label>
         <label title="Cover the detected hand points"><input type="checkbox" data-part="hands" checked> hands</label>
         <label title="Cover the detected foot points"><input type="checkbox" data-part="feet" checked> feet</label>
       </div>
+      <div class="inppose-row inppose-modes">
+        <span class="inppose-mode-title" title="Point size: a fixed pixel radius, or a percentage of each skeleton">size</span>
+        <button type="button" class="inppose-mode" data-mode="px" title="Fixed radius in pixels">px</button>
+        <button type="button" class="inppose-mode" data-mode="percent" title="Radius follows every skeleton: this percentage of its longest side">%</button>
+      </div>
       <div class="inppose-row">
-        <label class="inppose-radius" title="Radius of the circle drawn around every detected point">R
+        <label class="inppose-radius" title="Radius of the circle drawn around every detected point">
           <input type="range" min="8" max="400" step="2" value="40">
           <span class="inppose-radius-val">40px</span>
         </label>
@@ -267,6 +353,12 @@
         </label>
       </div>
       <div class="inppose-row">
+        <label class="inppose-people" title="Use at most this many skeletons; the most confident and largest ones are kept and each gets its own masks">max skel
+          <input type="range" min="1" max="16" step="1" value="4">
+          <span class="inppose-people-val">4</span>
+        </label>
+      </div>
+      <div class="inppose-row">
         <label title="Show the detected skeleton over the picture"><input type="checkbox" data-toggle="skeleton" checked> skeleton</label>
       </div>
       <div class="inppose-row inppose-getrow" hidden>
@@ -275,20 +367,15 @@
       </div>
       <div class="inppose-status"></div>`;
 
-        state.section = section;
-        state.statusEl = section.querySelector(".inppose-status");
-        state.buttonEl = section.querySelector(".inppose-detect");
-        state.radiusEl = section.querySelector(".inppose-radius input");
-        state.radiusLabel = section.querySelector(".inppose-radius-val");
-        state.extendEl = section.querySelector(".inppose-extend input");
-        state.extendLabel = section.querySelector(".inppose-extend-val");
-
-        state.radiusEl.value = String(state.width);
-        updateRadiusLabel();
+        bindSection(section);
 
         state.extend = clamp(readFloat(LS.extend, state.extend), 0, 2);
         state.extendEl.value = String(state.extend);
         updateExtendLabel();
+
+        state.maxPeople = clamp(readInt(LS.maxPeople, state.maxPeople), 1, 16);
+        state.peopleEl.value = String(state.maxPeople);
+        updatePeopleLabel();
 
         PARTS.forEach((part) => {
             const input = section.querySelector(`[data-part="${part}"]`);
@@ -307,10 +394,33 @@
             updateSkeleton();
         });
 
+        state.modeEls.forEach((button) => {
+            button.addEventListener("click", () => {
+                state.radiusMode = button.dataset.mode === "px" ? "px" : "percent";
+                if (typeof localSet === "function") localSet(LS.radiusMode, state.radiusMode);
+                applyRadiusMode();
+            });
+        });
+
+        state.backendEls.forEach((button) => {
+            button.addEventListener("click", () => {
+                const name = button.dataset.backend;
+                if (!BACKENDS.includes(name)) return;
+                state.backend = name;
+                if (typeof localSet === "function") localSet(LS.backend, state.backend);
+                applyBackend();
+            });
+        });
+
         state.radiusEl.addEventListener("input", () => {
-            state.width = clamp(parseInt(state.radiusEl.value, 10) || 40, 8, 400);
+            if (state.radiusMode === "percent") {
+                state.radiusPercent = clamp(parseFloat(state.radiusEl.value) || 5, 0.5, 25);
+                if (typeof localSet === "function") localSet(LS.radiusPercent, String(state.radiusPercent));
+            } else {
+                state.width = clamp(parseInt(state.radiusEl.value, 10) || 40, 8, 400);
+                if (typeof localSet === "function") localSet(LS.radius, String(state.width));
+            }
             updateRadiusLabel();
-            if (typeof localSet === "function") localSet(LS.radius, String(state.width));
         });
 
         state.extendEl.addEventListener("input", () => {
@@ -319,10 +429,18 @@
             if (typeof localSet === "function") localSet(LS.extend, String(state.extend));
         });
 
+        state.peopleEl.addEventListener("input", () => {
+            state.maxPeople = clamp(parseInt(state.peopleEl.value, 10) || 4, 1, 16);
+            updatePeopleLabel();
+            if (typeof localSet === "function") localSet(LS.maxPeople, String(state.maxPeople));
+        });
+
         state.buttonEl.addEventListener("click", () => detect());
         section.querySelector(".inppose-clear").addEventListener("click", () => clearPose());
         section.querySelector(".inppose-get").addEventListener("click", () => downloadModels());
 
+        applyRadiusMode();
+        applyBackend();
         return section;
     }
 
@@ -391,7 +509,11 @@
                     input_image: image,
                     regions,
                     radius: state.width,
+                    radius_mode: state.radiusMode,
+                    radius_percent: state.radiusPercent,
                     extend: state.extend,
+                    max_people: state.maxPeople,
+                    backend: state.backend,
                     include_skeleton: true,
                 }),
             });
@@ -424,8 +546,12 @@
             }
 
             const people = Number(data.people) || 0;
+            const total = Number(data.people_total) || people;
             const backend = backendLabel(data.backend);
-            setStatus(`${added} mask${added === 1 ? "" : "s"} \u00B7 ${people} person${people === 1 ? "" : "s"} \u00B7 ${backend}`);
+            const peopleText = data.limited
+                ? `${people}/${total} skeletons`
+                : `${people} person${people === 1 ? "" : "s"}`;
+            setStatus(`${added} mask${added === 1 ? "" : "s"} \u00B7 ${peopleText} \u00B7 r ${data.radius}px \u00B7 ${backend}`);
         } catch (error) {
             setStatus(error.message || "Pose analysis failed", true);
         } finally {
@@ -476,11 +602,9 @@
             state.statusFetched = false;
             loadStatus();
         } else if (section !== state.section) {
-            state.section = section;
-            state.statusEl = section.querySelector(".inppose-status");
-            state.buttonEl = section.querySelector(".inppose-detect");
-            state.radiusEl = section.querySelector(".inppose-radius input");
-            state.radiusLabel = section.querySelector(".inppose-radius-val");
+            bindSection(section);
+            applyRadiusMode();
+            applyBackend();
         } else {
             // keep the pose controls above the (possibly long) mask list on live reloads
             const body = panel.querySelector(".inpbatch-body");
@@ -495,6 +619,11 @@
         state.booted = true;
 
         state.width = clamp(readInt(LS.radius, 40), 8, 400);
+        state.radiusMode = readString(LS.radiusMode, "percent") === "px" ? "px" : "percent";
+        state.radiusPercent = clamp(readFloat(LS.radiusPercent, 5), 0.5, 25);
+        state.maxPeople = clamp(readInt(LS.maxPeople, 4), 1, 16);
+        const savedBackend = readString(LS.backend, "auto");
+        state.backend = BACKENDS.includes(savedBackend) ? savedBackend : "auto";
         PARTS.forEach((part) => {
             state.parts[part] = readBool(LS[part], true);
         });
