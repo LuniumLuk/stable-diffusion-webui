@@ -27,7 +27,7 @@ import { el, toast } from './ui.js';
 import { on, persist, state } from './state.js';
 import { createPromptCM } from './prompt-cm.js';
 import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, findPickGroups, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
-import { syntaxHint } from './prompt-syntax.js';
+import { analyzeConditionLines, isConditionLine, syntaxHint } from './prompt-syntax.js';
 
 const WEIGHT_STEP = 0.05;
 const MAX_SUGGEST = 8;
@@ -194,7 +194,8 @@ function createChipsField(key, placeholder, title) {
     });
   }
 
-  const isCommentedLine = (text) => /^\s*#(?!\()/.test(text);
+  // a standalone #if / #elseif / #else / #endif line is a directive, not a comment
+  const isCommentedLine = (text) => !isConditionLine(text) && /^\s*#(?!\()/.test(text);
   const stripLineComment = (text) => text.replace(/^(\s*)#\s?/, '$1');
 
   /** Line text as the chips view sees it: comment stripped, line weight unwrapped. */
@@ -209,7 +210,7 @@ function createChipsField(key, placeholder, title) {
     const text = String(rawLine == null ? '' : rawLine);
     const indent = text.slice(0, text.length - text.trimStart().length);
     const rest = text.slice(indent.length);
-    if (/^#(?!\()/.test(rest)) {
+    if (/^#(?!\()/.test(rest) && !isConditionLine(rest)) {
       const marker = rest.startsWith('# ') ? '# ' : '#';
       return { prefix: indent + marker, content: rest.slice(marker.length) };
     }
@@ -306,7 +307,12 @@ function createChipsField(key, placeholder, title) {
     }
     column += segments[seg].lead.length + (segments[seg].body.length - segments[seg].body.trimStart().length);
     const group = pickGroupAt(findPickGroups(value()), line, column);
-    const token = classify(segments[seg].body, group ? group.syntax : null);
+    const token = classify(segments[seg].body, group ? group.syntax : null, !isCommentedLine(lines[line]));
+    if (token.kind === 'cond') {
+      // the whole-prompt pass knows about a missing #endif / a stray #else
+      const condition = analyzeConditionLines(value())[line];
+      if (condition) token.syntax = condition;
+    }
     token.line = line;
     token.seg = seg;
     return token;
@@ -322,7 +328,7 @@ function createChipsField(key, placeholder, title) {
     return count;
   }
 
-  /** Broken '@' directives across the text (drives the ⚠ badge in the header). */
+  /** Broken '@' directives and #if blocks (drives the ⚠ badge in the header). */
   function countSyntaxErrors() {
     const groups = findPickGroups(value());
     let count = 0;
@@ -334,10 +340,11 @@ function createChipsField(key, placeholder, title) {
         cursor = bodyStart + segment.body.length + segment.tail.length;
         const group = pickGroupAt(groups, lineIndex, coreStart);
         const token = classify(segment.body, group ? group.syntax : null);
-        if (token.syntax && !token.syntax.ok) count += 1;
+        // #if lines are counted with their whole block (missing #endif, stray #else)
+        if (token.kind !== 'cond' && token.syntax && !token.syntax.ok) count += 1;
       });
     });
-    return count;
+    return count + analyzeConditionLines(value()).filter((info) => info && !info.ok).length;
   }
 
   /* ---------------------------------------------------------------- rendering */
@@ -345,17 +352,20 @@ function createChipsField(key, placeholder, title) {
   function chipNode(line, seg, token) {
     const classes = ['pedit-chip'];
     const syntax = token.syntax || null;
+    const condition = token.kind === 'cond';
     if (token.disabled) classes.push('is-disabled');
     if (selection.line === line && selection.seg === seg) classes.push('is-selected');
     if (!token.text) classes.push('is-empty');
+    if (condition) classes.push('is-cond');
     if (syntax) classes.push(syntax.ok ? 'is-syntax' : 'is-syntax-error');
 
     const children = [];
-    if (token.kind === 'angle') children.push(el('span', { class: 'pedit-chip-kind', text: '\u25C8' }));
+    if (condition) children.push(el('span', { class: 'pedit-chip-kind', text: '\u2442' }));
+    else if (token.kind === 'angle') children.push(el('span', { class: 'pedit-chip-kind', text: '\u25C8' }));
     else if (syntax) children.push(el('span', { class: 'pedit-chip-kind', text: syntax.ok ? '\uD83C\uDFB2' : '\u26A0\uFE0F' }));
     children.push(el('span', { class: 'pedit-chip-text', text: token.text || '\u2026' }));
     if (syntax) {
-      if (syntax.ok && syntax.items.length > 1) {
+      if (!condition && syntax.ok && syntax.items.length > 1) {
         children.push(el('span', {
           class: 'pedit-chip-w pedit-chip-pick',
           text: `${syntax.count}/${syntax.items.length}`,
@@ -560,12 +570,14 @@ function createChipsField(key, placeholder, title) {
     commit(lines.join('\n'));
   }
 
-  function lineNode(lineText, index, lines, groups) {
+  function lineNode(lineText, index, lines, groups, conditions) {
+    const condition = isConditionLine(lineText);
     const commented = isCommentedLine(lineText);
+    const conditionSyntax = condition && conditions ? conditions[index] : null;
     // a commented line shows its keywords without the leading '# ' - the gutter carries state;
     // displayContent also unwraps a line-weight group so per-keyword chips stay editable
     const content = displayContent(lineText);
-    const lineWeight = commented ? null : parseLineWeight(lineText);
+    const lineWeight = commented || condition ? null : parseLineWeight(lineText);
     const segments = splitSegments(content);
 
     const row = el('div', { class: 'pedit-row' });
@@ -596,18 +608,22 @@ function createChipsField(key, placeholder, title) {
         return;
       }
       const group = pickGroupAt(groups, index, coreStart);
-      chips.append(chipNode(index, segIndex, classify(segment.body, group ? group.syntax : null)));
+      const token = classify(segment.body, group ? group.syntax : null, !commented);
+      if (token.kind === 'cond' && conditionSyntax) token.syntax = conditionSyntax;
+      chips.append(chipNode(index, segIndex, token));
     });
     row.append(chips);
     row.append(el('span', { class: 'pedit-fold-slot' }));
-    row.append(el('button', {
-      class: 'pedit-add',
-      type: 'button',
-      text: '\uFF0B',
-      title: 'Add a keyword to this line',
-      dataset: { act: 'add', line: String(index) },
-    }));
-    if (!commented && content.trim()) {
+    if (!condition) {
+      row.append(el('button', {
+        class: 'pedit-add',
+        type: 'button',
+        text: '\uFF0B',
+        title: 'Add a keyword to this line',
+        dataset: { act: 'add', line: String(index) },
+      }));
+    }
+    if (!commented && !condition && content.trim()) {
       row.append(el('button', {
         class: 'pedit-line-weight' + (lineWeight ? ' is-on' : ''),
         type: 'button',
@@ -624,7 +640,7 @@ function createChipsField(key, placeholder, title) {
     else if (selection.editing && selection.editing.line === index) main.append(inputRowNode(index, 'edit', selection.editing.value));
     else if (selection.lineWeight && selection.lineWeight.line === index) main.append(lineWeightRowNode(index));
 
-    return el('div', { class: 'pedit-line' + (commented ? ' is-comment' : '') }, [
+    return el('div', { class: 'pedit-line' + (commented ? ' is-comment' : '') + (condition ? ' is-condition' : '') }, [
       el('button', {
         class: 'pedit-gutter' + (commented ? ' is-comment' : ''),
         type: 'button',
@@ -821,7 +837,7 @@ function createChipsField(key, placeholder, title) {
     const syntaxErrors = countSyntaxErrors();
     errorBadge.hidden = !syntaxErrors;
     errorBadge.textContent = syntaxErrors ? `\u26A0 ${syntaxErrors} syntax` : '';
-    errorBadge.title = 'keywords starting with @ must follow the prompt syntax - tap a red keyword to see what is wrong';
+    errorBadge.title = 'keywords starting with @ and #if blocks must follow the prompt syntax - tap a red keyword to see what is wrong';
 
     if (mode() === 'text') {
       ensureCM();
@@ -837,8 +853,9 @@ function createChipsField(key, placeholder, title) {
 
     const lines = value().split('\n');
     const groups = findPickGroups(value());
+    const conditions = analyzeConditionLines(value());
     const anchor = captureScrollAnchor();
-    body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines, groups)));
+    body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines, groups, conditions)));
     queueMicrotask(() => { applyFolds(); restoreScrollAnchor(anchor); });
     if (!value().trim()) {
       body.append(el('div', {
@@ -942,7 +959,9 @@ function createChipsField(key, placeholder, title) {
     const line = lines[lineIndex];
     const trimmed = line.replace(/^\s+/, '');
     const indent = line.slice(0, line.length - trimmed.length);
-    if (/^#(?!\()/.test(trimmed)) {
+    // a '#if' line is a directive: commenting it out adds the marker instead of
+    // stripping it ('# #if …' is the comment form)
+    if (/^#(?!\()/.test(trimmed) && !isConditionLine(trimmed)) {
       lines[lineIndex] = indent + trimmed.slice(1).replace(/^ /, '');
     } else if (trimmed !== '') {
       lines[lineIndex] = indent + '# ' + trimmed;

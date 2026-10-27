@@ -173,6 +173,383 @@ def expand_prompt_picks(prompt: str, rng=None) -> str:
     return ''.join(parts)
 
 
+# ── comments ─────────────────────────────────────────────────────────────────
+#
+# Prompt text supports two comment forms, both produced by the chip editors in
+# javascript/promptEditor.js and mobile_lite/js/prompt.js and understood by hand:
+#
+# * whole-line comments - a line whose first non-whitespace character is '#'
+#   (a line starting with '#' followed by '(', '[' or '<' is NOT a comment, it
+#   starts with a disabled keyword group; '#if' blocks are resolved before the
+#   stripper runs and are therefore never comments either);
+# * inline disabled groups - #(keyword), #[keyword], #<lora:x:1> anywhere in a
+#   line; the group is dropped, the rest of the line is kept.
+
+
+def strip_prompt_comments(text: str) -> str:
+    """Removes prompt comments and disabled keywords from a prompt.
+
+    Called when a prompt is compiled, so that scripts.process() and the diffusion
+    model always receive clean prompts.  The originals (with comments) are
+    preserved in all_prompts_with_comments / all_negative_prompts_with_comments
+    for PNG metadata and gallery restore.
+
+    >>> strip_prompt_comments("a, b\\n# comment\\n#(off), c")
+    'a, b\\nc'
+    >>> strip_prompt_comments("#if TXT2IMG")
+    ''
+    """
+    if not text:
+        return text
+
+    # whole-line comments (keep lines that start with a disabled keyword group)
+    lines = [line for line in text.split('\n') if not re.match(r'^\s*#(?![\[(<])', line)]
+    out = '\n'.join(lines)
+
+    # inline disabled groups; loop because the pattern unwraps one nesting level per pass
+    pattern = re.compile(r'#\((?:[^()]|\([^()]*\))*\)|#\[(?:[^\[\]]|\[[^\[\]]*\])*\]|#<[^<>]*>')
+    previous = None
+    while previous != out:
+        previous = out
+        out = pattern.sub('', out)
+
+    # tidy the separators the removed groups left behind (generation only - the
+    # metadata keeps the untouched original text)
+    previous = None
+    while previous != out:
+        previous = out
+        out = re.sub(r',[ \t]*,[ \t]*', ', ', out)
+    out = re.sub(r'^[ \t]*,[ \t]*', '', out, flags=re.M)  # group was at the start of a line
+    out = re.sub(r'[ \t]+$', '', out, flags=re.M)
+    return out
+
+
+# ── conditional blocks ───────────────────────────────────────────────────────
+#
+# #if TXT2IMG
+#   sharp focus, 8k
+# #elseif HIRES_FIX
+#   detailed texture
+# #else
+#   soft focus
+# #endif
+#
+# A block is resolved for the stage that is currently running, so one prompt can
+# carry per-stage text: the first pass sees the TXT2IMG branch, the hires pass
+# the HIRES_FIX branch.  Every macro is 1 while its stage runs and 0 otherwise;
+# HIRES_FIX is an img2img pass and POSE_INPAINT an inpaint pass, so the lower
+# stage is 1 as well.  POSE_INPAINT_PART is the enum of the pose inpaint pass:
+# 0 (none) during every other stage, FACE, FEET or HANDS inside a pose pass.
+#
+# Conditions are a small boolean expression: macro names, 0/1 values, the enum
+# names, ==, !=, !, && (and), || (or) and parentheses.  A block that is not
+# closed, or an #elseif/#else/#endif without its #if, is left as typed so the
+# prompt editor can flag it in place.  A condition that cannot be evaluated
+# (unknown macro, broken expression) counts as false.
+
+re_condition_directive = re.compile(r"^[ \t]*#(?P<keyword>if|elif|elseif|else|endif)(?![A-Za-z0-9_])(?P<expression>[^\n]*)$", re.IGNORECASE)
+re_condition_token = re.compile(r"[ \t]*(?:(?P<operator>!=|==|&&|\|\||[!()])|(?P<word>[A-Za-z_][A-Za-z0-9_]*)|(?P<number>-?\d+(?:\.\d+)?)|(?P<other>\S))")
+
+PROMPT_MACROS = ("TXT2IMG", "HIRES_FIX", "IMG2IMG", "INPAINT", "POSE_INPAINT", "POSE_INPAINT_PART")
+POSE_INPAINT_PARTS = ("NONE", "FACE", "FEET", "HANDS")
+POSE_REGION_PARTS = {
+    "face": "FACE",
+    "left_hand": "HANDS",
+    "right_hand": "HANDS",
+    "left_foot": "FEET",
+    "right_foot": "FEET",
+}
+
+# every stage and the macros that are 1 while it runs
+_STAGE_MACROS = {
+    "txt2img": ("TXT2IMG",),
+    "hires_fix": ("HIRES_FIX", "IMG2IMG"),
+    "img2img": ("IMG2IMG",),
+    "inpaint": ("INPAINT", "IMG2IMG"),
+    "pose_inpaint": ("POSE_INPAINT", "INPAINT", "IMG2IMG"),
+}
+
+
+def stage_macros(stage=None, inpaint=None, pose_part=None) -> dict:
+    """Macro values of one generation stage, for expand_prompt_conditions().
+
+    >>> stage_macros("hires_fix")["IMG2IMG"], stage_macros("hires_fix")["TXT2IMG"]
+    (1, 0)
+    >>> stage_macros("img2img", inpaint=True)["INPAINT"]
+    1
+    >>> stage_macros("pose_inpaint", pose_part="FACE")["POSE_INPAINT_PART"]
+    'FACE'
+    >>> stage_macros("txt2img")["POSE_INPAINT_PART"]
+    0
+    """
+    name = str(stage or "").strip().lower()
+    if name == "img2img" and inpaint:
+        name = "inpaint"
+
+    macros = dict.fromkeys(PROMPT_MACROS, 0)
+    for macro in _STAGE_MACROS.get(name, ()):
+        macros[macro] = 1
+
+    macros["POSE_INPAINT_PART"] = pose_inpaint_part(pose_part)
+    return macros
+
+
+def pose_inpaint_part(value) -> int | str:
+    """Normalises a pose part to the POSE_INPAINT_PART enum: 0, 'FACE', 'FEET' or 'HANDS'.
+
+    Accepts the enum value itself, a pose mask region code ('left_hand') or the
+    part name the pose inpaint script uses ('Face').
+
+    >>> pose_inpaint_part("left_hand")
+    'HANDS'
+    >>> pose_inpaint_part("Face")
+    'FACE'
+    >>> pose_inpaint_part(None)
+    0
+    """
+    if value is None:
+        return 0
+
+    text = str(value).strip().upper().replace(" ", "_")
+    if text in ("", "0", "NONE", "FALSE", "ALL"):
+        return 0
+    if text in POSE_REGION_PARTS:
+        return POSE_REGION_PARTS[text]
+    if text in POSE_INPAINT_PARTS:
+        return text
+    # 'LEFT_HAND' / 'RIGHT_FOOT' style codes, and already normalised names
+    lowered = text.lower()
+    if lowered in POSE_REGION_PARTS:
+        return POSE_REGION_PARTS[lowered]
+    if lowered in ("hand", "hands"):
+        return "HANDS"
+    if lowered in ("foot", "feet"):
+        return "FEET"
+    if lowered == "face":
+        return "FACE"
+    return 0
+
+
+def _comparable(value):
+    """Comparable form of a macro value or condition literal (NONE/0 are the same)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "num", value
+    if isinstance(value, bool):
+        return "num", int(value)
+
+    text = str(value).strip().upper()
+    if text in ("", "0", "NONE", "FALSE", "OFF"):
+        return "num", 0
+    if re.fullmatch(r"-?\d+", text):
+        return "num", int(text)
+    return "text", text
+
+
+def _truthy(value) -> bool:
+    return _comparable(value) != ("num", 0)
+
+
+def _condition_tokens(expression: str) -> list:
+    tokens = []
+    position = 0
+    while position < len(expression):
+        match = re_condition_token.match(expression, position)
+        if match is None:
+            raise ValueError(expression)
+        operator = match.group("operator")
+        word = match.group("word")
+        number = match.group("number")
+        if operator:
+            tokens.append(("op", operator))
+        elif word:
+            tokens.append(("word", word))
+        elif number:
+            tokens.append(("number", number))
+        else:
+            raise ValueError(expression)
+        position = match.end()
+    return tokens
+
+
+def _condition_primary(tokens, index, macros):
+    if index >= len(tokens):
+        raise ValueError("missing operand")
+
+    kind, value = tokens[index]
+    if kind == "op" and value == "!":
+        result, index = _condition_primary(tokens, index + 1, macros)
+        return not result, index
+
+    if kind == "op" and value == "(":
+        result, index = _condition_or(tokens, index + 1, macros)
+        if index >= len(tokens) or tokens[index] != ("op", ")"):
+            raise ValueError("missing )")
+        return result, index + 1
+
+    if kind == "word":
+        name = value.upper()
+        if name not in macros:
+            raise ValueError(f"unknown macro {value}")
+        left = macros[name]
+        index += 1
+        if index < len(tokens) and tokens[index][0] == "op" and tokens[index][1] in ("==", "!="):
+            operator = tokens[index][1]
+            index += 1
+            if index >= len(tokens) or tokens[index][0] not in ("word", "number"):
+                raise ValueError("missing comparison value")
+            right = tokens[index][1]
+            index += 1
+            equal = _comparable(left) == _comparable(right)
+            return (not equal) if operator == "!=" else equal, index
+        return _truthy(left), index
+
+    raise ValueError(f"unexpected {value}")
+
+
+def _condition_and(tokens, index, macros):
+    result, index = _condition_primary(tokens, index, macros)
+    while index < len(tokens):
+        kind, value = tokens[index]
+        if not (kind == "op" and value == "&&") and not (kind == "word" and value.lower() == "and"):
+            break
+        right, index = _condition_primary(tokens, index + 1, macros)
+        result = result and right
+    return result, index
+
+
+def _condition_or(tokens, index, macros):
+    result, index = _condition_and(tokens, index, macros)
+    while index < len(tokens):
+        kind, value = tokens[index]
+        if not (kind == "op" and value == "||") and not (kind == "word" and value.lower() == "or"):
+            break
+        right, index = _condition_and(tokens, index + 1, macros)
+        result = result or right
+    return result, index
+
+
+def evaluate_condition(expression: str, macros=None) -> bool:
+    """Evaluates one '#if' / '#elseif' expression; a broken one is false.
+
+    >>> evaluate_condition("TXT2IMG", stage_macros("txt2img"))
+    True
+    >>> evaluate_condition("!TXT2IMG && IMG2IMG", stage_macros("hires_fix"))
+    True
+    >>> evaluate_condition("POSE_INPAINT_PART == FACE", stage_macros("pose_inpaint", pose_part="FACE"))
+    True
+    >>> evaluate_condition("POSE_INPAINT_PART == FACE", stage_macros("pose_inpaint", pose_part="HANDS"))
+    False
+    >>> evaluate_condition("NOPE", stage_macros("txt2img"))
+    False
+    """
+    try:
+        tokens = _condition_tokens(str(expression or ""))
+        if not tokens:
+            return False
+        result, index = _condition_or(tokens, 0, dict(macros or {}))
+    except ValueError:
+        return False
+    if index != len(tokens):
+        return False
+    return bool(result)
+
+
+def condition_blocks(prompt: str) -> list:
+    """Line numbers (0-based) of the conditional directives in `prompt`."""
+    if not prompt or "#" not in prompt:
+        return []
+    return [index for index, line in enumerate(prompt.split("\n")) if re_condition_directive.match(line)]
+
+
+def expand_prompt_conditions(prompt: str, macros=None) -> str:
+    """Resolves every #if / #elseif / #else / #endif block of `prompt` for `macros`.
+
+    Blocks may be nested.  A block that is not closed (or whose #elseif / #else /
+    #endif has no #if) leaves the whole prompt as typed, so nothing is silently
+    dropped while the editor flags the mistake.  An expression that cannot be
+    evaluated counts as false, which keeps the prompt free of directive lines.
+
+    >>> prompt = "#if TXT2IMG\\na\\n#elseif HIRES_FIX\\nb\\n#else\\nc\\n#endif"
+    >>> expand_prompt_conditions(prompt, stage_macros("txt2img"))
+    'a'
+    >>> expand_prompt_conditions(prompt, stage_macros("hires_fix"))
+    'b'
+    >>> expand_prompt_conditions(prompt, stage_macros("img2img"))
+    'c'
+    >>> expand_prompt_conditions("#if TXT2IMG\\na", stage_macros("txt2img"))
+    '#if TXT2IMG\\na'
+    >>> expand_prompt_conditions("no blocks, here (x:1.2)", stage_macros("txt2img"))
+    'no blocks, here (x:1.2)'
+    """
+    if not prompt or "#" not in prompt:
+        return prompt
+
+    macros = dict(macros or {})
+    frames = []
+    broken = False
+    lines = []
+
+    for line in prompt.split("\n"):
+        match = re_condition_directive.match(line)
+        if match is None:
+            if all(frame["active"] for frame in frames):
+                lines.append(line)
+            continue
+
+        keyword = match.group("keyword").lower()
+        expression = match.group("expression").strip()
+
+        if keyword == "if":
+            parent = all(frame["active"] for frame in frames)
+            take = evaluate_condition(expression, macros)
+            frames.append({"parent": parent, "taken": take, "active": parent and take, "else": False})
+            continue
+
+        if not frames:
+            broken = True
+            continue
+
+        frame = frames[-1]
+        if keyword in ("elif", "elseif"):
+            if frame["else"]:
+                broken = True
+                continue
+            if frame["taken"]:
+                frame["active"] = False
+                continue
+            take = evaluate_condition(expression, macros)
+            frame["active"] = frame["parent"] and take
+            frame["taken"] = frame["taken"] or take
+            continue
+
+        if keyword == "else":
+            if frame["else"]:
+                broken = True
+                continue
+            frame["else"] = True
+            frame["active"] = frame["parent"] and not frame["taken"]
+            frame["taken"] = True
+            continue
+
+        frames.pop()
+
+    if broken or frames:
+        return prompt
+
+    return "\n".join(lines)
+
+
+def apply_prompt_conditions(prompts, macros) -> list[str]:
+    """expand_prompt_conditions() over a prompt list; non-strings pass through.
+
+    >>> apply_prompt_conditions(["#if TXT2IMG\\na\\n#endif", None], stage_macros("txt2img"))
+    ['a', None]
+    """
+    if not prompts:
+        return prompts
+    return [expand_prompt_conditions(pr, macros) if isinstance(pr, str) else pr for pr in prompts]
+
+
 def get_pick_rng(seed, index=0, kind="prompt"):
     """Random generator for the picks of a single batch item.
 

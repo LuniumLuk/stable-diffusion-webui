@@ -959,6 +959,10 @@ body.mask-editing { overflow: hidden; }
   text-underline-offset: 3px;
 }
 .pedit-chip-pick { font-variant-numeric: tabular-nums; }
+/* '#if' stage conditions: a directive line, not a comment */
+.pedit-line.is-condition { background: rgba(139, 92, 246, 0.12); border-left: 2px solid #8b5cf6; }
+.pedit-chip.is-cond { border-color: #8b5cf6; background: rgba(139, 92, 246, 0.16); }
+.pedit-chip.is-cond.is-syntax-error { border-color: #ef4444; background: rgba(239, 68, 68, 0.16); }
 .pedit-chip-text { max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pedit-chip-w { color: var(--blue); font-size: 10px; }
 .pedit-chip-off { font-size: 10px; }
@@ -1208,6 +1212,9 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .pedit-cm-comment-hash { opacity: 0.8; }
 .pedit-cm .pedit-cm-tok-off { opacity: 0.55; text-decoration: line-through; }
 .pedit-cm .pedit-cm-tok-active { background: var(--accent-soft); border-radius: 4px; }
+/* '#if' stage conditions: a directive line, not a comment */
+.pedit-cm .pedit-cm-condline { background: rgba(139, 92, 246, 0.12); box-shadow: inset 2px 0 0 #8b5cf6; }
+.pedit-cm .pedit-cm-cond-hash { color: #c4b5fd; font-weight: 600; }
 
 /* '@' prompt syntax: a highlight on every directive, a red wavy underline on errors */
 .pedit-cm .pedit-cm-tok-syntax {

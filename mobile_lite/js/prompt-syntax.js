@@ -1,8 +1,7 @@
 /**
- * `@` prompt syntax — grammar check, highlight class and hover hint.
+ * Prompt syntax — grammar checks, highlight classes and hover hints.
  *
- * Every prompt keyword that starts with `@` is a directive and must pass this
- * grammar.  Right now there is one directive:
+ * `@` directives — every keyword that starts with `@` is a directive:
  *
  *   @PICK{a, b, c}      draw 1 keyword at random for every image
  *   @PICK(2){a, b, c}   draw 2 keywords at random for every image
@@ -10,6 +9,21 @@
  *     red,
  *     blue
  *   }                   keyword lists may span multiple lines
+ *
+ * `#` directives — a line of its own switches text per generation stage:
+ *
+ *   #if TXT2IMG
+ *   lowres detail
+ *   #elseif HIRES_FIX
+ *   highres detail
+ *   #else
+ *   other passes
+ *   #endif
+ *
+ * The macros are TXT2IMG, HIRES_FIX, IMG2IMG, INPAINT, POSE_INPAINT (1 while
+ * that stage runs, 0 otherwise; HIRES_FIX is an img2img pass so IMG2IMG is 1 as
+ * well, POSE_INPAINT an inpaint pass so INPAINT is 1 too) and POSE_INPAINT_PART
+ * (0 outside a pose pass, FACE / FEET / HANDS inside one).
  *
  * `analyzeAtSyntax(body)` returns null for an ordinary keyword and otherwise
  *   {
@@ -22,6 +36,10 @@
  *     headline,  // one line: what the syntax does (or what is wrong with it)
  *     details,   // extra hint lines (preview of the result / the fix)
  *   }
+ *
+ * `analyzeConditionLine(line)` / `analyzeConditionLines(text)` do the same for
+ * the `#` directives: one line at a time, and the whole prompt so a missing
+ * `#endif` or a stray `#else` is reported on the line that caused it.
  *
  * The CodeMirror core and the Mobile Lite chips editor import this module; the
  * desktop chips editor keeps a compact mirror, the same way it mirrors the token
@@ -179,4 +197,226 @@ export function analyzeAtSyntax(body) {
 export function syntaxHint(syntax, fallback = '') {
   if (!syntax) return fallback;
   return [syntax.headline, ...syntax.details].filter(Boolean).join('\n');
+}
+
+/* --------------------------------------------------------------- #if blocks */
+
+/** Macro name -> what it is while a generation runs (mirror of the backend). */
+export const CONDITION_MACROS = {
+  TXT2IMG: '1 during the txt2img first pass',
+  HIRES_FIX: '1 during the Hires. fix pass (an img2img pass, so IMG2IMG is 1 too)',
+  IMG2IMG: '1 during img2img, Hires. fix and inpaint',
+  INPAINT: '1 during inpaint and pose inpaint',
+  POSE_INPAINT: '1 during a pose inpaint pass (an inpaint pass, so INPAINT is 1 too)',
+  POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET or HANDS',
+};
+export const CONDITION_MACRO_NAMES = Object.keys(CONDITION_MACROS);
+export const CONDITION_EXAMPLE = '#if TXT2IMG … #endif';
+
+const DIRECTIVE_RE = /^[ \t]*#(if|elif|elseif|else|endif)(?![A-Za-z0-9_])(.*)$/i;
+// one token per call; the trailing "y" flag keeps the scan position explicit
+const CONDITION_TOKEN_RE = /[ \t]*(?:(!=|==|&&|\|\||[!()])|([A-Za-z_][A-Za-z0-9_]*)|(-?\d+(?:\.\d+)?)|(\S))/y;
+
+/** True when the line is a standalone `#if` / `#elseif` / `#else` / `#endif` directive. */
+export function isConditionLine(text) {
+  return DIRECTIVE_RE.test(String(text == null ? '' : text));
+}
+
+function conditionTokens(expression) {
+  const tokens = [];
+  let index = 0;
+  while (index < expression.length) {
+    CONDITION_TOKEN_RE.lastIndex = index;
+    const match = CONDITION_TOKEN_RE.exec(expression);
+    if (!match) return null;
+    if (match[1]) tokens.push({ type: 'op', value: match[1] });
+    else if (match[2]) tokens.push({ type: 'word', value: match[2] });
+    else if (match[3]) tokens.push({ type: 'number', value: match[3] });
+    else return null;
+    index = CONDITION_TOKEN_RE.lastIndex;
+  }
+  return tokens;
+}
+
+/**
+ * Validates a `#if` / `#elseif` condition.
+ * Returns `{ ok, macros, error }`; `macros` lists the referenced macro names.
+ */
+export function parseCondition(expression) {
+  const text = String(expression == null ? '' : expression).trim();
+  const macros = [];
+  const tokens = conditionTokens(text);
+  if (!text) return { ok: false, macros, error: 'The condition is empty.' };
+  if (!tokens) return { ok: false, macros, error: `The condition \u201c${text}\u201d is not valid.` };
+
+  let index = 0;
+  const peek = () => tokens[index];
+  const fail = (message) => { throw new Error(message); };
+  const atOperator = (...values) => {
+    const token = peek();
+    return !!token && token.type === 'op' && values.includes(token.value);
+  };
+  const atWord = (value) => {
+    const token = peek();
+    return !!token && token.type === 'word' && token.value.toLowerCase() === value;
+  };
+
+  function primary() {
+    if (atOperator('!')) {
+      index += 1;
+      primary();
+      return;
+    }
+    if (atOperator('(')) {
+      index += 1;
+      orExpression();
+      if (!atOperator(')')) fail('Missing the closing \u201c)\u201d of the group.');
+      index += 1;
+      return;
+    }
+    const token = peek();
+    if (!token) fail('The condition is incomplete.');
+    if (token.type !== 'word') fail(`Unexpected \u201c${token.value}\u201d in the condition.`);
+    const name = token.value.toUpperCase();
+    if (!Object.prototype.hasOwnProperty.call(CONDITION_MACROS, name)) fail(`Unknown macro ${token.value}.`);
+    if (!macros.includes(name)) macros.push(name);
+    index += 1;
+    if (atOperator('==', '!=')) {
+      index += 1;
+      const value = peek();
+      if (!value || (value.type !== 'word' && value.type !== 'number')) fail('Missing the value to compare with.');
+      index += 1;
+    }
+  }
+
+  function andExpression() {
+    primary();
+    while (atOperator('&&') || atWord('and')) {
+      index += 1;
+      primary();
+    }
+  }
+
+  function orExpression() {
+    andExpression();
+    while (atOperator('||') || atWord('or')) {
+      index += 1;
+      andExpression();
+    }
+  }
+
+  try {
+    orExpression();
+    if (index !== tokens.length) fail(`Unexpected \u201c${tokens[index].value}\u201d in the condition.`);
+  } catch (error) {
+    return { ok: false, macros, error: error.message };
+  }
+  return { ok: true, macros, error: '' };
+}
+
+function conditionError(info, message, hint) {
+  return { ...info, ok: false, headline: message, details: [hint, ...info.details].filter(Boolean) };
+}
+
+/**
+ * Grammar-checks one line.  Returns null when the line is not a `#if` block
+ * directive, otherwise `{ ok, keyword, expression, macros, headline, details }`.
+ * `keyword` is 'if' | 'elseif' | 'else' | 'endif' ('#elif' is accepted as well).
+ */
+export function analyzeConditionLine(line) {
+  const raw = String(line == null ? '' : line);
+  const match = DIRECTIVE_RE.exec(raw);
+  if (!match) return null;
+
+  const typed = match[1].toLowerCase();
+  const keyword = typed === 'elif' ? 'elseif' : typed;
+  const expression = match[2].trim();
+  const info = {
+    ok: true,
+    kind: 'condition',
+    tag: '#' + keyword,
+    keyword,
+    raw: raw.trim(),
+    expression,
+    macros: [],
+    headline: '',
+    details: [],
+  };
+
+  if (keyword === 'else' || keyword === 'endif') {
+    if (expression) {
+      return conditionError(info, `Unexpected text after #${keyword}.`, `Write #${keyword} on its own line.`);
+    }
+    info.headline = keyword === 'else'
+      ? 'Otherwise branch \u2014 used when no earlier branch of the #if block matched.'
+      : 'Ends the #if block.';
+    info.details = [CONDITION_EXAMPLE];
+    return info;
+  }
+
+  if (!expression) {
+    return conditionError(info, `Missing the condition after #${keyword}.`, `Example: ${CONDITION_EXAMPLE}`);
+  }
+
+  const parsed = parseCondition(expression);
+  info.macros = parsed.macros;
+  if (!parsed.ok) {
+    return conditionError(info, parsed.error, `Known macros: ${CONDITION_MACRO_NAMES.join(', ')}`);
+  }
+
+  info.headline = `Conditional block \u2014 the text below is used only while ${expression} is true.`;
+  info.details = parsed.macros.map((name) => `${name} is ${CONDITION_MACROS[name]}`);
+  return info;
+}
+
+/**
+ * Validates every `#if` block of the prompt.
+ * Returns one entry per line, `null` for ordinary lines; structural mistakes
+ * (missing `#endif`, stray `#else`, a second `#else`) mark the line that caused them.
+ */
+export function analyzeConditionLines(text) {
+  const lines = String(text == null ? '' : text).split('\n');
+  const results = lines.map((line) => analyzeConditionLine(line));
+  const stack = [];
+
+  results.forEach((info, index) => {
+    if (!info) return;
+
+    // the nesting is tracked even for a broken line, so one bad condition does not
+    // cascade into "dangling #endif" reports on every line after it
+    if (info.keyword === 'if') {
+      stack.push({ index, seenElse: false });
+      return;
+    }
+
+    const frame = stack[stack.length - 1];
+    const report = (message, hint) => {
+      if (info.ok) results[index] = conditionError(info, message, hint);
+    };
+
+    if (info.keyword === 'elseif') {
+      if (!frame) report('#elseif without an #if.', 'Add a #if above it.');
+      else if (frame.seenElse) report('This #if already has an #else branch.', 'Move this #elseif above the #else.');
+      return;
+    }
+    if (info.keyword === 'else') {
+      if (!frame) report('#else without an #if.', 'Add a #if above it.');
+      else if (frame.seenElse) report('This #if already has an #else branch.', 'Only one #else is allowed per #if.');
+      else frame.seenElse = true;
+      return;
+    }
+    if (info.keyword === 'endif') {
+      if (!frame) report('#endif without an #if.', 'Remove it, or add the matching #if.');
+      else stack.pop();
+    }
+  });
+
+  stack.forEach((frame) => {
+    // a broken condition on that line is the better message - do not hide it
+    if (results[frame.index].ok) {
+      results[frame.index] = conditionError(results[frame.index], 'Missing #endif \u2014 this #if is never closed.', `Example: ${CONDITION_EXAMPLE}`);
+    }
+  });
+
+  return results;
 }

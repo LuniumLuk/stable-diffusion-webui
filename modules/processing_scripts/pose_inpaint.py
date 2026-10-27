@@ -1,10 +1,11 @@
 """Automatic pose detection + inpaint pass after txt2img / hires fix / refiner / img2img."""
 
 import threading
+from typing import Any, NamedTuple
 
 import gradio as gr
 
-from modules import inpaint_pose, scripts, shared
+from modules import inpaint_pose, prompt_parser, scripts, shared
 from modules.infotext_utils import PasteField
 from modules.ui_components import InputAccordion
 
@@ -25,6 +26,17 @@ INPAINT_MODE_LABELS = {
     "scale": "Relative",
     "px": "Pixels",
 }
+
+
+class PosePass(NamedTuple):
+    """One only-masked inpaint pass of the pose refinement."""
+
+    part: Any  # POSE_INPAINT_PART of the pass: 'FACE' / 'FEET' / 'HANDS', None when mixed
+    label: str
+    mask: Any
+    width: int
+    height: int
+
 
 _STATE_FIELDS = (
     "job",
@@ -355,7 +367,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             except Exception as error:  # noqa: BLE001 - saving the optional copy must not block inpainting
                 print(f"Pose inpaint: could not save intermediate image: {error}")
 
-        prompt, negative_prompt = inpaint_pose.choose_inpaint_prompt(p, global_index)
+        prompt, _ = inpaint_pose.choose_inpaint_prompt(p, global_index, part=passes[0].part)
         steps = config.get("steps") or p.steps or 20
         denoising = config["denoising"]
         print(
@@ -364,7 +376,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             f"extend={config.get('extend', 0):.2f}, prompt={prompt[:60]!r}"
         )
 
-        result = self._inpaint(p, image, passes, prompt, negative_prompt, steps, denoising, global_index, batch_index)
+        result = self._inpaint(p, image, passes, steps, denoising, global_index, batch_index)
         if result is None:
             self._record(p, global_index, "skipped (inpaint interrupted)")
             return
@@ -387,7 +399,12 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
 
     @staticmethod
     def _plan_passes(image, pose, config):
-        """``([(label, mask, width, height)], point count, radius px)`` - one pass per part, or one combined."""
+        """``([PosePass], point count, radius px)`` - one pass per part, or one combined.
+
+        Each pass carries the POSE_INPAINT_PART of its body part, so the prompt can
+        switch text per pass (``#if POSE_INPAINT_PART == HANDS``).  A combined pass
+        reports the part when every selected region belongs to the same one.
+        """
         padding = 32
         size = config.get("inpaint_size", 1024)
         percent = config.get("radius_percent", 0) if config.get("radius_mode", "percent") == "percent" else 0
@@ -407,7 +424,10 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 radius_percent=percent,
                 radius_mode=config.get("radius_mode"),
             )
-            passes = [(item.label, item.mask, *pass_size(item.mask)) for item in built]
+            passes = [
+                PosePass(prompt_parser.pose_inpaint_part(item.region), item.label, item.mask, *pass_size(item.mask))
+                for item in built
+            ]
             radius = max((item.radius for item in built), default=0)
             return passes, sum(item.points for item in built), radius
 
@@ -419,7 +439,9 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             width, height = pass_size(mask)
         else:
             width, height = inpaint_pose.inpaint_crop_size(image.width, image.height, size)
-        return [("all", mask, width, height)], points, radius
+        requested = {prompt_parser.pose_inpaint_part(code) for code in config["parts"]}
+        part = requested.pop() if len(requested) == 1 else None
+        return [PosePass(part or None, "all", mask, width, height)], points, radius
 
     def _save_intermediate(self, p, image, batch_index):
         if not p.save_samples():
@@ -455,7 +477,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             compiled_negative_prompt=compiled_negative_prompt,
         )
 
-    def _inpaint(self, p, image, passes, prompt, negative_prompt, steps, denoising, global_index, batch_index):
+    def _inpaint(self, p, image, passes, steps, denoising, global_index, batch_index):
         from modules import shared
         from modules.processing import StableDiffusionProcessingImg2Img, process_images
         from modules.shared import state
@@ -468,6 +490,10 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             @sd_model.setter
             def sd_model(self, value):
                 pass
+
+            def prompt_condition_macros(self):
+                # a pose pass, even when a script injected #if blocks into its prompt
+                return prompt_parser.stage_macros("pose_inpaint", pose_part=getattr(self, "pose_inpaint_part", None))
 
         override_settings = {
             "img2img_color_correction": False,
@@ -489,32 +515,36 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
 
         result = image
         try:
-            for position, (label, mask, width, height) in enumerate(passes):
+            for position, pose_pass in enumerate(passes):
                 if state.interrupted or state.stopping_generation:
                     print(f"Pose inpaint: interrupted before pass {position + 1}/{len(passes)}")
                     return None
 
-                state.job = f"Pose inpaint {batch_index + 1}/{p.batch_size} - {label} ({position + 1}/{len(passes)})"
+                state.job = f"Pose inpaint {batch_index + 1}/{p.batch_size} - {pose_pass.label} ({position + 1}/{len(passes)})"
                 state.job_no = position
+
+                # the prompt may spell out per-part text (#if POSE_INPAINT_PART == FACE)
+                pass_prompt, pass_negative_prompt = inpaint_pose.choose_inpaint_prompt(p, global_index, part=pose_pass.part)
 
                 inner = self._inner_job(
                     CurrentModelInpaint,
                     p,
                     image=result,
-                    mask=mask,
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    width=width,
-                    height=height,
+                    mask=pose_pass.mask,
+                    prompt=pass_prompt,
+                    negative_prompt=pass_negative_prompt,
+                    width=pose_pass.width,
+                    height=pose_pass.height,
                     steps=steps,
                     denoising=denoising,
                     seed=seed,
                     subseed=subseed,
                     override_settings=override_settings,
+                    pose_part=pose_pass.part,
                 )
                 processed = process_images(inner)
                 if not processed or not processed.images:
-                    print(f"Pose inpaint: pass {position + 1}/{len(passes)} ({label}) returned no image")
+                    print(f"Pose inpaint: pass {position + 1}/{len(passes)} ({pose_pass.label}) returned no image")
                     return None
 
                 index = min(getattr(processed, "index_of_first_image", 0), len(processed.images) - 1)
@@ -524,11 +554,11 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 setattr(state, name, value)
             shared.total_tqdm.clear()
 
-        print(f"Pose inpaint: finished {len(passes)} pass(es), last at {passes[-1][2]}x{passes[-1][3]}")
+        print(f"Pose inpaint: finished {len(passes)} pass(es), last at {passes[-1].width}x{passes[-1].height}")
         return result
 
     @staticmethod
-    def _inner_job(job_class, p, *, image, mask, prompt, negative_prompt, width, height, steps, denoising, seed, subseed, override_settings):
+    def _inner_job(job_class, p, *, image, mask, prompt, negative_prompt, width, height, steps, denoising, seed, subseed, override_settings, pose_part=None):
         inner = job_class(
             sd_model=None,
             outpath_samples=p.outpath_samples,
@@ -569,4 +599,5 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         inner.script_args = None
         inner.user = p.user
         inner.is_api = p.is_api
+        inner.pose_inpaint_part = pose_part
         return inner

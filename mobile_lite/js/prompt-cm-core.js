@@ -9,7 +9,9 @@
  *   - ✨ inline suggestions — typing opens an autocomplete list fed by the caller's
  *                            `getSuggestions(query)` pool (MRU + endorsed + networks);
  *   - 💬 comments          — `# ...` lines and `# ---` markers are styled like the old
- *                            overlay; the token popup comments / uncomments a line, and
+ *                            overlay (`#if` / `#elseif` / `#else` / `#endif` stage
+ *                            conditions get their own mark and are not comments);
+ *                            the token popup comments / uncomments a line, and
  *                            on a `# ---` marker it toggles the whole block;
  *   - 🔢 line gutter       — `lineGutter: true` (desktop) shows a line-number column in
  *                            the first position; hovering a line swaps its number for the
@@ -49,6 +51,7 @@
  */
 
 import { blockIsOff, classify, DEFAULT_WEIGHT, findPickGroups, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
+import { analyzeConditionLines, isConditionLine } from './prompt-syntax.js';
 // Namespace import on purpose: a browser that still runs a CACHED older copy of this
 // module must not break the whole editor just because a recent op was not there yet —
 // the long-standing names are destructured (present in every CM-era copy) and only the
@@ -238,7 +241,9 @@ export async function createPromptCM({
       return new PromptGutterMarker(line.number, state ? 'block' : 'plain', state ? state.off : false);
     }
     if (text.trim()) {
-      return new PromptGutterMarker(line.number, 'line', /^\s*#(?!\()/.test(text));
+      // a #if line is a directive, not a comment: the gutter must offer to comment it
+      const commented = !isConditionLine(text) && /^\s*#(?!\()/.test(text);
+      return new PromptGutterMarker(line.number, 'line', commented);
     }
     return new PromptGutterMarker(line.number, 'plain', false);
   }
@@ -287,10 +292,26 @@ export async function createPromptCM({
     const marks = [];
     const text = state.doc.toString();
     const pickGroups = new Map(findPickGroups(text).map((group) => [group.start, group]));
+    // one pass for the whole prompt, so a missing #endif marks the #if that opened it
+    const conditions = analyzeConditionLines(text);
     for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
       const line = state.doc.line(lineNumber);
       const lineText = line.text;
-      if (/^\s*#(?!\()/.test(lineText)) {
+      const condition = conditions[lineNumber - 1] || null;
+      // a standalone #if / #elseif / #else / #endif line is a directive, not a comment
+      if (condition) {
+        marks.push(Decoration.line({ class: 'pedit-cm-condline' }).range(line.from));
+        const directive = /^[ \t]*#(\w+)/.exec(lineText);
+        if (directive) {
+          const hash = lineText.indexOf('#');
+          marks.push(Decoration.mark({ class: 'pedit-cm-cond-hash' }).range(line.from + hash, line.from + hash + 1 + directive[1].length));
+        }
+        if (!condition.ok) {
+          const from = line.from + (lineText.length - lineText.trimStart().length);
+          const to = line.from + lineText.trimEnd().length;
+          marks.push(Decoration.mark({ class: 'pedit-cm-tok-syntax-error' }).range(from, Math.max(from, to)));
+        }
+      } else if (/^\s*#(?!\()/.test(lineText)) {
         const marker = isBlockMarker(lineText);
         marks.push(Decoration.line({ class: marker ? 'pedit-cm-commentline pedit-cm-blockmark' : 'pedit-cm-commentline' }).range(line.from));
         const hash = lineText.indexOf('#');

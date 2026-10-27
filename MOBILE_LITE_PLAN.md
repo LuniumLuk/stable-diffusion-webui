@@ -446,6 +446,19 @@ broken one as `at`; `rebuild()` never wraps either in `(…)` or `#(…)`. The d
 the token parser. Multi-line keyword lists are supported: `findPickGroups()` scans the whole
 prompt so the opening line is validated against the complete group instead of a missing `}`.
 
+Stage conditions (`#if TXT2IMG … #elseif HIRES_FIX … #else … #endif`, one directive per line,
+nestable) use the same module: `analyzeConditionLine()` checks one directive and
+`analyzeConditionLines()` the whole prompt, so a missing `#endif` is reported on the `#if` that
+opened it and a stray `#else` on itself. Macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`,
+`POSE_INPAINT` (1 while that stage runs) and `POSE_INPAINT_PART` (`0` / `FACE` / `FEET` /
+`HANDS`); conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses.
+`prompt-parse.js` classifies a directive line as a `cond` token, `rebuild()` keeps its text, and
+the editors show it on a purple line with a `⑂` chip (chips) or `pedit-cm-condline` / `-hash`
+decorations (CodeMirror) instead of the comment styling. The backend resolves the blocks per
+stage (`prompt_parser.expand_prompt_conditions`), so the same prompt serves the txt2img pass,
+Hires. fix, img2img, inpaint and every pose inpaint part; a `#if` line commented out with the 💬
+gutter becomes `# #if …` instead of losing its `#`.
+
 ### 13.3 Gallery card quick actions
 
 Cards are now `<div class="thumb-wrap">` (the thumb is an ARIA button - a `<button>` cannot
@@ -463,7 +476,7 @@ button becomes "Remove endorsement".
 
 | # | Test | Command | Result |
 | --- | --- | --- | --- |
-| 1 | Parser unit test (round-trip, classification, rebuild, end-to-end edit) | `node tmp\lite_pedit_test.mjs` | ✅ 38/38 |
+| 1 | Parser unit test (round-trip, classification, rebuild, end-to-end edit, `#if` conditions) | `node tmp\lite_pedit_test.mjs` | ✅ 130/130 |
 | 2 | API suite (all routes, redirect matrix, real jobs, action cycle) | `.venv\Scripts\python.exe tmp\mlite_api_test.py` | ✅ **48/48** |
 | 3 | iPhone E2E probe (WebKit, real taps) incl. folds, chips editing, quick actions | `node tmp\iosprobe\mlite.js` | ✅ **30/30**, no page errors |
 | 4 | Chromium: chips editing + mode persistence, quick actions, endorse flag round-trip | browser tools | ✅ |

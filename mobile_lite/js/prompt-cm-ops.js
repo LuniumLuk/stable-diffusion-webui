@@ -321,9 +321,17 @@ export function toggleCommentLines(text, fromLine, toLine) {
   return { changes, caret: null, kind: 'lines' };
 }
 
-/** True when a line's first non-whitespace char is '#' (not a disabled `#(` group). */
+/** True for a standalone #if / #elseif / #else / #endif directive line. */
+function isConditionDirective(lineText) {
+  return /^\s*#(?:if|elif|elseif|else|endif)(?![A-Za-z0-9_])/i.test(String(lineText == null ? '' : lineText));
+}
+
+/**
+ * True when a line's first non-whitespace char is '#' (not a disabled `#(` group
+ * and not a `#if` block directive - those become comments only as `# #if …`).
+ */
 function lineIsComment(lineText) {
-  return /^\s*#(?!\()/.test(lineText);
+  return !isConditionDirective(lineText) && /^\s*#(?!\()/.test(lineText);
 }
 
 /** True when the line reads as a comment (not a disabled `#(` group). */

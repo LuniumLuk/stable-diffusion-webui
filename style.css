@@ -113,6 +113,11 @@
     color: #22c55e;
 }
 
+/* '#if' stage conditions: directives, not comments */
+.prompt-condition {
+    color: #c4b5fd;
+}
+
 /* Block-comment toggle icon rendered at the end of each '# ---' starter line. */
 .prompt-block-toggle {
     display: inline-block;
@@ -5168,6 +5173,23 @@ body.resizing .resize-handle {
     font-variant-numeric: tabular-nums;
 }
 
+/* '#if' stage conditions: a directive line, not a comment */
+.pedit-line.is-condition {
+    background: rgba(139, 92, 246, 0.1);
+    border-left: 2px solid rgba(139, 92, 246, 0.6);
+}
+
+.pedit-chip.is-cond {
+    border-color: rgba(139, 92, 246, 0.55);
+    background: rgba(139, 92, 246, 0.16);
+    font-variant-numeric: tabular-nums;
+}
+
+.pedit-chip.is-cond.is-syntax-error {
+    border-color: rgba(239, 68, 68, 0.7);
+    background: rgba(239, 68, 68, 0.16);
+}
+
 .pedit-chip-text {
     overflow: hidden;
     white-space: nowrap;
@@ -5563,6 +5585,17 @@ body.resizing .resize-handle {
 .pedit-cm-wrap .pedit-cm-tok-off {
     opacity: 0.55;
     text-decoration: line-through;
+}
+
+/* '#if' stage conditions: a directive line, not a comment */
+.pedit-cm-wrap .pedit-cm-condline {
+    background: rgba(139, 92, 246, 0.1);
+    box-shadow: inset 2px 0 0 rgba(139, 92, 246, 0.6);
+}
+
+.pedit-cm-wrap .pedit-cm-cond-hash {
+    color: #c4b5fd;
+    font-weight: 600;
 }
 
 .pedit-cm-wrap .pedit-cm-tok-active {

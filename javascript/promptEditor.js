@@ -12,6 +12,9 @@
  *                            pipeline strips '#' comment lines)
  *   - ⛔ on a chip        -> wraps the keyword as  #(keyword)  - a *disabled*
  *                            inline group the backend strips just like a comment
+ *   - `#if MACRO` lines   -> stage conditions (TXT2IMG / HIRES_FIX / IMG2IMG /
+ *                            INPAINT / POSE_INPAINT / POSE_INPAINT_PART) whose
+ *                            text reaches the model only while that stage runs
  *   - ＋ keyword          -> inline input with suggestions from the endorsed
  *                            keyword pool and the installed extra networks
  *   - [⌨ Text] button     -> switches back to the classic textarea (the
@@ -262,6 +265,206 @@
         return syntax ? [syntax.headline].concat(syntax.details).filter(Boolean).join('\n') : '';
     }
 
+    /* ------------------------------------------------------------- '#if' blocks
+     * Mirror of the condition grammar in mobile_lite/js/prompt-syntax.js: a line of
+     * its own starting with #if / #elseif / #else / #endif (all optional whitespace
+     * before the '#').
+     */
+
+    const CONDITION_MACROS = {
+        TXT2IMG: '1 during the txt2img first pass',
+        HIRES_FIX: '1 during the Hires. fix pass (an img2img pass, so IMG2IMG is 1 too)',
+        IMG2IMG: '1 during img2img, Hires. fix and inpaint',
+        INPAINT: '1 during inpaint and pose inpaint',
+        POSE_INPAINT: '1 during a pose inpaint pass (an inpaint pass, so INPAINT is 1 too)',
+        POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET or HANDS',
+    };
+    const CONDITION_MACRO_NAMES = Object.keys(CONDITION_MACROS);
+    const CONDITION_EXAMPLE = '#if TXT2IMG … #endif';
+    const CONDITION_RE = /^[ \t]*#(if|elif|elseif|else|endif)(?![A-Za-z0-9_])(.*)$/i;
+    // one token per call; the "y" flag keeps the scan position explicit
+    const CONDITION_TOKEN_RE = /[ \t]*(?:(!=|==|&&|\|\||[!()])|([A-Za-z_][A-Za-z0-9_]*)|(-?\d+(?:\.\d+)?)|(\S))/y;
+
+    /** True when the line is a standalone #if / #elseif / #else / #endif directive. */
+    function isConditionLine(text) {
+        return CONDITION_RE.test(String(text == null ? '' : text));
+    }
+
+    /** True for a comment line; a '#if' block directive is not a comment. */
+    function isCommentedLine(text) {
+        return !isConditionLine(text) && /^\s*#(?!\()/.test(String(text == null ? '' : text));
+    }
+
+    function conditionTokens(expression) {
+        const tokens = [];
+        let index = 0;
+        while (index < expression.length) {
+            CONDITION_TOKEN_RE.lastIndex = index;
+            const match = CONDITION_TOKEN_RE.exec(expression);
+            if (!match) return null;
+            if (match[1]) tokens.push({type: 'op', value: match[1]});
+            else if (match[2]) tokens.push({type: 'word', value: match[2]});
+            else if (match[3]) tokens.push({type: 'number', value: match[3]});
+            else return null;
+            index = CONDITION_TOKEN_RE.lastIndex;
+        }
+        return tokens;
+    }
+
+    /** Validates a condition; returns { ok, macros, error }. */
+    function parseCondition(expression) {
+        const text = String(expression == null ? '' : expression).trim();
+        const macros = [];
+        const tokens = conditionTokens(text);
+        if (!text) return {ok: false, macros: macros, error: 'The condition is empty.'};
+        if (!tokens) return {ok: false, macros: macros, error: 'The condition “' + text + '” is not valid.'};
+
+        let index = 0;
+        const peek = () => tokens[index];
+        const fail = (message) => {
+            throw new Error(message);
+        };
+        const atOperator = (...values) => {
+            const token = peek();
+            return !!token && token.type === 'op' && values.indexOf(token.value) >= 0;
+        };
+        const atWord = (value) => {
+            const token = peek();
+            return !!token && token.type === 'word' && token.value.toLowerCase() === value;
+        };
+        const primary = () => {
+            if (atOperator('!')) {
+                index++;
+                primary();
+                return;
+            }
+            if (atOperator('(')) {
+                index++;
+                orExpression();
+                if (!atOperator(')')) fail('Missing the closing “)” of the group.');
+                index++;
+                return;
+            }
+            const token = peek();
+            if (!token) fail('The condition is incomplete.');
+            if (token.type !== 'word') fail('Unexpected “' + token.value + '” in the condition.');
+            const name = token.value.toUpperCase();
+            if (!Object.prototype.hasOwnProperty.call(CONDITION_MACROS, name)) fail('Unknown macro ' + token.value + '.');
+            if (macros.indexOf(name) < 0) macros.push(name);
+            index++;
+            if (atOperator('==', '!=')) {
+                index++;
+                const value = peek();
+                if (!value || (value.type !== 'word' && value.type !== 'number')) fail('Missing the value to compare with.');
+                index++;
+            }
+        };
+        const andExpression = () => {
+            primary();
+            while (atOperator('&&') || atWord('and')) {
+                index++;
+                primary();
+            }
+        };
+        const orExpression = () => {
+            andExpression();
+            while (atOperator('||') || atWord('or')) {
+                index++;
+                andExpression();
+            }
+        };
+
+        try {
+            orExpression();
+            if (index !== tokens.length) fail('Unexpected “' + tokens[index].value + '” in the condition.');
+        } catch (error) {
+            return {ok: false, macros: macros, error: error.message};
+        }
+        return {ok: true, macros: macros, error: ''};
+    }
+
+    function conditionError(info, message, hint) {
+        return Object.assign({}, info, {ok: false, headline: message, details: [hint].concat(info.details).filter(Boolean)});
+    }
+
+    /** Grammar-checks one line; null when it is not a #if block directive. */
+    function analyzeConditionLine(line) {
+        const raw = String(line == null ? '' : line);
+        const match = CONDITION_RE.exec(raw);
+        if (!match) return null;
+
+        const typed = match[1].toLowerCase();
+        const keyword = typed === 'elif' ? 'elseif' : typed;
+        const expression = match[2].trim();
+        const info = {
+            ok: true, kind: 'condition', tag: '#' + keyword, keyword: keyword, raw: raw.trim(),
+            expression: expression, macros: [], headline: '', details: [],
+        };
+
+        if (keyword === 'else' || keyword === 'endif') {
+            if (expression) return conditionError(info, 'Unexpected text after #' + keyword + '.', 'Write #' + keyword + ' on its own line.');
+            info.headline = keyword === 'else' ?
+                'Otherwise branch — used when no earlier branch of the #if block matched.' :
+                'Ends the #if block.';
+            info.details = [CONDITION_EXAMPLE];
+            return info;
+        }
+
+        if (!expression) return conditionError(info, 'Missing the condition after #' + keyword + '.', 'Example: ' + CONDITION_EXAMPLE);
+
+        const parsed = parseCondition(expression);
+        info.macros = parsed.macros;
+        if (!parsed.ok) return conditionError(info, parsed.error, 'Known macros: ' + CONDITION_MACRO_NAMES.join(', '));
+
+        info.headline = 'Conditional block — the text below is used only while ' + expression + ' is true.';
+        info.details = parsed.macros.map((name) => name + ' is ' + CONDITION_MACROS[name]);
+        return info;
+    }
+
+    /** Validates every #if block; null for ordinary lines, an error on the culprit. */
+    function analyzeConditionLines(text) {
+        const lines = String(text == null ? '' : text).split('\n');
+        const results = lines.map((line) => analyzeConditionLine(line));
+        const stack = [];
+
+        results.forEach((info, index) => {
+            if (!info) return;
+            // the nesting is tracked even for a broken line, so one bad condition does not
+            // cascade into "dangling #endif" reports on every line after it
+            if (info.keyword === 'if') {
+                stack.push({index: index, seenElse: false});
+                return;
+            }
+            const frame = stack[stack.length - 1];
+            const report = (message, hint) => {
+                if (info.ok) results[index] = conditionError(info, message, hint);
+            };
+            if (info.keyword === 'elseif') {
+                if (!frame) report('#elseif without an #if.', 'Add a #if above it.');
+                else if (frame.seenElse) report('This #if already has an #else branch.', 'Move this #elseif above the #else.');
+                return;
+            }
+            if (info.keyword === 'else') {
+                if (!frame) report('#else without an #if.', 'Add a #if above it.');
+                else if (frame.seenElse) report('This #if already has an #else branch.', 'Only one #else is allowed per #if.');
+                else frame.seenElse = true;
+                return;
+            }
+            if (info.keyword === 'endif') {
+                if (!frame) report('#endif without an #if.', 'Remove it, or add the matching #if.');
+                else stack.pop();
+            }
+        });
+
+        stack.forEach((frame) => {
+            // a broken condition on that line is the better message - do not hide it
+            if (results[frame.index].ok) {
+                results[frame.index] = conditionError(results[frame.index], 'Missing #endif — this #if is never closed.', 'Example: ' + CONDITION_EXAMPLE);
+            }
+        });
+        return results;
+    }
+
     /* ------------------------------------------------- multi-line @PICK groups
      * Mirror of findPickGroups in mobile_lite/js/prompt-parse.js: the token model
      * is line based, but an @PICK keyword list may span lines.  The opening line
@@ -351,11 +554,17 @@
      * The weight is the *effective* A1111 weight, so '((x))' is 1.21 and '[x]' is 0.909.
      * 'pick' is a well formed @PICK group, 'at' a broken '@' directive (see analyzeAtSyntax).
      */
-    function classify(body, syntaxOverride) {
+    function classify(body, syntaxOverride, allowCondition) {
         const t = body.trim();
         if (!t) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
 
         if (t === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
+
+        // a standalone #if line is a directive, not a comment (allowCondition is false
+        // for the body of a commented line and for disabled '#(...)' groups)
+        if (allowCondition !== false && isConditionLine(t)) {
+            return {kind: 'cond', text: t, weight: DEFAULT_WEIGHT, disabled: false, syntax: analyzeConditionLine(t)};
+        }
 
         // every keyword starting with '@' is a directive and must pass the grammar;
         // syntaxOverride is the validated full group for a multi-line @PICK header
@@ -373,7 +582,7 @@
 
         // #(...) / #[...] / #<...> -> disabled keyword group
         if (t[0] === '#' && t.length > 3) {
-            const inner = classify(t.slice(1));
+            const inner = classify(t.slice(1), null, false);
             if (inner.kind !== 'plain') {
                 inner.disabled = true;
                 return inner;
@@ -424,8 +633,8 @@
      */
     function rebuild(token, weight, disabled) {
         // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
-        // and a broken '@' directive must keep its text so the user can fix it in place
-        if (token.kind === 'pick' || token.kind === 'at') return token.text;
+        // and a broken '@' directive (and a #if line) must keep its text as typed
+        if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond') return token.text;
 
         const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
         let inner;
@@ -506,7 +715,12 @@
             }
             column += segs[seg].lead.length + (segs[seg].body.length - segs[seg].body.trimStart().length);
             const group = pickGroupAt(findPickGroups(state.text), line, column);
-            const info = classify(segs[seg].body, group ? group.syntax : null);
+            const info = classify(segs[seg].body, group ? group.syntax : null, !isCommentedLine(lines[line]));
+            if (info.kind === 'cond') {
+                // the whole-prompt pass knows about a missing #endif / a stray #else
+                const condition = analyzeConditionLines(state.text)[line];
+                if (condition) info.syntax = condition;
+            }
             info.segIndex = seg;
             info.lineIndex = line;
             return info;
@@ -516,17 +730,20 @@
             const selected = state.selected && state.selected.line === line && state.selected.seg === seg;
             const cls = ['pedit-chip'];
             const syntax = token.syntax || null;
+            const condition = token.kind === 'cond';
             if (token.disabled) cls.push('is-disabled');
             if (selected) cls.push('is-selected');
             if (!token.text) cls.push('is-empty');
+            if (condition) cls.push('is-cond');
             if (syntax) cls.push(syntax.ok ? 'is-syntax' : 'is-syntax-error');
 
             const children = [];
-            if (token.kind === 'angle') children.push('<span class="pedit-chip-kind" title="extra network tag">◈</span>');
+            if (condition) children.push(`<span class="pedit-chip-kind" title="${syntax && syntax.ok ? 'stage condition' : 'stage condition error'}">${syntax && syntax.ok ? '⑂' : '⚠️'}</span>`);
+            else if (token.kind === 'angle') children.push('<span class="pedit-chip-kind" title="extra network tag">◈</span>');
             else if (syntax) children.push(`<span class="pedit-chip-kind" title="${syntax.ok ? 'prompt syntax' : 'prompt syntax error'}">${syntax.ok ? '🎲' : '⚠️'}</span>`);
             children.push(`<span class="pedit-chip-text">${escapeHtml(token.text || '…')}</span>`);
             if (syntax) {
-                if (syntax.ok && syntax.items.length > 1) {
+                if (!condition && syntax.ok && syntax.items.length > 1) {
                     children.push(`<span class="pedit-chip-w pedit-chip-pick" title="keywords drawn per image / keywords in the group">${syntax.count}/${syntax.items.length}</span>`);
                 }
             } else if (Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9) {
@@ -540,8 +757,11 @@
                 + '</span>';
         }
 
-        function lineHtml(line, index, lines, groups) {
-            const commented = /^\s*#(?!\()/.test(line);
+        function lineHtml(line, index, lines, groups, conditions) {
+            // a standalone #if / #elseif / #else / #endif line is a directive, not a comment
+            const condition = isConditionLine(line);
+            const commented = !condition && /^\s*#(?!\()/.test(line);
+            const conditionSyntax = condition && conditions ? conditions[index] : null;
             // a commented line shows its keywords without the leading '# ' - the
             // gutter button carries the state and the raw text stays untouched
             const content = commented ? line.replace(/^(\s*)#\s?/, '$1') : line;
@@ -557,14 +777,16 @@
                         return i < segs.length - 1 ? '<span class="pedit-sep">,</span>' : '';
                     }
                     const group = pickGroupAt(groups, index, coreStart);
-                    return chipHtml(index, i, classify(s.body, group ? group.syntax : null));
+                    const token = classify(s.body, group ? group.syntax : null, !commented);
+                    if (token.kind === 'cond' && conditionSyntax) token.syntax = conditionSyntax;
+                    return chipHtml(index, i, token);
                 })
                 .join('');
             const commentBtn = `<button type="button" class="pedit-gutter ${commented ? 'is-comment' : ''}" `
                 + `data-line="${index}" title="${commented ? 'Uncomment this line' : 'Comment this line'}">${commented ? '⏸' : '💬'}</button>`;
             // '# ---' markers open a block up to the next marker: one tap toggles the whole block
             let blockBtn = '';
-            const bounds = lines ? blockBounds(lines, index) : null;
+            const bounds = condition ? null : (lines ? blockBounds(lines, index) : null);
             if (bounds) {
                 const off = blockIsOff(lines, bounds.from, bounds.to);
                 const count = bounds.to - bounds.from;
@@ -574,10 +796,11 @@
                 blockBtn = `<button type="button" class="pedit-gutter pedit-block-toggle ${off ? 'is-off' : ''}" `
                     + `data-line="${index}" title="${title}">${off ? '⏸' : '▶'}</button>`;
             }
-            return `<div class="pedit-line ${commented ? 'is-comment' : ''}" data-line="${index}">`
+            const addBtn = condition ? '' : `<button type="button" class="pedit-add" data-line="${index}" title="Add a keyword to this line">＋</button>`;
+            return `<div class="pedit-line ${commented ? 'is-comment' : ''} ${condition ? 'is-condition' : ''}" data-line="${index}">`
                 + commentBtn
                 + blockBtn
-                + `<div class="pedit-chips">${chips}<button type="button" class="pedit-add" data-line="${index}" title="Add a keyword to this line">＋</button></div>`
+                + `<div class="pedit-chips">${chips}${addBtn}</div>`
                 + '</div>';
         }
 
@@ -631,7 +854,8 @@
             closeSyntaxPop();
             const lines = state.text.split('\n');
             const groups = findPickGroups(state.text);
-            const body = lines.map((l, i) => lineHtml(l, i, lines, groups) + inputHtml(i)).join('');
+            const conditions = analyzeConditionLines(state.text);
+            const body = lines.map((l, i) => lineHtml(l, i, lines, groups, conditions) + inputHtml(i)).join('');
             const disabledCount = countDisabled();
             const syntaxErrors = countSyntaxErrors();
             const previous = root.querySelector('.pedit-body');
@@ -642,7 +866,7 @@
                 + `<button type="button" class="pedit-head-btn" data-act="add-line" title="Add a line">＋ line</button>`
                 + `<button type="button" class="pedit-head-btn" data-act="uncomment-all" title="Uncomment every line">▶ all</button>`
                 + (disabledCount ? `<span class="pedit-badge" title="keywords disabled with #( ) are stripped when generating">${disabledCount} off</span>` : '')
-                + (syntaxErrors ? `<span class="pedit-badge is-error" title="keywords starting with @ must follow the prompt syntax - hover a red keyword to see what is wrong">⚠ ${syntaxErrors} syntax</span>` : '')
+                + (syntaxErrors ? `<span class="pedit-badge is-error" title="keywords starting with @ and #if blocks must follow the prompt syntax - right-click a red keyword to see what is wrong">⚠ ${syntaxErrors} syntax</span>` : '')
                 + '</div>'
                 + `<div class="pedit-body">${body}</div>`
                 + actionBarHtml();
@@ -663,22 +887,24 @@
             return n;
         }
 
-        /** Broken '@' directives across the text (drives the ⚠ badge in the header). */
+        /** Broken '@' directives and #if blocks (drives the ⚠ badge in the header). */
         function countSyntaxErrors() {
             const groups = findPickGroups(state.text);
             let n = 0;
             state.text.split('\n').forEach((line, lineIndex) => {
+                const commented = isCommentedLine(line);
                 let cursor = 0;
                 splitSegments(line).forEach((s) => {
                     const bodyStart = cursor + s.lead.length;
                     const coreStart = bodyStart + (s.body.length - s.body.trimStart().length);
                     cursor = bodyStart + s.body.length + s.tail.length;
                     const group = pickGroupAt(groups, lineIndex, coreStart);
-                    const token = classify(s.body, group ? group.syntax : null);
-                    if (token.syntax && !token.syntax.ok) n++;
+                    const token = classify(s.body, group ? group.syntax : null, !commented);
+                    // #if lines are counted with their whole block (missing #endif, stray #else)
+                    if (token.kind !== 'cond' && token.syntax && !token.syntax.ok) n++;
                 });
             });
-            return n;
+            return n + analyzeConditionLines(state.text).filter((info) => info && !info.ok).length;
         }
 
         // ── '@' directive hint (right-click only) ───────────────────────────
@@ -840,7 +1066,9 @@
             mapLine(lineIndex, (line) => {
                 const trimmed = line.replace(/^\s+/, '');
                 const indent = line.slice(0, line.length - trimmed.length);
-                if (/^#(?!\()/.test(trimmed)) {
+                // a '#if' line is a directive: commenting it out adds the marker instead of
+                // stripping it ('# #if …' is the comment form, '#(…)' is a disabled keyword)
+                if (/^#(?!\()/.test(trimmed) && !isConditionLine(trimmed)) {
                     const body = trimmed.slice(1).replace(/^ /, '');
                     return indent + body;
                 }
@@ -874,6 +1102,7 @@
         }
 
         function startsWithLineHash(line) {
+            if (isConditionLine(line)) return false; // '#if' is a directive, not a comment
             const trimmed = line.replace(/^\s+/, '');
             if (trimmed.charAt(0) !== '#') return false;
             return '([<'.indexOf(trimmed.charAt(1)) < 0;
@@ -1257,5 +1486,9 @@
         analyzeAtSyntax: analyzeAtSyntax,
         findPickGroups: findPickGroups,
         syntaxHint: syntaxHint,
+        isConditionLine: isConditionLine,
+        parseCondition: parseCondition,
+        analyzeConditionLine: analyzeConditionLine,
+        analyzeConditionLines: analyzeConditionLines,
     };
 })();

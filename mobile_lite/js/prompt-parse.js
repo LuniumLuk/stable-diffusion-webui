@@ -10,11 +10,13 @@
  * token back with a new weight / disabled flag - every user edit goes through it.
  * A keyword that starts with '@' is checked by `prompt-syntax.js`: a well formed
  * directive is a `pick` token, a broken one an `at` token that carries the error.
+ * A standalone `#if` / `#elseif` / `#else` / `#endif` line is a `cond` token and
+ * keeps its text as typed.
  *
  * The same test expectations as `tmp/pedit_test.js` apply (see `tmp/lite_pedit_test.mjs`).
  */
 
-import { analyzeAtSyntax } from './prompt-syntax.js';
+import { analyzeAtSyntax, analyzeConditionLine, isConditionLine } from './prompt-syntax.js';
 
 export const DEFAULT_WEIGHT = 1.0;
 
@@ -185,11 +187,28 @@ function wrapperLevels(text, open, close) {
   return { levels, inner };
 }
 
-/** Classify a segment body -> { kind, text, weight, disabled }. */
-export function classify(body, syntaxOverride = null) {
+/**
+ * Classify a segment body -> { kind, text, weight, disabled }.
+ *
+ * `allowCondition` is false for the body of a commented line: `# #if TXT2IMG` is a
+ * commented-out directive, not a directive.
+ */
+export function classify(body, syntaxOverride = null, allowCondition = true) {
   const text = String(body == null ? '' : body).trim();
   if (!text) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
   if (text === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
+
+  // a standalone #if / #elseif / #else / #endif line: a `cond` token that carries its
+  // own grammar check, so the chips and the CodeMirror decorations style it distinctly
+  if (allowCondition && isConditionLine(text)) {
+    return {
+      kind: 'cond',
+      text,
+      weight: DEFAULT_WEIGHT,
+      disabled: false,
+      syntax: analyzeConditionLine(text),
+    };
+  }
 
   // every keyword starting with '@' is a directive and must pass the grammar:
   // a well formed @PICK is a `pick` token, a broken directive an `at` token carrying
@@ -209,7 +228,7 @@ export function classify(body, syntaxOverride = null) {
 
   // #(...) / #[...] / #<...> -> disabled keyword group (stripped when generating)
   if (text[0] === '#' && text.length > 3) {
-    const inner = classify(text.slice(1));
+    const inner = classify(text.slice(1), null, false);
     if (inner.kind !== 'plain') {
       inner.disabled = true;
       return inner;
@@ -265,8 +284,8 @@ export function classify(body, syntaxOverride = null) {
 /** Build the body text for a token with the given weight / disabled flag. */
 export function rebuild(token, weight, disabled) {
   // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
-  // and a broken '@' directive must keep its text so the user can fix it in place
-  if (token.kind === 'pick' || token.kind === 'at') return token.text;
+  // and a broken '@' directive (and a #if line) must keep its text as typed
+  if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond') return token.text;
 
   const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
   let inner;
@@ -354,8 +373,12 @@ export function blockBounds(lines, index) {
   return null;
 }
 
-/** True when the line starts with '#' but not with a disabled keyword group ('#(' ...). */
+/**
+ * True when the line starts with '#' but is not a disabled keyword group ('#(' ...)
+ * and not a '#if' block directive (only '# #if …' is the commented form).
+ */
 function startsWithLineHash(line) {
+  if (isConditionLine(line)) return false;
   const trimmed = line.trimStart();
   if (trimmed.charAt(0) !== '#') return false;
   return '([<'.indexOf(trimmed.charAt(1)) < 0;

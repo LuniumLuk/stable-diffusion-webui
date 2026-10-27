@@ -960,10 +960,17 @@ def region_inpaint_size(mask: Image.Image, inpaint_size: int = 1024, padding: in
     return _scaled_size(width, height, int(max(MIN_INPAINT_SIZE, min(target, MAX_INPAINT_SIZE))))
 
 
-def choose_inpaint_prompt(p, index: int) -> tuple[str, str]:
-    """Compiled prompt for one image, using the hires prompt when hires fix ran.
+def choose_inpaint_prompt(p, index: int, part=None) -> tuple[str, str]:
+    """Compiled prompt for one pose inpaint pass of one image.
 
-    ``index`` is the global image index (iteration * batch_size + batch_index).
+    Uses the hires prompt when hires fix ran.  The source prompt (comments and
+    ``#if`` blocks intact) is used when available, so the POSE_INPAINT and
+    POSE_INPAINT_PART branches are resolved for this pass; ``@PICK`` groups are
+    then drawn with the same seed/index the parent generation used and the
+    comments are stripped, the same compilation the parent prompts went through.
+
+    ``index`` is the global image index (iteration * batch_size + batch_index),
+    ``part`` the POSE_INPAINT_PART of the pass ('FACE', 'FEET', 'HANDS' or None).
     """
 
     def at(sequence):
@@ -975,14 +982,37 @@ def choose_inpaint_prompt(p, index: int) -> tuple[str, str]:
 
     prompt = None
     negative = None
+    source = None
+    source_negative = None
 
     if getattr(p, "enable_hr", False):
+        source = at(getattr(p, "all_hr_prompts_with_comments", None))
+        source_negative = at(getattr(p, "all_hr_negative_prompts_with_comments", None))
         prompt = at(getattr(p, "all_hr_prompts", None))
         negative = at(getattr(p, "all_hr_negative_prompts", None))
 
-    prompt = prompt or at(getattr(p, "all_prompts", None)) or getattr(p, "prompt", "") or ""
-    negative = negative or at(getattr(p, "all_negative_prompts", None)) or getattr(p, "negative_prompt", "") or ""
-    return prompt, negative
+    source = source or at(getattr(p, "all_prompts_with_comments", None))
+    source_negative = source_negative or at(getattr(p, "all_negative_prompts_with_comments", None))
+
+    # the source keeps the #if blocks, the compiled list has them resolved already
+    prompt = source or prompt or at(getattr(p, "all_prompts", None)) or getattr(p, "prompt", "") or ""
+    negative = source_negative or negative or at(getattr(p, "all_negative_prompts", None)) or getattr(p, "negative_prompt", "") or ""
+
+    from modules import prompt_parser
+
+    macros = prompt_parser.stage_macros("pose_inpaint", pose_part=part)
+    prompt = prompt_parser.expand_prompt_conditions(prompt, macros)
+    negative = prompt_parser.expand_prompt_conditions(negative, macros)
+
+    seeds = getattr(p, "all_seeds", None)
+    seed = seeds[index] if isinstance(seeds, (list, tuple)) and 0 <= index < len(seeds) else getattr(p, "seed", -1)
+
+    def with_picks(text, kind):
+        if "@" not in text:
+            return text
+        return prompt_parser.expand_prompt_picks(text, prompt_parser.get_pick_rng(seed, index, kind))
+
+    return prompt_parser.strip_prompt_comments(with_picks(prompt, "pos")), prompt_parser.strip_prompt_comments(with_picks(negative, "neg"))
 
 
 def _draw_joint(draw: ImageDraw.ImageDraw, point, radius: int, color):

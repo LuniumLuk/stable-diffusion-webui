@@ -1237,12 +1237,15 @@ def _run_qwen_job(payload: dict) -> dict:
         raise HTTPException(status_code=409, detail="a qwen job is already running")
 
     task_id = _normalize_task_id(payload.get("task_id"))
+    from modules import prompt_parser
     from modules.processing import strip_prompt_comments
 
-    # same contract as the txt2img/img2img prompt editors: '#' comment lines and
-    # #(...) disabled keyword groups are stripped before the prompt reaches the model
-    prompt = strip_prompt_comments(str(payload.get("prompt") or "")).strip()
-    negative = strip_prompt_comments(str(payload.get("negative_prompt") or "")).strip()
+    # same contract as the txt2img/img2img prompt editors: the #if blocks are resolved
+    # for this single stage, then '#' comment lines and #(...) disabled keyword groups
+    # are stripped before the prompt reaches the model
+    macros = prompt_parser.stage_macros("txt2img")
+    prompt = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("prompt") or ""), macros))).strip()
+    negative = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("negative_prompt") or ""), macros))).strip()
     refs = [
         str(item)
         for item in (payload.get("refs") or [])
@@ -1730,12 +1733,15 @@ def _run_krea2_job(payload: dict) -> dict:
         raise HTTPException(status_code=409, detail="a krea2 job is already running")
 
     task_id = _normalize_task_id(payload.get("task_id"))
+    from modules import prompt_parser
     from modules.processing import strip_prompt_comments
 
-    # same contract as the txt2img/img2img prompt editors: '#' comment lines and
-    # #(...) disabled keyword groups are stripped before the prompt reaches the model
-    prompt = strip_prompt_comments(str(payload.get("prompt") or "")).strip()
-    negative = strip_prompt_comments(str(payload.get("negative_prompt") or "")).strip()
+    # same contract as the txt2img/img2img prompt editors: the #if blocks are resolved
+    # for this single stage, then '#' comment lines and #(...) disabled keyword groups
+    # are stripped before the prompt reaches the model
+    macros = prompt_parser.stage_macros("txt2img")
+    prompt = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("prompt") or ""), macros))).strip()
+    negative = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("negative_prompt") or ""), macros))).strip()
     # Krea 2 edit works best with a single reference; allow a few for composition.
     refs = [
         str(item)

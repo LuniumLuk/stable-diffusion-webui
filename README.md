@@ -65,6 +65,14 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - the draw is tied to the image seed, so reloading an image's parameters brings back the same keywords
      - keywords starting with `@` are checked and highlighted; right-click a directive (tap it in the mobile UI) for a hint with the N-of-M preview, broken syntax is marked in red with the reason
      - the gallery keeps both the source prompt and the compiled prompt (comments stripped, picks drawn); its info panel switches between them (remembered) and the send actions follow the choice
+- Conditional prompt blocks, a way to keep per-stage text in one prompt
+     - `#if TXT2IMG`, `#elseif HIRES_FIX`, `#else`, `#endif`, each on a line of its own; blocks may be nested
+     - the macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`, `POSE_INPAINT` (1 while that stage runs, 0 otherwise) and `POSE_INPAINT_PART` (0 outside a pose pass, `FACE`, `FEET` or `HANDS` inside one)
+     - `HIRES_FIX` is an img2img pass and `POSE_INPAINT` an inpaint pass, so `IMG2IMG` (and `INPAINT`) are 1 there as well
+     - conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses, e.g. `#if IMG2IMG && POSE_INPAINT_PART == HANDS`
+     - the branch is chosen when the stage runs, so the same prompt serves the txt2img pass, Hires. fix, img2img, inpaint and every pose inpaint part
+     - the prompt editors highlight the directives and flag unknown macros, a missing `#endif` and a stray `#else`; a block that is not closed is left in the prompt untouched
+     - the source prompt (PNG metadata, gallery restore) keeps the blocks, the compiled prompt holds the text of the branch that ran
 - Batch Processing, process a group of files using img2img
 - Img2img Alternative, reverse Euler method of cross attention control
 - Highres Fix, a convenience option to produce high resolution pictures in one click without usual distortions

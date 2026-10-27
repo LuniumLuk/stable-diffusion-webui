@@ -428,6 +428,10 @@ class StableDiffusionProcessing:
 
         return self.token_merging_ratio or opts.token_merging_ratio
 
+    def prompt_condition_macros(self):
+        """Macro values of the #if blocks for this job (see prompt_parser.stage_macros)."""
+        return prompt_parser.stage_macros("img2img", inpaint=getattr(self, "image_mask", None) is not None)
+
     def setup_prompts(self):
         if isinstance(self.prompt,list):
             self.all_prompts = self.prompt
@@ -447,12 +451,14 @@ class StableDiffusionProcessing:
         self.all_prompts = [shared.prompt_styles.apply_styles_to_prompt(x, self.styles) for x in self.all_prompts]
         self.all_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_negative_prompts]
 
-        # Preserve the originals (with comment lines) for PNG metadata and gallery
-        # restore, then strip comments so scripts.process() and the model are clean.
+        # Preserve the originals (with comment lines and #if blocks) for PNG metadata
+        # and gallery restore, then resolve the #if blocks for this stage and strip
+        # comments so scripts.process() and the model are clean.
         self.all_prompts_with_comments = list(self.all_prompts)
         self.all_negative_prompts_with_comments = list(self.all_negative_prompts)
-        self.all_prompts = [strip_prompt_comments(pr) for pr in self.all_prompts]
-        self.all_negative_prompts = [strip_prompt_comments(pr) for pr in self.all_negative_prompts]
+        macros = self.prompt_condition_macros()
+        self.all_prompts = [strip_prompt_comments(pr) for pr in prompt_parser.apply_prompt_conditions(self.all_prompts, macros)]
+        self.all_negative_prompts = [strip_prompt_comments(pr) for pr in prompt_parser.apply_prompt_conditions(self.all_negative_prompts, macros)]
 
         self.main_prompt = self.all_prompts[0]
         self.main_negative_prompt = self.all_negative_prompts[0]
@@ -567,6 +573,12 @@ class StableDiffusionProcessing:
         return cache[1]
 
     def setup_conds(self):
+        # scripts.process_batch may inject prompt text: resolve the #if blocks here as
+        # well, so a conditional that a script added follows the running stage too
+        macros = self.prompt_condition_macros()
+        self.prompts = prompt_parser.apply_prompt_conditions(self.prompts, macros)
+        self.negative_prompts = prompt_parser.apply_prompt_conditions(self.negative_prompts, macros)
+
         prompts = prompt_parser.SdConditioning(self.prompts, width=self.width, height=self.height)
         negative_prompts = prompt_parser.SdConditioning(self.negative_prompts, width=self.width, height=self.height, is_negative_prompt=True)
 
@@ -957,6 +969,10 @@ def _print_save_result(filepath: str, elapsed: float, image=None):
 def strip_prompt_comments(text: str) -> str:
     """Remove prompt comments and disabled keywords from a prompt.
 
+    The implementation lives in prompt_parser (it is prompt text processing and
+    the pose inpaint pass needs it without importing the whole pipeline); this
+    name stays the one the rest of the app imports.
+
     Two forms are understood (both produced by the chip editor in
     javascript/promptEditor.js and by hand):
 
@@ -971,29 +987,7 @@ def strip_prompt_comments(text: str) -> str:
     all_prompts_with_comments / all_negative_prompts_with_comments for PNG metadata
     and gallery restore.
     """
-    if not text:
-        return text
-
-    # whole-line comments (keep lines that start with a disabled keyword group)
-    lines = [line for line in text.split('\n') if not re.match(r'^\s*#(?![\[(<])', line)]
-    out = '\n'.join(lines)
-
-    # inline disabled groups; loop because the pattern unwraps one nesting level per pass
-    pattern = re.compile(r'#\((?:[^()]|\([^()]*\))*\)|#\[(?:[^\[\]]|\[[^\[\]]*\])*\]|#<[^<>]*>')
-    previous = None
-    while previous != out:
-        previous = out
-        out = pattern.sub('', out)
-
-    # tidy the separators the removed groups left behind (generation only - the
-    # metadata keeps the untouched original text)
-    previous = None
-    while previous != out:
-        previous = out
-        out = re.sub(r',[ \t]*,[ \t]*', ', ', out)
-    out = re.sub(r'^[ \t]*,[ \t]*', '', out, flags=re.M)  # group was at the start of a line
-    out = re.sub(r'[ \t]+$', '', out, flags=re.M)
-    return out
+    return prompt_parser.strip_prompt_comments(text)
 
 
 def process_images(p: StableDiffusionProcessing) -> Processed:
@@ -1904,6 +1898,14 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             StableDiffusionProcessingTxt2Img.cached_hr_uc = [None, None]
             StableDiffusionProcessingTxt2Img.cached_hr_c = [None, None]
 
+    def prompt_condition_macros(self):
+        if self.is_hr_pass:
+            return self.hr_prompt_condition_macros()
+        return prompt_parser.stage_macros("txt2img")
+
+    def hr_prompt_condition_macros(self):
+        return prompt_parser.stage_macros("hires_fix")
+
     def setup_prompts(self):
         super().setup_prompts()
 
@@ -1929,15 +1931,24 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         self.all_hr_prompts = [shared.prompt_styles.apply_styles_to_prompt(x, self.styles) for x in self.all_hr_prompts]
         self.all_hr_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_hr_negative_prompts]
 
-        # Same comment-preservation pattern as the base class setup_prompts().
+        # Same comment-preservation pattern as the base class setup_prompts(): the
+        # sources keep comments and #if blocks, the compiled list is resolved for
+        # the hires pass (HIRES_FIX is an img2img pass, so IMG2IMG is 1 as well).
         self.all_hr_prompts_with_comments = list(self.all_hr_prompts)
         self.all_hr_negative_prompts_with_comments = list(self.all_hr_negative_prompts)
-        self.all_hr_prompts = [strip_prompt_comments(pr) for pr in self.all_hr_prompts]
-        self.all_hr_negative_prompts = [strip_prompt_comments(pr) for pr in self.all_hr_negative_prompts]
+        macros = self.hr_prompt_condition_macros()
+        self.all_hr_prompts = [strip_prompt_comments(pr) for pr in prompt_parser.apply_prompt_conditions(self.all_hr_prompts, macros)]
+        self.all_hr_negative_prompts = [strip_prompt_comments(pr) for pr in prompt_parser.apply_prompt_conditions(self.all_hr_negative_prompts, macros)]
 
     def calculate_hr_conds(self, steps_override=None):
         if self.hr_c is not None:
             return
+
+        # a script may have injected prompt text into the hires prompts: resolve the
+        # #if blocks for the hires stage right before the conditioning is built
+        macros = self.hr_prompt_condition_macros()
+        self.hr_prompts = prompt_parser.apply_prompt_conditions(self.hr_prompts, macros)
+        self.hr_negative_prompts = prompt_parser.apply_prompt_conditions(self.hr_negative_prompts, macros)
 
         hr_prompts = prompt_parser.SdConditioning(self.hr_prompts, width=self.hr_upscale_to_x, height=self.hr_upscale_to_y)
         hr_negative_prompts = prompt_parser.SdConditioning(self.hr_negative_prompts, width=self.hr_upscale_to_x, height=self.hr_upscale_to_y, is_negative_prompt=True)

@@ -7,7 +7,9 @@
  * the classic text mode the same way Mobile Lite did, sharing the editor core:
  *   - suggestions while typing    (the same MRU + endorsed + extra-network pool the
  *                                  chips editor uses, via window.promptEditorPool);
- *   - `#` comment + `# ---` block markers styled like the old backdrop overlay;
+ *   - `#` comment + `# ---` block markers styled like the old backdrop overlay, and
+ *     `#if` / `#elseif` / `#else` / `#endif` stage conditions on their own line
+ *     (checked, hinted and never treated as a comment);
  *   - left-click / left-drag stay NATIVE (caret + text selection) — the manipulation
  *     popup opens on RIGHT-CLICK only: on a keyword, or inside a selection to apply
  *     weight / ⛔ to every selected keyword at once; Alt+drag rearranges a keyword;

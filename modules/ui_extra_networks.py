@@ -554,34 +554,44 @@ class ExtraNetworksPage:
         return f"<ul class='tree-list tree-list--tree'>{res}</ul>"
 
     def create_dirs_view_html(self, tabname: str) -> str:
-        """Generates HTML for displaying folders."""
+        """Generates HTML for displaying folders that actually contain a listed model.
+
+        Directories are derived from the listed files, so download caches (``.cache``,
+        ``.cache/huggingface/download``) and model folders whose files this page cannot use
+        (e.g. diffusers component trees) no longer produce filter buttons.
+        """
+        item_dirs = [
+            os.path.dirname(os.path.abspath(item["filename"]))
+            for item in self.items.values()
+            if item.get("filename")
+        ]
 
         subdirs = {}
         for parentdir in [os.path.abspath(x) for x in self.allowed_directories_for_previews()]:
-            for root, dirs, _ in sorted(os.walk(parentdir, followlinks=True), key=lambda x: shared.natural_sort_key(x[0])):
-                for dirname in sorted(dirs, key=shared.natural_sort_key):
-                    x = os.path.join(root, dirname)
+            prefix = parentdir.rstrip(os.sep) + os.sep
+            candidates = set()
+            for folder in item_dirs:
+                while folder.startswith(prefix):
+                    candidates.add(folder)
+                    folder = os.path.dirname(folder)
 
-                    if not os.path.isdir(x):
-                        continue
+            for x in sorted(candidates, key=shared.natural_sort_key):
+                subdir = x[len(parentdir):]
 
-                    subdir = os.path.abspath(x)[len(parentdir):]
+                if shared.opts.extra_networks_dir_button_function:
+                    if not subdir.startswith(os.path.sep):
+                        subdir = os.path.sep + subdir
+                else:
+                    while subdir.startswith(os.path.sep):
+                        subdir = subdir[1:]
 
-                    if shared.opts.extra_networks_dir_button_function:
-                        if not subdir.startswith(os.path.sep):
-                            subdir = os.path.sep + subdir
-                    else:
-                        while subdir.startswith(os.path.sep):
-                            subdir = subdir[1:]
+                if not subdir.endswith(os.path.sep):
+                    subdir = subdir + os.path.sep
 
-                    is_empty = len(os.listdir(x)) == 0
-                    if not is_empty and not subdir.endswith(os.path.sep):
-                        subdir = subdir + os.path.sep
+                if (os.path.sep + "." in subdir or subdir.startswith(".")) and not shared.opts.extra_networks_show_hidden_directories:
+                    continue
 
-                    if (os.path.sep + "." in subdir or subdir.startswith(".")) and not shared.opts.extra_networks_show_hidden_directories:
-                        continue
-
-                    subdirs[subdir] = 1
+                subdirs[subdir] = 1
 
         if subdirs:
             subdirs = {"": 1, **subdirs}

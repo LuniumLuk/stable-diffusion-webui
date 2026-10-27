@@ -1,7 +1,9 @@
 /**
  * Prompt line-comment support for txt2img / img2img.
  *
- * Lines whose first non-whitespace character is '#' are treated as comments.
+ * Lines whose first non-whitespace character is '#' are treated as comments; a
+ * standalone '#if' / '#elseif' / '#else' / '#endif' line is a stage directive and
+ * keeps its own colour (the pipeline resolves those blocks).
  *   - Ctrl+/ toggles comment / uncomment on all lines covered by the selection.
  *   - Comment lines are displayed in green italic via a transparent-textarea +
  *     absolutely-positioned highlight-backdrop overlay (same pattern as hires_fix.js).
@@ -52,9 +54,15 @@
      * editor and must stay visible/active.
      */
     function lineStartsWithHash(line) {
+        if (isConditionDirective(line)) return false; // '#if' is a directive, not a comment
         const trimmed = line.trimStart ? line.trimStart() : line.replace(/^\s+/, '');
         if (trimmed.charAt(0) !== '#') return false;
         return '([<'.indexOf(trimmed.charAt(1)) < 0;
+    }
+
+    /** True for a standalone #if / #elseif / #else / #endif prompt directive line. */
+    function isConditionDirective(line) {
+        return /^\s*#(?:if|elif|elseif|else|endif)(?![A-Za-z0-9_])/i.test(String(line || ''));
     }
 
     /**
@@ -100,6 +108,10 @@
                 return '<span class="prompt-comment prompt-block-marker">' + escapeHtml(line) + '</span>'
                     + '<span class="prompt-block-toggle' + (commented ? ' is-commented' : '') + '"'
                     + ' data-block-start="' + idx + '" title="' + title + '">' + icon + '</span>';
+            }
+            // a standalone #if / #elseif / #else / #endif line is a stage directive, not a comment
+            if (isConditionDirective(line)) {
+                return '<span class="prompt-condition">' + escapeHtml(line) + '</span>';
             }
             if (lineStartsWithHash(line)) {
                 return '<span class="prompt-comment">' + escapeHtml(line) + '</span>';
