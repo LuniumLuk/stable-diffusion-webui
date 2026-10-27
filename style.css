@@ -6690,6 +6690,56 @@ body.resizing .resize-handle {
     gap: 2px;
 }
 
+.gv2-thumb-xs .gv2-card-topleft {
+    top: 4px;
+    left: 4px;
+    right: 4px;
+    gap: 2px;
+}
+
+.gv2-root.gv2-thumb-xs .gv2-card-lineage .gv2-capsule,
+.gv2-root.gv2-thumb-s .gv2-card-lineage .gv2-capsule {
+    font-size: 8.5px;
+    padding: 0 4px;
+}
+
+.gv2-root.gv2-thumb-s .gv2-capsule.gv2-op-parent {
+    font-size: 7.5px;
+    padding: 0 3px;
+}
+
+.gv2-root.gv2-thumb-s .gv2-badge {
+    font-size: 9.5px;
+    padding: 1px 5px;
+}
+
+.gv2-root.gv2-thumb-xs .gv2-capsule.gv2-op-parent {
+    display: none;
+}
+
+/* small thumbs: pack the lineage capsules and the state badges on one line so
+   they don't stack into two rows over a tiny picture */
+.gv2-root.gv2-thumb-s .gv2-card-topleft,
+.gv2-root.gv2-thumb-xs .gv2-card-topleft {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+}
+
+.gv2-root.gv2-thumb-s .gv2-card-lineage,
+.gv2-root.gv2-thumb-xs .gv2-card-lineage {
+    gap: 3px;
+    max-width: 100%;
+}
+
+.gv2-root.gv2-thumb-s .gv2-card-lineage .gv2-capsule,
+.gv2-root.gv2-thumb-xs .gv2-card-lineage .gv2-capsule {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .gv2-thumb-xs .gv2-badge {
     font-size: 9px;
     padding: 1px 5px;
@@ -6803,6 +6853,54 @@ body.resizing .resize-handle {
     flex-wrap: wrap;
     gap: 4px;
     max-width: 80%;
+}
+
+/* lineage capsules: top-left, above the state badges */
+.gv2-card-topleft {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    right: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    pointer-events: none;
+}
+
+.gv2-card-topleft .gv2-card-badges {
+    position: static;
+    max-width: 100%;
+}
+
+.gv2-card-lineage {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 3px;
+    max-width: 100%;
+}
+
+.gv2-capsule.gv2-op {
+    color: #bae6fd;
+    background: rgba(8, 47, 73, 0.88);
+    border-color: rgba(56, 189, 248, 0.55);
+}
+
+.gv2-capsule.gv2-op-parent {
+    padding: 0 6px;
+    font-size: 9px;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.72);
+    border-color: rgba(71, 85, 105, 0.7);
+    opacity: 0.9;
+}
+
+.gv2-detail-lineage-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
 }
 
 .gv2-badge {

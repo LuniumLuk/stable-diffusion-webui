@@ -648,10 +648,11 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
         save_to_dirs (bool):
             If true, the image will be saved into a subdirectory of `path`.
         compiled_prompt, compiled_negative_prompt (`str`):
-            The prompt actually sent to the model for this image (comments stripped,
-            @PICK groups resolved). Kept out of the PNG metadata; handed to the
-            image_saved callbacks so the gallery can store it next to the source
-            prompt. None when unknown (Extras and other non-generation saves).
+            The prompt as it was written, with the @PICK groups drawn: comments,
+            disabled groups and every `#if` branch stay, only the keywords changed.
+            Kept out of the PNG metadata; handed to the image_saved callbacks so the
+            gallery can store it next to the source prompt. None when unknown
+            (Extras and other non-generation saves).
 
     Returns: (fullfn, txt_fullfn)
         fullfn (`str`):

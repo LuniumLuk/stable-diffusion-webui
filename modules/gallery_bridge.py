@@ -93,6 +93,8 @@ def _ensure_item(key: str | None, path: str | None, fields: dict | None = None) 
     source = _source_for(path)
     rel = gallery_sources_rel(path)
     fields = fields or {}
+    from modules import gallery_lineage
+
     payload = {
         "path": path, "rel_path": rel,
         "prompt": fields.get("prompt") or "",
@@ -101,6 +103,7 @@ def _ensure_item(key: str | None, path: str | None, fields: dict | None = None) 
         "width": int(fields.get("width") or 0),
         "height": int(fields.get("height") or 0),
         "meta": fields.get("meta") or {},
+        "op": gallery_lineage.op_from_infotext(source, fields.get("infotext") or ""),
     }
     if path and os.path.isfile(path):
         try:
@@ -143,12 +146,16 @@ def _meta_fields(fields: dict) -> dict:
 
 def on_index_image(path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
                    cfg_scale, width, height, model_name, model_hash, infotext,
-                   compiled_prompt=None, compiled_negative_prompt=None) -> None:
+                   compiled_prompt=None, compiled_negative_prompt=None, lineage=None) -> None:
     """Mirror a saved image into gallery.db.
 
-    `compiled_prompt` is what the model was conditioned on (comments stripped,
-    @PICK drawn). None means "unknown" - the column is left as it was, so a
-    re-index of an old file cannot wipe a recorded compiled prompt.
+    `compiled_prompt` is the prompt as it was written with the @PICK groups drawn
+    (comments, disabled groups and every #if branch stay). None means "unknown" -
+    the column is left as it was, so a re-index of an old file cannot wipe a
+    recorded compiled prompt.
+
+    `lineage` is the dict from gallery_lineage.describe: op + optional
+    parent_uid/parent_op. None leaves the lineage columns untouched.
     """
     if not v2_enabled() or not path:
         return
@@ -170,6 +177,11 @@ def on_index_image(path, file_mtime, prompt, negative_prompt, seed, steps, sampl
             fields["compiled_prompt"] = compiled_prompt or ""
         if compiled_negative_prompt is not None:
             fields["compiled_negative_prompt"] = compiled_negative_prompt or ""
+        if lineage:
+            for key in ("op", "parent_uid", "parent_op"):
+                value = lineage.get(key)
+                if value not in (None, ""):
+                    fields[key] = value
         if file_mtime:
             fields["mtime"] = float(file_mtime)
         if os.path.isfile(path):

@@ -6,6 +6,7 @@
 
     const R = {
         tracking: false,
+        pointer: null,
         parent: null,
         parentWidth: null,
         leftCol: null,
@@ -16,6 +17,22 @@
 
     let resizeTimer;
     let parents = [];
+
+    /**
+     * Ends the drag.  `body.resizing` turns off pointer events for the whole UI
+     * (`body.resizing * { pointer-events: none }`), so a drag that never sees its
+     * mouseup - released over another monitor or window, swallowed by an iframe or a
+     * native menu - used to leave every real click dead: the Generate button stopped
+     * reacting while Ctrl+Enter kept working, because a programmatic `.click()` does
+     * not hit-test.  Ending the drag is idempotent and is also driven from events
+     * that cannot be missed (blur, hidden tab, pointercancel).
+     */
+    function stopTracking() {
+        if (!R.tracking) return;
+
+        R.tracking = false;
+        document.body.classList.remove('resizing');
+    }
 
     function setLeftColGridTemplate(el, width) {
         el.style.gridTemplateColumns = `${width}px 16px 1fr`;
@@ -115,6 +132,7 @@
                 document.body.classList.add('resizing');
 
                 R.tracking = true;
+                R.pointer = eventType.startsWith('mouse') ? 'mouse' : 'touch';
                 R.parent = parent;
                 R.parentWidth = parent.offsetWidth;
                 R.leftCol = leftCol;
@@ -134,47 +152,57 @@
 
     ['mousemove', 'touchmove'].forEach((eventType) => {
         window.addEventListener(eventType, (evt) => {
-            if (eventType.startsWith('mouse')) {
-                if (evt.button !== 0) return;
+            if (!R.tracking) return;
+
+            const isMouseMove = eventType.startsWith('mouse');
+
+            // no button / finger held any more: the release happened where we cannot see it
+            // (released over another monitor or window, swallowed by a native menu, ...)
+            const released = R.pointer === 'mouse'
+                ? (!isMouseMove || evt.buttons === 0)
+                : (isMouseMove || evt.touches.length === 0);
+            if (released) {
+                stopTracking();
+                return;
+            }
+
+            if (isMouseMove ? evt.button !== 0 : evt.changedTouches.length !== 1) return;
+
+            if (isMouseMove) {
+                evt.preventDefault();
+            }
+            evt.stopPropagation();
+
+            let delta = 0;
+            if (isMouseMove) {
+                delta = R.screenX - evt.screenX;
             } else {
-                if (evt.changedTouches.length !== 1) return;
+                delta = R.screenX - evt.changedTouches[0].screenX;
             }
-
-            if (R.tracking) {
-                if (eventType.startsWith('mouse')) {
-                    evt.preventDefault();
-                }
-                evt.stopPropagation();
-
-                let delta = 0;
-                if (eventType.startsWith('mouse')) {
-                    delta = R.screenX - evt.screenX;
-                } else {
-                    delta = R.screenX - evt.changedTouches[0].screenX;
-                }
-                const leftColWidth = Math.max(Math.min(R.leftColStartWidth - delta, R.parent.offsetWidth - R.parent.minRightColWidth - PAD), R.parent.minLeftColWidth);
-                setLeftColGridTemplate(R.parent, leftColWidth);
-            }
+            const leftColWidth = Math.max(Math.min(R.leftColStartWidth - delta, R.parent.offsetWidth - R.parent.minRightColWidth - PAD), R.parent.minLeftColWidth);
+            setLeftColGridTemplate(R.parent, leftColWidth);
         });
     });
 
-    ['mouseup', 'touchend'].forEach((eventType) => {
+    ['mouseup', 'touchend', 'touchcancel', 'pointercancel'].forEach((eventType) => {
         window.addEventListener(eventType, (evt) => {
+            if (!R.tracking) return;
+
+            // no button/touch filter: any release has to end the drag, or `resizing`
+            // stays on the body and the next clicks go nowhere
             if (eventType.startsWith('mouse')) {
-                if (evt.button !== 0) return;
-            } else {
-                if (evt.changedTouches.length !== 1) return;
+                if (evt.preventDefault) evt.preventDefault();
+                if (evt.stopPropagation) evt.stopPropagation();
             }
 
-            if (R.tracking) {
-                evt.preventDefault();
-                evt.stopPropagation();
-
-                R.tracking = false;
-
-                document.body.classList.remove('resizing');
-            }
+            stopTracking();
         });
+    });
+
+    // a drag cannot survive the window losing focus (alt+tab, devtools, native menu)
+    window.addEventListener('blur', stopTracking);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') stopTracking();
     });
 
 

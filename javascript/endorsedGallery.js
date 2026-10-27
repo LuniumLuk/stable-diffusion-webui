@@ -2276,6 +2276,12 @@
             if (target === 'img2img' && pathB64) {
                 const path = b64Decode(pathB64);
                 if (path) {
+                    // cache the upstream reference for the lineage link
+                    fetch('/gallery/api/lineage/pin', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: path, origin: 'desktop' }),
+                    }).catch(() => {});
                     setTimeout(() => {
                         const fileInput = gradioApp().querySelector('#img2img_image input[type="file"]');
                         if (!fileInput) {

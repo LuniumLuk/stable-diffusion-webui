@@ -153,8 +153,11 @@ document.addEventListener('keydown', function(e) {
     const skipButton = get_uiCurrentTabContent().querySelector('button[id$=_skip]');
 
     if (isCtrlKey && isEnter) {
-        if (interruptButton && interruptButton.style.display === 'block') {
-            interruptButton.click();
+        // the Generate button is hidden (display: none) while a job runs, so "interrupt
+        // visible + Generate visible" can only be a stale interrupt button: never let
+        // the shortcut stall waiting for a style change that will not come
+        const generationRunning = !!generateButton && generateButton.style.display === 'none';
+        if (interruptButton && interruptButton.style.display === 'block' && generationRunning) {
             const callback = (mutationList) => {
                 for (const mutation of mutationList) {
                     if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
@@ -167,6 +170,7 @@ document.addEventListener('keydown', function(e) {
             };
             const observer = new MutationObserver(callback);
             observer.observe(interruptButton, {attributes: true});
+            interruptButton.click();
         } else if (generateButton) {
             generateButton.click();
         }

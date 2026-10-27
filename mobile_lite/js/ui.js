@@ -347,7 +347,8 @@ export function openViewer({ src, title = '', meta = null, actions = [], tag = '
       type: 'button',
       text: action.label,
       title: action.title || '',
-      onClick: () => action.onClick(),
+      disabled: !!action.disabled,
+      onClick: () => action.onClick && action.onClick(),
     }));
   }
 

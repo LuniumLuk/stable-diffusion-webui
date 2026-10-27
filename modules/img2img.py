@@ -73,6 +73,10 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
             p.height = int(img.height * scale_by)
 
         p.init_images = [img] * p.batch_size
+        # batch img2img knows the exact input file: no signature matching needed
+        p.lineage_parent_path = image
+        p.lineage_parent_uid = None
+        p.lineage_parent_op = None
 
         image_path = Path(image)
         if is_inpaint_batch:

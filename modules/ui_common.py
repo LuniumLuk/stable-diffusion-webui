@@ -119,10 +119,10 @@ def save_files(js_data, images, do_make_zip, index):
             if at_start:
                 writer.writerow(fields)
 
-        # compiled prompts (comments stripped, @PICK drawn) kept in the Processed object;
-        # indexed next to the source prompt by the gallery
-        compiled_prompts = getattr(p, 'all_prompts', None) or []
-        compiled_negative_prompts = getattr(p, 'all_negative_prompts', None) or []
+        # compiled prompts (the prompt as written with the @PICK groups drawn) kept in
+        # the Processed object; indexed next to the source prompt by the gallery
+        compiled_prompts = getattr(p, 'all_prompts_compiled', None) or getattr(p, 'all_prompts', None) or []
+        compiled_negative_prompts = getattr(p, 'all_negative_prompts_compiled', None) or getattr(p, 'all_negative_prompts', None) or []
         first_image_index = int(getattr(p, 'index_of_first_image', 0) or 0)
 
         for image_index, filedata in enumerate(images, start_index):

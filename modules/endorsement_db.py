@@ -102,7 +102,8 @@ def _ensure_endorsement_origin_column(conn):
 
 
 def _ensure_compiled_prompt_columns(conn):
-    """Compiled prompt = what the model saw (comments stripped, @PICK drawn).
+    """Compiled prompt = the prompt as written with the @PICK groups drawn
+    (comments, disabled groups and every #if branch stay).
 
     Added after the fact so existing DBs keep working: rows indexed before the
     column existed simply carry no compiled prompt.
@@ -1412,13 +1413,16 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
                 seed: str, steps: int, sampler: str, cfg_scale: float,
                 width: int, height: int, model_name: str, model_hash: str,
                 infotext: str, compiled_prompt: str | None = None,
-                compiled_negative_prompt: str | None = None):
+                compiled_negative_prompt: str | None = None, lineage: dict | None = None):
     """Index a saved image.
 
-    `compiled_prompt` is what the model was actually conditioned on (comments
-    stripped, @PICK groups drawn); `prompt` stays the source prompt. Pass None
-    to keep whatever was recorded before (re-indexing a file cannot re-derive
-    the draw), "" to record "none".
+    `compiled_prompt` is the prompt as it was written with the @PICK groups drawn
+    (comments, disabled groups and every #if branch stay); `prompt` stays the
+    untouched source. Pass None to keep whatever was recorded before (re-indexing
+    a file cannot re-derive the draw), "" to record "none".
+
+    `lineage` is the gallery_lineage.describe() dict (op + parent); None means
+    "derive the op from the path/infotext", which is what re-indexing does.
     """
     if is_removebg_attachment_path(path):
         return
@@ -1472,12 +1476,17 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
             ),
         )
         conn.commit()
+    if lineage is None:
+        from modules import gallery_lineage
+
+        lineage = gallery_lineage.describe(None, path, infotext=infotext)
     gallery_bridge.on_index_image(
         path, file_mtime, prompt, negative_prompt, seed, steps, sampler,
         cfg_scale, width, height, model_name, model_hash, infotext,
         # None (nothing known about this image) keeps whatever gallery.db recorded
         compiled_prompt=compiled_prompt if carried else None,
         compiled_negative_prompt=compiled_negative_prompt if carried else None,
+        lineage=lineage,
     )
 
 

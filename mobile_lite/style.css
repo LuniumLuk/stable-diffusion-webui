@@ -561,6 +561,42 @@ body.mask-editing { overflow: hidden; }
   padding: 0 4px;
 }
 
+/* lineage capsules: how this image was made, then how its parent was */
+.gallery-grid .thumb .lineage {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: calc(100% - 26px);
+  pointer-events: none;
+}
+
+.gallery-grid .thumb .lineage .ls-op,
+.gallery-grid .thumb .lineage .ls-parent {
+  font-size: 9px;
+  line-height: 1.4;
+  padding: 0 4px;
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  color: #bae6fd;
+  background: rgba(8, 47, 73, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+}
+
+.gallery-grid .thumb .lineage .ls-parent {
+  font-size: 8px;
+  padding: 0 3px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(71, 85, 105, 0.7);
+}
+
 .gallery-more { text-align: center; color: var(--muted); font-size: 12px; padding: 10px; }
 
 @media (min-width: 620px) { .gallery-grid { grid-template-columns: repeat(5, 1fr); } }

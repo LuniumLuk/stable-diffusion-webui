@@ -1077,6 +1077,7 @@
           id: _composerUuid(),
           name: ld.name || "Layer",
           src: ld.src,
+          path: ld.path || "",
           img,
           x: ld.x,
           y: ld.y,
@@ -4668,6 +4669,7 @@
       background_color: state.useColorBackground ? state.backgroundColor : null,
       layers: state.layers.map((l) => ({
         name: l.name,
+        path: l.path || "",
         src: typeof state.getLayerExportSrc === "function" ? state.getLayerExportSrc(l) : l.src,
         x: l.x,
         y: l.y,
@@ -4746,7 +4748,7 @@
         width: imageWidth,
         height: imageHeight,
         background_color: null,
-        layers: [{ name: fname, src, x: imageWidth / 2, y: imageHeight / 2,
+        layers: [{ name: fname, path: imagePath, src, x: imageWidth / 2, y: imageHeight / 2,
                    scale: 1, rot_deg: 0, mirror: false, opacity: 1, is_background: true }],
       });
       await state.restoreFromConfigJson(minimalPayload);

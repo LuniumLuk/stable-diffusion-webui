@@ -1,8 +1,8 @@
 """Compiled-prompt persistence in the gallery databases.
 
 Every generated image keeps two prompts: the source (as typed, comments and
-@PICK groups intact, written to the PNG infotext) and the compiled prompt that
-was actually sent to the model. ``index_image`` stores both in the legacy
+@PICK groups intact, written to the PNG infotext) and the compiled prompt (that
+same text with the @PICK groups drawn). ``index_image`` stores both in the legacy
 ``generated_images`` table and mirrors them into gallery.db ``items``; passing
 ``compiled_prompt=None`` (a re-index of an old file) must never wipe a value.
 

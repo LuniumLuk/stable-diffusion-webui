@@ -284,13 +284,14 @@ function wireGestures() {
 
 let layerId = 0;
 
-function addLayerFromImage(img, name, source) {
+function addLayerFromImage(img, name, source, path = '') {
   const fit = Math.min(1.6, (Math.min(compose.width, compose.height) * 0.8) / Math.max(img.width, img.height));
   const layer = {
     id: (layerId += 1),
     img,
     name: name || `layer ${layerId}`,
     srcDataUrl: source || img.src,
+    path,
     x: compose.width / 2,
     y: compose.height / 2,
     scale: Number.isFinite(fit) && fit > 0 ? fit : 1,
@@ -353,7 +354,7 @@ async function addFromGallery() {
   try {
     const loaded = await fetchImageData({ path: picked.path, url: picked.url, px: 1600 });
     const img = await loadImageElement(loaded.dataUrl);
-    addLayerFromImage(img, picked.path ? picked.path.split(/[\\/]/).pop() : 'gallery', loaded.dataUrl);
+    addLayerFromImage(img, picked.path ? picked.path.split(/[\\/]/).pop() : 'gallery', loaded.dataUrl, picked.path || '');
     maybeAutoSize();
   } catch (error) {
     toast(`could not load: ${error.message}`, 'err');
@@ -372,7 +373,7 @@ export async function addImageToCompose({ path, url, name } = {}) {
   try {
     const loaded = await fetchImageData({ path, url, px: 1600 });
     const img = await loadImageElement(loaded.dataUrl);
-    addLayerFromImage(img, name || (path ? path.split(/[\\/]/).pop() : 'gallery'), loaded.dataUrl);
+    addLayerFromImage(img, name || (path ? path.split(/[\\/]/).pop() : 'gallery'), loaded.dataUrl, path || '');
     maybeAutoSize();
     toast('added to compose', 'ok', 1600);
   } catch (error) {
@@ -451,6 +452,7 @@ function exportState() {
     height: compose.height,
     layers: compose.layers.map((layer) => ({
       name: layer.name,
+      path: layer.path || '',
       x: layer.x,
       y: layer.y,
       scale: layer.scale,

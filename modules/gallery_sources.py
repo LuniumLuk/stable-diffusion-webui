@@ -265,6 +265,8 @@ def parse_metadata(path: str, parser: str) -> dict:
             layers = data.get("layers") or []
             result["meta"] = {"composer": {"layers": len(layers), "width": data.get("width"),
                                            "height": data.get("height")}}
+            # the base layer is the upstream asset of the composition
+            result["lineage_parent"] = _composer_parent_hint(layers)
         except Exception:
             result["meta"] = {}
         return result
@@ -327,6 +329,41 @@ def _removebg_parent_stem(path: str) -> str | None:
     return None
 
 
+def _composer_parent_hint(layers: list) -> str:
+    """Path (or file name) of the composition's base layer."""
+    candidates = [layer for layer in (layers or []) if isinstance(layer, dict)]
+    if not candidates:
+        return ""
+    base = next((layer for layer in reversed(candidates) if layer.get("is_background")), None)
+    if base is None:
+        base = candidates[-1]
+    for key in ("path", "uri"):
+        value = str(base.get(key) or "").strip()
+        if value:
+            return value
+    return str(base.get("name") or "").strip()
+
+
+def _resolve_lineage_parent(path: str, source: str, meta: dict) -> tuple[str, str]:
+    """(parent_uid, parent_op) for a source whose inputs are known from disk."""
+    hint = ""
+    if source == "removebg":
+        hint = _removebg_parent_stem(path) or ""
+    elif source == "composition":
+        hint = str((meta or {}).get("lineage_parent") or "").strip()
+    if not hint:
+        return "", ""
+    parent_id = gallery_db.resolve_item_id(hint)
+    if not parent_id:
+        parent_id = gallery_db.resolve_item_id(os.path.splitext(os.path.basename(hint))[0])
+    if not parent_id:
+        return "", ""
+    parent = gallery_db.get_item(parent_id)
+    if not parent or not parent.get("uid"):
+        return "", ""
+    return str(parent["uid"]), str(parent.get("op") or parent.get("source") or "")
+
+
 def index_item(path: str, source: str, parser: str) -> int | None:
     """Parse + upsert one file. Returns the item id (or None on failure)."""
     try:
@@ -336,6 +373,13 @@ def index_item(path: str, source: str, parser: str) -> int | None:
     rel = _rel(path)
     meta = parse_metadata(path, parser)
     width, height = image_size(path)
+    from modules import gallery_lineage
+
+    lineage = gallery_lineage.describe(None, path, infotext=meta["infotext"], source=source)
+    parent_uid, parent_op = _resolve_lineage_parent(path, source, meta)
+    if parent_uid and parent_uid.lower() != gallery_db.make_uid(source, rel).lower():
+        lineage["parent_uid"] = parent_uid
+        lineage["parent_op"] = parent_op
     fields = dict(
         path=path,
         rel_path=rel,
@@ -348,6 +392,9 @@ def index_item(path: str, source: str, parser: str) -> int | None:
         infotext=meta["infotext"],
         meta=meta["meta"],
     )
+    for key in ("op", "parent_uid", "parent_op"):
+        if lineage.get(key):
+            fields[key] = lineage[key]
     item_id = gallery_db.upsert_item(uid=gallery_db.make_uid(source, rel), source=source, **fields)
     # legacy key compatibility (filename stem convention used by the old DB/UI)
     stem_key = os.path.splitext(os.path.basename(path))[0].strip().lower()
@@ -374,8 +421,8 @@ def index_item(path: str, source: str, parser: str) -> int | None:
             if parent_id:
                 with gallery_db.get_conn() as conn:
                     conn.execute(
-                        "UPDATE items SET parent_id=?, variant=? WHERE id=?",
-                        (parent_id, "removebg", item_id),
+                        "UPDATE items SET variant=?, parent_id=? WHERE id=?",
+                        ("removebg", parent_id, item_id),
                     )
                     conn.commit()
     return item_id

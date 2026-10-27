@@ -5,8 +5,8 @@ import { emit, state } from './state.js';
 import { busy, openViewer, switchTab, toast } from './ui.js';
 
 /** Push an already-materialized image into the Image screen and switch to it. */
-export function useSourceAsImage({ dataUrl, width, height, name = 'image', meta = null }, { mode = 'img2img' } = {}) {
-  state.image.source = { dataUrl, width, height, name, meta };
+export function useSourceAsImage({ dataUrl, width, height, name = 'image', meta = null, uid = '' }, { mode = 'img2img' } = {}) {
+  state.image.source = { dataUrl, width, height, name, meta, uid };
   state.image.mode = mode;
   emit('image-source', state.image.source);
   emit('image-mode', mode);
@@ -42,6 +42,7 @@ export async function useAsImage(item, { mode = 'img2img', meta = undefined } = 
       height: loaded.height,
       name: item.path ? item.path.split(/[\\/]/).pop() : 'image',
       meta: meta === undefined ? metaFromItem(item) : meta,
+      uid: item.uid || item.key || '',
     }, { mode });
     return true;
   } catch (error) {

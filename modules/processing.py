@@ -213,6 +213,8 @@ class StableDiffusionProcessing:
 
     all_prompts: list = field(default=None, init=False)
     all_negative_prompts: list = field(default=None, init=False)
+    all_prompts_compiled: list = field(default=None, init=False)
+    all_negative_prompts_compiled: list = field(default=None, init=False)
     all_seeds: list = field(default=None, init=False)
     all_subseeds: list = field(default=None, init=False)
     iteration: int = field(default=0, init=False)
@@ -432,6 +434,10 @@ class StableDiffusionProcessing:
         """Macro values of the #if blocks for this job (see prompt_parser.stage_macros)."""
         return prompt_parser.stage_macros("img2img", inpaint=getattr(self, "image_mask", None) is not None)
 
+    def hr_prompt_condition_macros(self):
+        """Macros for the Hires. fix pass; only the txt2img job has one."""
+        return prompt_parser.stage_macros("hires_fix")
+
     def setup_prompts(self):
         if isinstance(self.prompt,list):
             self.all_prompts = self.prompt
@@ -467,13 +473,25 @@ class StableDiffusionProcessing:
         """Resolves the @PICK(...){...} groups of every prompt of this generation.
 
         Runs after the seeds are known (one draw per generated image), so a batch
-        count of 16 draws 16 times.  The with-comments copies used for PNG
-        metadata and gallery restore keep the untouched @PICK source: reloading
-        an image with its seed brings back the same keywords.
+        count of 16 draws 16 times.
+
+        Two lists come out of it.  `all_prompts_compiled` /
+        `all_negative_prompts_compiled` are the source prompts with the picks drawn
+        and nothing else touched: comments, the directive lines and every `#if` /
+        `#else` branch stay, so the gallery can show and round-trip the prompt as it
+        was written.  `all_prompts` / `all_negative_prompts` are that same text
+        resolved for the running stage and comment-stripped (a script that rewrote
+        the prompts keeps its own text), i.e. what scripts and the model work with.
+        Drawing before resolving keeps the keywords identical in both lists, even
+        when a @PICK group sits in a branch that does not run.
+
+        The untouched @PICK source is still what the PNG infotext and the gallery's
+        source column keep, so reloading an image with its seed brings back the same
+        keywords.
         """
         seeds = self.all_seeds if isinstance(self.all_seeds, (list, tuple)) else None
 
-        def expand(prompts, kind):
+        def draw(prompts, kind):
             if not prompts:
                 return prompts
 
@@ -488,26 +506,55 @@ class StableDiffusionProcessing:
 
             return picked
 
-        self.all_prompts = expand(self.all_prompts, 'pos')
-        self.all_negative_prompts = expand(self.all_negative_prompts, 'neg')
+        def resolve(prompts, macros):
+            return [strip_prompt_comments(pr) for pr in prompt_parser.apply_prompt_conditions(prompts, macros)]
 
-        hr_prompts = getattr(self, 'all_hr_prompts', None)
-        if hr_prompts:
-            self.all_hr_prompts = expand(hr_prompts, 'pos')
+        def compile_lists(kind, source_attr, model_attr, macros):
+            source = getattr(self, source_attr, None)
+            model = getattr(self, model_attr, None)
+            if not source and not model:
+                return
 
-        hr_negative_prompts = getattr(self, 'all_hr_negative_prompts', None)
-        if hr_negative_prompts:
-            self.all_hr_negative_prompts = expand(hr_negative_prompts, 'neg')
+            if source and model and len(source) == len(model):
+                compiled = draw(list(source), kind)
+                if resolve(list(source), macros) == list(model):
+                    # nothing touched the prompts since setup_prompts(): the model text
+                    # is the same draw, resolved for the running stage
+                    model = resolve(compiled, macros)
+                else:
+                    # a script rewrote the prompts (the Comments script strips more than
+                    # setup_prompts does): keep its text and draw on it, so the
+                    # generation is exactly what the script asked for
+                    model = draw(model, kind)
+            else:
+                # no source to fall back on (a script built the prompts itself)
+                compiled = draw(model, kind)
+                model = compiled
+            setattr(self, model_attr, model)
+            setattr(self, model_attr + '_compiled', compiled)
+
+        macros = self.prompt_condition_macros()
+        compile_lists('pos', 'all_prompts_with_comments', 'all_prompts', macros)
+        compile_lists('neg', 'all_negative_prompts_with_comments', 'all_negative_prompts', macros)
+
+        hr_macros = self.hr_prompt_condition_macros()
+        compile_lists('pos', 'all_hr_prompts_with_comments', 'all_hr_prompts', hr_macros)
+        compile_lists('neg', 'all_hr_negative_prompts_with_comments', 'all_hr_negative_prompts', hr_macros)
 
     def compiled_prompts_for_image(self, batch_index: int):
-        """(prompt, negative prompt) actually sent to the model for one image.
+        """(prompt, negative prompt) of one image as it was written, picks drawn.
 
-        `all_prompts` / `all_negative_prompts` hold the compiled prompts (styles
-        applied, comments stripped, @PICK groups resolved); the per-batch
-        `prompts` list keeps the source. Returns (None, None) when the lists do
-        not line up, so the gallery simply records nothing.
+        `all_prompts_compiled` / `all_negative_prompts_compiled` hold the compiled
+        prompts: the source prompt (styles applied) with the @PICK groups drawn and
+        nothing else changed - comments and every `#if` / `#elseif` / `#else` /
+        `#endif` line with all its branches stay, so the gallery shows the prompt as
+        the user wrote it plus the keywords that were drawn.  The per-batch `prompts`
+        list keeps the untouched source and `all_prompts` the text scripts and the
+        conditioner work with (resolved for the stage, comment-stripped).  Returns
+        (None, None) when the lists do not line up, so the gallery simply records
+        nothing.
         """
-        prompts = self.all_prompts if isinstance(self.all_prompts, (list, tuple)) else None
+        prompts = self.all_prompts_compiled if isinstance(getattr(self, 'all_prompts_compiled', None), (list, tuple)) else None
         if not prompts:
             return None, None
 
@@ -515,7 +562,7 @@ class StableDiffusionProcessing:
         if not 0 <= index < len(prompts):
             return None, None
 
-        negatives = self.all_negative_prompts if isinstance(self.all_negative_prompts, (list, tuple)) else None
+        negatives = self.all_negative_prompts_compiled if isinstance(getattr(self, 'all_negative_prompts_compiled', None), (list, tuple)) else None
         negative = negatives[index] if negatives and index < len(negatives) else None
         return prompts[index], negative
 
@@ -579,8 +626,10 @@ class StableDiffusionProcessing:
         self.prompts = prompt_parser.apply_prompt_conditions(self.prompts, macros)
         self.negative_prompts = prompt_parser.apply_prompt_conditions(self.negative_prompts, macros)
 
-        prompts = prompt_parser.SdConditioning(self.prompts, width=self.width, height=self.height)
-        negative_prompts = prompt_parser.SdConditioning(self.negative_prompts, width=self.width, height=self.height, is_negative_prompt=True)
+        # the compiled prompts keep the #if directives (gallery, "send to" round trip):
+        # the model is conditioned on the text with the framing lines dropped
+        prompts = prompt_parser.SdConditioning(prompt_parser.without_condition_directives(self.prompts), width=self.width, height=self.height)
+        negative_prompts = prompt_parser.SdConditioning(prompt_parser.without_condition_directives(self.negative_prompts), width=self.width, height=self.height, is_negative_prompt=True)
 
         sampler_config = sd_samplers.find_sampler_config(self.sampler_name)
         total_steps = sampler_config.total_steps(self.steps) if sampler_config else self.steps
@@ -1060,6 +1109,16 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
     devices.torch_gc()
 
+    # Bind the upstream asset before p.init() resizes the init image: the pin
+    # match needs the pixels the client actually sent.
+    try:
+        from modules import gallery_lineage
+
+        gallery_lineage.attach(p)
+        gallery_lineage.fill_parent_op(p)
+    except Exception:
+        pass
+
     seed = get_fixed_seed(p.seed)
     subseed = get_fixed_seed(p.subseed)
 
@@ -1227,8 +1286,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             for i, x_sample in enumerate(x_samples_ddim):
                 p.batch_index = i
-                # what the model was conditioned on for this image (source prompt lives
-                # in the infotext; this one is stored by the gallery alongside it)
+                # the prompt as written with the @PICK groups drawn (the untouched
+                # source lives in the infotext; the gallery stores this one next to it)
                 compiled_prompt, compiled_negative_prompt = p.compiled_prompts_for_image(i)
 
                 x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
@@ -1903,9 +1962,6 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             return self.hr_prompt_condition_macros()
         return prompt_parser.stage_macros("txt2img")
 
-    def hr_prompt_condition_macros(self):
-        return prompt_parser.stage_macros("hires_fix")
-
     def setup_prompts(self):
         super().setup_prompts()
 
@@ -1950,8 +2006,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         self.hr_prompts = prompt_parser.apply_prompt_conditions(self.hr_prompts, macros)
         self.hr_negative_prompts = prompt_parser.apply_prompt_conditions(self.hr_negative_prompts, macros)
 
-        hr_prompts = prompt_parser.SdConditioning(self.hr_prompts, width=self.hr_upscale_to_x, height=self.hr_upscale_to_y)
-        hr_negative_prompts = prompt_parser.SdConditioning(self.hr_negative_prompts, width=self.hr_upscale_to_x, height=self.hr_upscale_to_y, is_negative_prompt=True)
+        hr_prompts = prompt_parser.SdConditioning(prompt_parser.without_condition_directives(self.hr_prompts), width=self.hr_upscale_to_x, height=self.hr_upscale_to_y)
+        hr_negative_prompts = prompt_parser.SdConditioning(prompt_parser.without_condition_directives(self.hr_negative_prompts), width=self.hr_upscale_to_x, height=self.hr_upscale_to_y, is_negative_prompt=True)
 
         sampler_config = sd_samplers.find_sampler_config(self.hr_sampler_name or self.sampler_name)
         steps = steps_override if steps_override is not None else (self.hr_second_pass_steps or self.steps)

@@ -148,6 +148,7 @@ def init_db() -> None:
               tags_text TEXT DEFAULT '',
               meta_json TEXT DEFAULT '{}',
               sha256 TEXT,
+              op TEXT, parent_uid TEXT, parent_op TEXT,
               indexed_at TEXT, updated_at TEXT);
 
             CREATE INDEX IF NOT EXISTS idx_items_source ON items(source);
@@ -205,6 +206,16 @@ def init_db() -> None:
               legacy_key TEXT PRIMARY KEY, item_id INTEGER);
             CREATE INDEX IF NOT EXISTS idx_legacy_item ON legacy_keys(item_id);
 
+            -- assets sent to img2img/inpaint/... (upstream candidates for the
+            -- image that generation is about to save); see gallery_lineage
+            CREATE TABLE IF NOT EXISTS lineage_pins(
+              id INTEGER PRIMARY KEY,
+              uid TEXT NOT NULL, path TEXT,
+              pixel_sha TEXT, dhash TEXT, color TEXT,
+              width INTEGER, height INTEGER,
+              origin TEXT, pinned_at REAL, consumed_at REAL);
+            CREATE INDEX IF NOT EXISTS idx_lineage_pins_time ON lineage_pins(pinned_at);
+
             CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
               prompt, negative_prompt, infotext, tags_text, uid UNINDEXED);
             """
@@ -213,10 +224,17 @@ def init_db() -> None:
         item_cols = {row[1] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
         if "album_id" not in item_cols:
             conn.execute("ALTER TABLE items ADD COLUMN album_id INTEGER")
-        # compiled prompt = what the model was conditioned on (comments stripped, @PICK
-        # drawn); the prompt column keeps the source. Empty for images indexed before
-        # this column existed.
+        # compiled prompt = the prompt as written with the @PICK groups drawn
+        # (comments, disabled groups and every #if branch stay); the prompt column
+        # keeps the untouched source. Empty for images indexed before this column
+        # existed.
         for column in ("compiled_prompt", "compiled_negative_prompt"):
+            if column not in item_cols:
+                conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
+        # lineage: how this file was produced, and which asset it was derived from
+        # (parent_uid survives a purge of the parent row; parent_op is denormalised
+        # so the card's second capsule needs no join)
+        for column in ("op", "parent_uid", "parent_op"):
             if column not in item_cols:
                 conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_items_album ON items(album_id)")
@@ -232,6 +250,27 @@ def init_db() -> None:
         conn.commit()
     global _ready
     _ready = True
+    _backfill_lineage_once()
+
+
+def _backfill_lineage_once() -> None:
+    """Derive `op` (and the removebg parent links) for rows indexed before this.
+
+    New saves record lineage themselves. Rows written by the legacy migration
+    or by pre-lineage code have `op` NULL, which is what this checks for: the
+    query is an EXISTS scan that stops at the first NULL, so it costs nothing
+    once every row has been backfilled (and heals after a later migration).
+    """
+    try:
+        with get_conn() as conn:
+            pending = conn.execute("SELECT EXISTS(SELECT 1 FROM items WHERE op IS NULL)").fetchone()[0]
+        if not pending:
+            return
+        from modules import gallery_lineage
+
+        gallery_lineage.backfill()
+    except Exception:
+        pass
 
 
 def _backfill_engine_keys(conn: sqlite3.Connection) -> None:
@@ -333,7 +372,12 @@ _UPSERT_FIELDS = (
     "source", "kind", "path", "rel_path", "alias_path", "mtime", "file_size",
     "width", "height", "prompt", "negative_prompt", "compiled_prompt",
     "compiled_negative_prompt", "infotext", "sha256", "variant",
+    "op", "parent_uid", "parent_op",
 )
+
+# None means "unknown" for these: re-indexing a file must never wipe a value
+# that a generation recorded (same contract as compiled_prompt).
+_LINEAGE_FIELDS = ("op", "parent_uid", "parent_op")
 
 
 def upsert_item(uid=None, source="txt2img", rel_path=None, path=None, **fields) -> int:
@@ -341,6 +385,9 @@ def upsert_item(uid=None, source="txt2img", rel_path=None, path=None, **fields) 
     ensure_ready()
     if not uid:
         uid = make_uid(source, rel_path or path or "")
+    if fields.get("parent_uid") and str(fields["parent_uid"]).lower() == str(uid).lower():
+        # an image can never be its own ancestor (re-index of a derived file)
+        fields = {k: v for k, v in fields.items() if k not in _LINEAGE_FIELDS or k == "op"}
     values = {}
     if rel_path is not None:
         values["rel_path"] = rel_path
@@ -348,6 +395,8 @@ def upsert_item(uid=None, source="txt2img", rel_path=None, path=None, **fields) 
         values["path"] = path
     for k in _UPSERT_FIELDS:
         if k in fields:
+            if k in _LINEAGE_FIELDS and fields[k] is None:
+                continue
             values[k] = fields[k]
     values["source"] = source
     meta = fields.get("meta")
@@ -369,8 +418,10 @@ def upsert_item(uid=None, source="txt2img", rel_path=None, path=None, **fields) 
             item_id = _insert_item(conn, uid, values, now)
         if "parent_uid" in fields and fields["parent_uid"]:
             parent = conn.execute("SELECT id FROM items WHERE uid=?", (fields["parent_uid"],)).fetchone()
-            if parent:
-                conn.execute("UPDATE items SET parent_id=? WHERE id=?", (int(parent[0]), item_id))
+            conn.execute(
+                "UPDATE items SET parent_id=? WHERE id=?",
+                (int(parent[0]) if parent else None, item_id),
+            )
         _refresh_fts(conn, item_id)
         conn.commit()
     return item_id
@@ -495,6 +546,9 @@ def set_sha256(item_id: int, sha256: str) -> None:
 
 def delete_item(item_id: int) -> None:
     with get_conn() as conn:
+        # a purged parent leaves its children pointing at nothing; parent_uid on
+        # the child keeps the (now unresolvable) reference for the UI
+        conn.execute("UPDATE items SET parent_id=NULL WHERE parent_id=?", (int(item_id),))
         conn.execute("DELETE FROM item_tags WHERE item_id=?", (int(item_id),))
         conn.execute("DELETE FROM legacy_keys WHERE item_id=?", (int(item_id),))
         conn.execute("DELETE FROM state_events WHERE item_id=?", (int(item_id),))

@@ -180,8 +180,8 @@ def expand_prompt_picks(prompt: str, rng=None) -> str:
 #
 # * whole-line comments - a line whose first non-whitespace character is '#'
 #   (a line starting with '#' followed by '(', '[' or '<' is NOT a comment, it
-#   starts with a disabled keyword group; '#if' blocks are resolved before the
-#   stripper runs and are therefore never comments either);
+#   starts with a disabled keyword group; a '#if' / '#elseif' / '#else' / '#endif'
+#   line is a stage directive, not a comment either);
 # * inline disabled groups - #(keyword), #[keyword], #<lora:x:1> anywhere in a
 #   line; the group is dropped, the rest of the line is kept.
 
@@ -189,21 +189,27 @@ def expand_prompt_picks(prompt: str, rng=None) -> str:
 def strip_prompt_comments(text: str) -> str:
     """Removes prompt comments and disabled keywords from a prompt.
 
-    Called when a prompt is compiled, so that scripts.process() and the diffusion
-    model always receive clean prompts.  The originals (with comments) are
-    preserved in all_prompts_with_comments / all_negative_prompts_with_comments
-    for PNG metadata and gallery restore.
+    Used to build the prompt lists scripts and the model work with, so
+    scripts.process() and the diffusion model always receive clean prompts.  The
+    originals (with comments) are preserved in all_prompts_with_comments /
+    all_negative_prompts_with_comments for PNG metadata and gallery restore, and
+    the source with the @PICK groups drawn is what the gallery stores as the
+    compiled prompt.  The '#if' block directives are kept here
+    (strip_condition_directives removes them just before conditioning).
 
     >>> strip_prompt_comments("a, b\\n# comment\\n#(off), c")
     'a, b\\nc'
     >>> strip_prompt_comments("#if TXT2IMG")
-    ''
+    '#if TXT2IMG'
     """
     if not text:
         return text
 
-    # whole-line comments (keep lines that start with a disabled keyword group)
-    lines = [line for line in text.split('\n') if not re.match(r'^\s*#(?![\[(<])', line)]
+    # whole-line comments (keep disabled keyword groups and stage directives)
+    lines = [
+        line for line in text.split('\n')
+        if not re.match(r'^\s*#(?![\[(<])', line) or re_condition_directive.match(line) is not None
+    ]
     out = '\n'.join(lines)
 
     # inline disabled groups; loop because the pattern unwraps one nesting level per pass
@@ -464,18 +470,28 @@ def condition_blocks(prompt: str) -> list:
 def expand_prompt_conditions(prompt: str, macros=None) -> str:
     """Resolves every #if / #elseif / #else / #endif block of `prompt` for `macros`.
 
+    Only the text of the branch that runs survives, but *every* directive line of an
+    emitted block stays: the `#if` line, each `#elseif` / `#else` line (with an empty
+    body when that branch did not run) and the `#endif` line.  The model-facing prompt
+    list therefore keeps the whole macro skeleton - scripts and the editors still see
+    which alternatives existed and a second resolution is stable - while the model
+    never sees the directives: strip_condition_directives() removes them right before
+    the conditioning is built.  The gallery's compiled prompt does not go through
+    this function at all (it keeps the prompt as written with the picks drawn).
+
     Blocks may be nested.  A block that is not closed (or whose #elseif / #else /
     #endif has no #if) leaves the whole prompt as typed, so nothing is silently
-    dropped while the editor flags the mistake.  An expression that cannot be
-    evaluated counts as false, which keeps the prompt free of directive lines.
+    dropped while the editor flags the mistake.  A block inside a branch that did not
+    run is dropped together with its own directives.  An expression that cannot be
+    evaluated counts as false.
 
     >>> prompt = "#if TXT2IMG\\na\\n#elseif HIRES_FIX\\nb\\n#else\\nc\\n#endif"
     >>> expand_prompt_conditions(prompt, stage_macros("txt2img"))
-    'a'
+    '#if TXT2IMG\\na\\n#elseif HIRES_FIX\\n#else\\n#endif'
     >>> expand_prompt_conditions(prompt, stage_macros("hires_fix"))
-    'b'
+    '#if TXT2IMG\\n#elseif HIRES_FIX\\nb\\n#else\\n#endif'
     >>> expand_prompt_conditions(prompt, stage_macros("img2img"))
-    'c'
+    '#if TXT2IMG\\n#elseif HIRES_FIX\\n#else\\nc\\n#endif'
     >>> expand_prompt_conditions("#if TXT2IMG\\na", stage_macros("txt2img"))
     '#if TXT2IMG\\na'
     >>> expand_prompt_conditions("no blocks, here (x:1.2)", stage_macros("txt2img"))
@@ -502,7 +518,10 @@ def expand_prompt_conditions(prompt: str, macros=None) -> str:
         if keyword == "if":
             parent = all(frame["active"] for frame in frames)
             take = evaluate_condition(expression, macros)
-            frames.append({"parent": parent, "taken": take, "active": parent and take, "else": False})
+            # a block inside a dropped branch is dropped together with its directives
+            if parent:
+                lines.append(line)
+            frames.append({"parent": parent, "taken": take, "active": parent and take, "else": False, "emit": parent})
             continue
 
         if not frames:
@@ -514,7 +533,10 @@ def expand_prompt_conditions(prompt: str, macros=None) -> str:
             if frame["else"]:
                 broken = True
                 continue
-            if frame["taken"]:
+            # the line stays even when this branch does not run: only its body drops
+            if frame["emit"]:
+                lines.append(line)
+            if frame["taken"] or not frame["parent"]:
                 frame["active"] = False
                 continue
             take = evaluate_condition(expression, macros)
@@ -529,8 +551,12 @@ def expand_prompt_conditions(prompt: str, macros=None) -> str:
             frame["else"] = True
             frame["active"] = frame["parent"] and not frame["taken"]
             frame["taken"] = True
+            if frame["emit"]:
+                lines.append(line)
             continue
 
+        if frame["emit"]:
+            lines.append(line)
         frames.pop()
 
     if broken or frames:
@@ -543,11 +569,56 @@ def apply_prompt_conditions(prompts, macros) -> list[str]:
     """expand_prompt_conditions() over a prompt list; non-strings pass through.
 
     >>> apply_prompt_conditions(["#if TXT2IMG\\na\\n#endif", None], stage_macros("txt2img"))
-    ['a', None]
+    ['#if TXT2IMG\\na\\n#endif', None]
     """
     if not prompts:
         return prompts
     return [expand_prompt_conditions(pr, macros) if isinstance(pr, str) else pr for pr in prompts]
+
+
+def strip_condition_directives(text: str) -> str:
+    """Removes the #if / #elseif / #else / #endif lines from a compiled prompt.
+
+    This is the text the diffusion model is conditioned on: the blocks are already
+    resolved, so only the framing lines are left to drop.
+
+    >>> strip_condition_directives("#if TXT2IMG\\na\\n#endif")
+    'a'
+    >>> strip_condition_directives("no blocks, here")
+    'no blocks, here'
+    """
+    if not text or "#" not in text:
+        return text
+
+    lines = [line for line in text.split("\n") if re_condition_directive.match(line) is None]
+    return "\n".join(lines)
+
+
+def without_condition_directives(prompts) -> list[str]:
+    """strip_condition_directives() over a prompt list; non-strings pass through.
+
+    >>> without_condition_directives(["#if TXT2IMG\\na\\n#endif", None])
+    ['a', None]
+    """
+    if not prompts:
+        return prompts
+    return [strip_condition_directives(pr) if isinstance(pr, str) else pr for pr in prompts]
+
+
+def compile_prompt(text: str, macros=None) -> str:
+    """The text a model is conditioned on: resolved blocks, no comments, no directives.
+
+    The *compiled prompt* the gallery stores is something else: it is the prompt as
+    written with the @PICK groups drawn (see StableDiffusionProcessing.
+    compiled_prompts_for_image).  This function is the last step before the
+    conditioning is built.
+
+    >>> compile_prompt("#if TXT2IMG\\n# note\\na\\n#endif", stage_macros("txt2img"))
+    'a'
+    >>> compile_prompt("#if TXT2IMG\\na\\n#else\\nb\\n#endif", stage_macros("img2img"))
+    'b'
+    """
+    return strip_condition_directives(strip_prompt_comments(expand_prompt_conditions(text, macros)))
 
 
 def get_pick_rng(seed, index=0, kind="prompt"):

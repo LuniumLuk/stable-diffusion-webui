@@ -373,17 +373,23 @@ export function analyzeConditionLine(line) {
 export const CONDITION_PART_VALUES = ['FACE', 'FEET', 'HANDS', '0', 'NONE'];
 
 const CONDITION_HEAD_RE = /^[ \t]*#(if|elif|elseif)(?![A-Za-z0-9_])(.*)$/i;
-const CONDITION_VALUE_RE = /([A-Za-z_][A-Za-z0-9_]*)[ \t]*(==|!=)[ \t]*$/;
+// the enum / boolean values only show once the space after '==' / '!=' is typed
+const CONDITION_VALUE_RE = /([A-Za-z_][A-Za-z0-9_]*)[ \t]*(==|!=)[ \t]+$/;
+// an operator typed without its trailing space: stay quiet until the space arrives
+const CONDITION_OPERATOR_TAIL_RE = /(==|!=|&&|\|\|)$/;
 
 /**
  * Inline completions for a `#if` / `#elseif` condition.
  *
  * `before` is the text of the current line up to the caret.  Returns null when the
  * line is not a condition, otherwise `{ from, options, macro }`:
- *   - after `==` / `!=` of POSE_INPAINT_PART: the enum values (FACE / FEET / HANDS / 0);
- *   - anywhere else: the macro names.
- * `from` is the absolute offset of the fragment being replaced, `options` carry the
- * `label` and the `detail` the dropdown shows.  The list is filtered by what is typed.
+ *   - after `POSE_INPAINT_PART == ` / `!= ` (space included): the enum values
+ *     (FACE / FEET / HANDS / 0 / NONE), or `1` / `0` for the other macros;
+ *   - anywhere else in the expression: the macro names.
+ * The list only opens once the space after `#if` / `#elseif` is typed, and it stays
+ * quiet right after an operator until that operator's space arrives.  `from` is the
+ * offset of the fragment being replaced, `options` carry the `label` and the `detail`
+ * the dropdown shows; the list is filtered by what is typed.
  */
 export function conditionCompletions(before) {
   const text = String(before == null ? '' : before);
@@ -391,6 +397,9 @@ export function conditionCompletions(before) {
   if (!head) return null;
 
   const rest = head[2];
+  // the dropdown opens on '#if ' / '#elseif ', not while the directive is still '#if'
+  if (!/^[ \t]/.test(rest)) return { from: text.length, options: [], macro: '' };
+
   const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(rest);
   const typedText = fragment ? fragment[0] : '';
   const from = text.length - typedText.length;
@@ -412,6 +421,9 @@ export function conditionCompletions(before) {
       }));
     return { from, options, macro };
   }
+
+  // '… ==' / '… &&' typed but not the space yet: keep the dropdown closed
+  if (CONDITION_OPERATOR_TAIL_RE.test(upToFragment)) return { from, options: [], macro: '' };
 
   const options = CONDITION_MACRO_NAMES
     .filter((name) => !typed || name.startsWith(typed))

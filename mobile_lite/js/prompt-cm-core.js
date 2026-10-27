@@ -24,8 +24,10 @@
  *                            into a `⋯ N lines` chip, which unfolds on click;
  *   - 🏷 macro dropdown    — `macroCompletion: true` (desktop) suggests the `#if` macros
  *                            (TXT2IMG / HIRES_FIX / IMG2IMG / INPAINT / POSE_INPAINT /
- *                            POSE_INPAINT_PART) inline, and the enum values after
- *                            `POSE_INPAINT_PART ==`, instead of the keyword pool;
+ *                            POSE_INPAINT_PART) inline once the space after the
+ *                            directive is typed, and the enum values after
+ *                            `POSE_INPAINT_PART == ` (space), instead of the keyword
+ *                            pool; a bare `==` / `&&` waits for its space too;
  *   - drag to rearrange    — TOUCH: press a keyword and move it (ghost + drop bar at the
  *                            top-level comma slots; separators repaired).  MOUSE: left
  *                            drags stay native SELECTION; Alt+drag rearranges instead;
@@ -287,9 +289,11 @@ export async function createPromptCM({
   /**
    * Fold column (desktop `foldGutter: true`), rendered LEFT of the line numbers:
    *   - ▾ / ▸ on a `#if … #endif` block (the `#endif` folds into the start line),
-   *   - ▾ / ▸ on a `# ---` section starter (the section folds up to the next marker),
+   *   - ▾ / ▸ on a `# ---` section starter (the section folds up to the line before
+   *     the next marker, so that next marker keeps its own line and stays usable),
    *   - nothing on the other lines.
-   * A folded block is replaced by a `⋯ N lines` chip that unfolds on click.
+   * A folded block is replaced by a `⋯ N lines` chip that unfolds on click; the line
+   * after the fold never joins the folded line.
    *
    * Folds are kept as the document position of their start line, so an edit above the
    * block keeps it folded (the position is mapped through the change) and a block whose
@@ -415,7 +419,9 @@ export async function createPromptCM({
       const line = stateA.doc.lineAt(pos);
       const end = regions.get(line.number - 1);
       if (end === undefined || end <= line.number) continue;   // nothing to hide any more
-      const to = end < stateA.doc.lines ? stateA.doc.line(end + 1).from : stateA.doc.length;
+      // hide up to the END of the last covered line, so the next line (a following
+      // '# ---' marker in particular) keeps its own line instead of joining the fold
+      const to = stateA.doc.line(Math.min(end, stateA.doc.lines)).to;
       if (to <= line.to) continue;
       marks.push(Decoration.line({ class: 'pedit-cm-folded-line' }).range(line.from));
       marks.push(Decoration.replace({

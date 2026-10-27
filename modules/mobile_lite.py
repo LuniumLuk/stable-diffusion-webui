@@ -626,6 +626,11 @@ def _run_job(payload: dict, tab: str) -> dict:
     p.outpath_samples = outpath_samples
     p.outpath_grids = outpath_grids
 
+    # the app knows which gallery asset it loaded into the Image screen
+    hint = payload.get("lineage") or {}
+    if isinstance(hint, dict) and str(hint.get("uid") or "").strip():
+        p.lineage_parent_uid = str(hint["uid"]).strip()
+
     progress_module.add_task_to_queue(task_id)
     with queue_lock:
         # single GPU: the Qwen / Krea 2 sidecars (~10GB+) must release the VRAM before A1111 runs
@@ -1238,14 +1243,13 @@ def _run_qwen_job(payload: dict) -> dict:
 
     task_id = _normalize_task_id(payload.get("task_id"))
     from modules import prompt_parser
-    from modules.processing import strip_prompt_comments
 
     # same contract as the txt2img/img2img prompt editors: the #if blocks are resolved
-    # for this single stage, then '#' comment lines and #(...) disabled keyword groups
-    # are stripped before the prompt reaches the model
+    # for this single stage, then '#' comment lines, #(...) disabled keyword groups and
+    # the directive lines themselves are stripped before the prompt reaches the model
     macros = prompt_parser.stage_macros("txt2img")
-    prompt = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("prompt") or ""), macros))).strip()
-    negative = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("negative_prompt") or ""), macros))).strip()
+    prompt = prompt_parser.compile_prompt(str(payload.get("prompt") or ""), macros).strip()
+    negative = prompt_parser.compile_prompt(str(payload.get("negative_prompt") or ""), macros).strip()
     refs = [
         str(item)
         for item in (payload.get("refs") or [])
@@ -1734,14 +1738,13 @@ def _run_krea2_job(payload: dict) -> dict:
 
     task_id = _normalize_task_id(payload.get("task_id"))
     from modules import prompt_parser
-    from modules.processing import strip_prompt_comments
 
     # same contract as the txt2img/img2img prompt editors: the #if blocks are resolved
-    # for this single stage, then '#' comment lines and #(...) disabled keyword groups
-    # are stripped before the prompt reaches the model
+    # for this single stage, then '#' comment lines, #(...) disabled keyword groups and
+    # the directive lines themselves are stripped before the prompt reaches the model
     macros = prompt_parser.stage_macros("txt2img")
-    prompt = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("prompt") or ""), macros))).strip()
-    negative = strip_prompt_comments(str(prompt_parser.expand_prompt_conditions(str(payload.get("negative_prompt") or ""), macros))).strip()
+    prompt = prompt_parser.compile_prompt(str(payload.get("prompt") or ""), macros).strip()
+    negative = prompt_parser.compile_prompt(str(payload.get("negative_prompt") or ""), macros).strip()
     # Krea 2 edit works best with a single reference; allow a few for composition.
     refs = [
         str(item)
@@ -2038,6 +2041,10 @@ def _normalize_item(row: dict, view: str) -> dict:
         "imagemaker": bool(row.get("imagemaker")),
         "scan_only": bool(row.get("scan_only")),
     }
+    for key in ("uid", "op", "op_label", "parent_uid", "parent_op", "parent_label",
+                "parent_state", "parent_exists"):
+        if key in row and row[key] is not None:
+            item[key] = row[key]
     if path and os.path.exists(path):
         item["thumb"] = _cached_image_url(path, mtime, "thumb")
         item["preview"] = _cached_image_url(path, mtime, "viewer")
@@ -2073,6 +2080,10 @@ def _gallery_row_from_v2(row: dict) -> dict:
         "imagemaker": source == "image_maker",
         # non-A1111 sources are scan-only: archive + send actions, never rating
         "scan_only": source not in _RATED_SOURCES,
+        "uid": row.get("uid") or "",
+        "op": row.get("op") or "",
+        "parent_uid": row.get("parent_uid") or "",
+        "parent_op": row.get("parent_op") or "",
     }
 
 
@@ -2384,6 +2395,14 @@ def _gallery_page(view: str, query: str, page: int, page_size: int, album: int =
 
     items = [_normalize_item(dict(row), view) for row in rows]
 
+    # Lineage capsule data (op + parent) for every view, one batched lookup.
+    try:
+        from modules import gallery_lineage
+
+        gallery_lineage.decorate_items(items)
+    except Exception:
+        pass
+
     # Batch-annotate state flags for the page (single query per flag set).
     paths = {item["path"] for item in items if item["path"]}
     keys = [item["key"] for item in items if item["key"]]
@@ -2691,6 +2710,41 @@ def register_routes(app):
         view: str = "all", q: str = "", page: int = 1, size: int = 48, album: int = 0
     ):
         return _gallery_page(view, q, page, size, album)
+
+    @app.get("/mlite/api/gallery/item")
+    def mlite_gallery_item(id: str = ""):
+        """One gallery item, for the viewer's "jump to parent" along a lineage."""
+        _ensure_db()
+        from modules import gallery_db, gallery_lineage
+
+        item_id = gallery_db.resolve_item_id(id)
+        if not item_id:
+            raise HTTPException(status_code=404, detail="item not found")
+        item = gallery_db.get_item(item_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="item not found")
+        item["meta"] = gallery_db.get_item_meta(item_id)
+        row = _gallery_row_from_v2(item)
+        row["file_mtime"] = item.get("mtime")
+        normalized = _normalize_item(row, "item")
+        gallery_lineage.decorate_items([normalized])
+        normalized["tags"] = gallery_db.get_tags([item_id]).get(item_id, [])
+        return normalized
+
+    @app.post("/mlite/api/lineage/pin")
+    def mlite_lineage_pin(payload: dict = Body(default={})):
+        """Cache a reference of the asset being sent to img2img/inpaint."""
+        _ensure_db()
+        from modules import gallery_lineage
+
+        result = gallery_lineage.pin_item(
+            uid=payload.get("uid") or payload.get("key"),
+            path=payload.get("path"),
+            origin="mlite",
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="item not found")
+        return {"ok": True, **result}
 
     @app.post("/mlite/api/gallery/action")
     def mlite_gallery_action(payload: dict = Body(default={})):

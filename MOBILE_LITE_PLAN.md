@@ -457,17 +457,26 @@ the editors show it on a purple line with a `⑂` chip (chips) or `pedit-cm-cond
 decorations (CodeMirror) instead of the comment styling. The backend resolves the blocks per
 stage (`prompt_parser.expand_prompt_conditions`), so the same prompt serves the txt2img pass,
 Hires. fix, img2img, inpaint and every pose inpaint part; a `#if` line commented out with the 💬
-gutter becomes `# #if …` instead of losing its `#`.
+gutter becomes `# #if …` instead of losing its `#`. The gallery's compiled prompt is the prompt
+as written with the `@PICK` groups drawn and nothing else touched (comments, disabled groups
+and every branch stay), so the "send to" round trip keeps the macros; the branch is chosen only
+when the conditioning is built (`setup_conds` / `calculate_hr_conds`), where
+`prompt_parser.strip_condition_directives()` drops the directive lines and the comments are
+stripped too — same for the Qwen / Krea 2 sidecar calls, so the model never sees them.
 
 Two desktop-only CodeMirror options build on that (Mobile Lite keeps the plain editor):
 `foldGutter: true` adds a fold column **left of the line numbers** — `foldRegions()` in
 `prompt-parse.js` maps each `#if … #endif` block (nesting aware) and each `# ---` section to the
 lines it covers, ▾/▸ toggles the fold and the hidden lines become a `⋯ N lines` chip that
 unfolds on click; folds are stored by start-line position so they survive edits above them and
-drop out when the `#endif` / next marker disappears. `macroCompletion: true` makes the
+drop out when the `#endif` / next marker disappears. A fold always stops at the **end of its last
+covered line**, so the line after it — the next `# ---` marker in particular — keeps its own line
+and stays usable while the previous section is folded. `macroCompletion: true` makes the
 autocomplete source return the `#if` macros (with the "1 during …" detail) instead of the keyword
-pool, and the `POSE_INPAINT_PART` enum values after `==` / `!=` (`conditionCompletions()` in
-`prompt-syntax.js`).
+pool (`conditionCompletions()` in `prompt-syntax.js`). It stays quiet while the directive is
+still just `#if` and opens on the space after `#if` / `#elseif`; right after `==` / `!=` / `&&`
+it waits for that operator's space too, and then `POSE_INPAINT_PART == ` lists the enum values
+(`FACE` / `FEET` / `HANDS` / `0` / `NONE`) while a boolean macro lists `1` / `0`.
 
 ### 13.3 Gallery card quick actions
 

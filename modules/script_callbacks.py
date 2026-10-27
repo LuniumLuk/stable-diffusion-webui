@@ -30,8 +30,9 @@ class ImageSaveParams:
         """dictionary with parameters for image's PNG info data; infotext will have the key 'parameters'"""
 
         self.compiled_prompt = compiled_prompt
-        """prompt actually sent to the model for this image (comments stripped, @PICK groups
-        resolved), or None when the caller does not know it - e.g. Extras/upscale saves"""
+        """the prompt as it was written with the @PICK groups drawn (comments and
+        every #if branch stay), or None when the caller does not know it - e.g.
+        Extras/upscale saves"""
 
         self.compiled_negative_prompt = compiled_negative_prompt
         """same as compiled_prompt, for the negative prompt"""

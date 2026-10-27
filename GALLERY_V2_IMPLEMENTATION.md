@@ -150,13 +150,20 @@ plus the `endorsements` / `dislikes` copies):
 
 - **source** — what was typed, with `#` comments and `@PICK` groups intact; this is what
   the PNG infotext carries (and what older rows have).
-- **compiled** — what the model was actually conditioned on: comments stripped by
-  `strip_prompt_comments`, `@PICK` groups drawn by `apply_random_picks`, styles applied.
-  Produced by `StableDiffusionProcessing.compiled_prompts_for_image()` at save time and
+- **compiled** — the source prompt with the `@PICK` groups drawn (styles applied), and
+  nothing else changed: comments, disabled groups and every `#if` / `#elseif` / `#else` /
+  `#endif` line with all its branches stay, so the gallery shows the prompt as it was
+  written plus the keywords that were actually drawn. Produced by
+  `StableDiffusionProcessing.compiled_prompts_for_image()` at save time and
   handed to the `image_saved` callbacks through `ImageSaveParams.compiled_prompt`;
   `index_image` writes it to `generated_images` and mirrors it into `items`
   (`compiled_prompt` / `compiled_negative_prompt`). Empty for images indexed before the
   columns existed — the UI then falls back to the source prompt.
+
+The text the model is conditioned on is derived from that draw at conditioning time
+(`setup_conds` / `calculate_hr_conds`): `apply_prompt_conditions` picks the branch for the
+running stage, `strip_prompt_comments` drops the comments and
+`strip_condition_directives` the directive lines, so the model never sees a `#` line.
 
 A re-index (`index_image(compiled_prompt=None)`, `gallery_sources.index_item`) never
 clears a stored compiled prompt: the draw cannot be re-derived from the file. A fresh
@@ -168,6 +175,54 @@ it with the new source text. The gallery detail drawer has a Source / Compiled s
 infotext payload the prompt/negative block is swapped while `Steps: …` and the rest are
 kept. SD Lite mirrors the toggle (`ui.galleryPromptVariant`) in the gallery viewer and
 uses it for "Use as image / inpaint / text".
+
+## Image lineage
+
+Only `txt2img`, `qwen` and `krea2` create an image from nothing. Everything else
+(`img2img`, `inpaint`, pose inpaint, hires fix, composer, remove bg, …) transforms an
+upstream asset, and the gallery records that chain:
+
+- `items.op` — how this file was produced (`txt2img`, `hires-fix`, `img2img`, `inpaint`,
+  `pose-inpaint`, `compose`, `removebg`, engine ids, …). The live pipeline is
+  authoritative (`gallery_lineage.op_for_p`); re-indexed/legacy files fall back to the
+  infotext markers (`Pose inpaint:`, `Mask blur:`/`Inpaint area:`/`Masked content:`,
+  `Hires upscale:`) and otherwise to the source id.
+- `items.parent_uid` — the upstream asset, as a durable handle that also survives a purge
+  of the parent row (unlike `parent_id`, which is the int FK and is nulled on delete).
+- `items.parent_op` — the parent's op, denormalised so a card's second capsule needs no
+  join.
+
+How the link is made (`modules/gallery_lineage.py`):
+
+1. **Pin.** When an image is dropped into img2img/inpaint (desktop gallery, old gallery,
+   SD Lite) the client posts `/gallery/api/lineage/pin`. The pin stores the item, a pixel
+   sha256, an 8×8 dHash, the mean colour and the dimensions in `lineage_pins`
+   (`cache`-free, in gallery.db; 6 h TTL, 32 rows max).
+2. **Match.** `process_images_inner` calls `gallery_lineage.attach(p)` before `p.init()`
+   resizes the init image. Exact pixel hash wins; otherwise dHash within 4 bits + matching
+   aspect + matching mean colour (this is what makes SD Lite's downscaled upload match).
+   Batch img2img links by the exact input path, and mobile/API requests may carry
+   `lineage: {uid}` instead of relying on the pin. The parent is sticky for the job, so a
+   chained batch-mask inpaint keeps the original parent.
+3. **Record.** `on_image_saved` → `index_image(..., lineage=...)` →
+   `gallery_bridge.on_index_image` writes the columns. Re-indexing a file never clears a
+   recorded parent (`None` = unknown), and an image can never become its own parent.
+
+UI: both front-ends draw two capsules at the top-left of a card — the op, then the parent's
+op (smaller, omitted when there is no parent). An `endorsed` row is a *storage bucket*
+(a copy of an original), never a generation step: its family is derived from the retained
+infotext, and when nothing can be derived the capsule is omitted instead of printing
+"endorsed" next to the ★ badge. At small thumb sizes the capsules and the state badges
+pack onto one wrapping line. The detail drawer/viewer has a
+“↑ Parent” button that jumps to the parent item; the button stays visible but disabled when
+the parent was trashed, its file is gone, or the record was purged. Desktop keeps a back
+trail (`state.detailTrail`) because the parent is usually outside the current page/filter.
+
+Backfill existing rows with the `lineage_backfill` maintenance op (or the `backfill()`
+helper): it derives `op` for every row without one and copies the `removebg` `parent_id`
+links into `parent_uid`/`parent_op`. Rows whose generation step cannot be named store an
+empty `op` (never NULL), so the startup guard (`EXISTS(op IS NULL)`) converges after one
+scan and still re-heals after a later legacy migration.
 
 ## Deferred by design (plan phases)
 
@@ -187,6 +242,7 @@ python tmp/gallery_migrate_test.py       # M0-M3 fixture                      (2
 python tmp/gallery_bridge_test.py        # dual-write mirrors                 (25)
 python tmp/gallery_api_test.py           # HTTP API: blob ETag, groups/views/actions, albums, engine keys (112)
 python test/test_gallery_compiled_prompt.py   # source vs compiled prompt persistence (no fixtures needed)
+python test/test_gallery_lineage.py           # op derivation, pins, parent chaining (no fixtures needed)
 
 # migration
 python -m modules.gallery_migrate m0|m1|m2|m3|gates|all

@@ -31,12 +31,17 @@ def register_routes(app):
 
     @app.post("/gallery/api/query")
     def gallery_query_route(payload: dict = Body(default={})):
-        from modules import gallery_query
+        from modules import gallery_lineage, gallery_query
         filters = gallery_query.parse_filters(payload.get("filters") or payload)
         sort = str(payload.get("sort") or "time_desc")
         limit = int(payload.get("limit") or 60)
         offset = int(payload.get("offset") or 0)
         result = gallery_query.query(filters, sort=sort, limit=limit, offset=offset)
+        for row in result.get("rows") or []:
+            # display-ready: "" means "no generation step to show" (e.g. an
+            # endorsed copy), so the card never prints a storage bucket as an op
+            row["lineage_op"] = gallery_lineage.display_op(row)
+            row["parent_lineage_op"] = gallery_lineage.display_op_from_op(row.get("parent_op"))
         result["state_totals"] = gallery_query.state_totals(filters)
         return result
 
@@ -189,7 +194,7 @@ def register_routes(app):
 
     @app.get("/gallery/api/item")
     def gallery_item(id: str = ""):
-        from modules import gallery_db, gallery_query
+        from modules import gallery_db, gallery_lineage, gallery_query
         item_id = gallery_db.resolve_item_id(id)
         if not item_id:
             raise HTTPException(status_code=404, detail="item not found")
@@ -200,7 +205,31 @@ def register_routes(app):
         item["events"] = gallery_db.get_state_events(item_id, limit=20)
         item["has_composer"] = bool(gallery_db.get_composer_state(item_id))
         item["similar"] = [r["id"] for r in gallery_query.similar(item_id, limit=12)]
+        # lineage: how this file was made, what it was made from, and where the
+        # chain starts (the jump button also comes from here)
+        item["op_label"] = gallery_lineage.display_op(item)
+        item["parent_op_label"] = gallery_lineage.display_op_from_op(item.get("parent_op"))
+        item["parent"] = gallery_lineage.resolve_parent(item)
+        origin_op = gallery_lineage.origin_of(item)
+        item["origin"] = {"op": origin_op, "op_label": gallery_lineage.display_op_from_op(origin_op)}
         return item
+
+    @app.post("/gallery/api/lineage/pin")
+    def gallery_lineage_pin(payload: dict = Body(default={})):
+        """Cache a reference of the asset the user is about to transform.
+
+        The next img2img/inpaint/etc. save is bound to it by pixel signature;
+        clients call this right after dropping an image into the tab.
+        """
+        from modules import gallery_lineage
+        result = gallery_lineage.pin_item(
+            uid=payload.get("uid") or payload.get("key"),
+            path=payload.get("path"),
+            origin=str(payload.get("origin") or "desktop"),
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="item not found")
+        return {"ok": True, **result}
 
     @app.post("/gallery/api/reveal")
     def gallery_reveal(payload: dict = Body(default={})):
@@ -389,6 +418,9 @@ def register_routes(app):
         if op == "reindex":
             from modules import gallery_sources
             return {"ok": True, "stats": gallery_sources.index_all()}
+        if op == "lineage_backfill":
+            from modules import gallery_lineage
+            return {"ok": True, "stats": gallery_lineage.backfill()}
         if op == "stats":
             from modules import gallery_blobs
             return {

@@ -1075,6 +1075,8 @@ async function generate() {
   if (params.poseInpaintEnabled) {
     payload.alwayson = { 'Pose inpaint': { args: poseInpaintArgs(params) } };
   }
+  // the asset this generation transforms (lineage parent)
+  if (source.uid) payload.lineage = { uid: String(source.uid) };
 
   generateButton.disabled = true;
   try {

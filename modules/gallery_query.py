@@ -82,6 +82,13 @@ def parse_filters(raw) -> dict:
         fs["aspect"] = raw["aspect"]
     fs["has_composer"] = bool(raw.get("has_composer"))
     fs["has_variants"] = bool(raw.get("has_variants"))
+    # lineage
+    ops = raw.get("ops") or []
+    fs["ops"] = [str(o).lower() for o in ops if str(o).strip()]
+    ancestry = raw.get("ancestor") or ""
+    fs["ancestor"] = str(ancestry).strip() if ancestry else ""
+    if "has_parent" in raw and raw.get("has_parent") is not None:
+        fs["has_parent"] = bool(raw.get("has_parent"))
     fs["path"] = str(raw.get("path") or "").strip()
     fs["kind"] = str(raw.get("kind") or "").strip() or None
     return fs
@@ -271,6 +278,27 @@ def build_where(fs: dict, parsed: dict | None = None) -> tuple[str, list]:
         clauses.append("EXISTS (SELECT 1 FROM composer_states cs WHERE cs.item_id=i.id)")
     if fs.get("has_variants"):
         clauses.append("EXISTS (SELECT 1 FROM items c WHERE c.parent_id=i.id)")
+    # lineage: op filter, "derived only" / "roots only", and descendants of one asset
+    ops = fs.get("ops") or []
+    if ops:
+        placeholders = ",".join("?" * len(ops))
+        clauses.append(f"COALESCE(i.op, i.source) IN ({placeholders})")
+        params += list(ops)
+    if "has_parent" in fs:
+        clauses.append("i.parent_uid IS NOT NULL AND i.parent_uid != ''"
+                       if fs["has_parent"] else
+                       "(i.parent_uid IS NULL OR i.parent_uid = '')")
+    if fs.get("ancestor"):
+        clauses.append(
+            "i.id IN (WITH RECURSIVE chain(id) AS ("
+            "SELECT id FROM items WHERE uid = ? "
+            "UNION "
+            "SELECT c.id FROM items c JOIN chain ON c.parent_uid = "
+            "(SELECT uid FROM items WHERE items.id = chain.id)"
+            " AND c.id != chain.id "
+            ") SELECT id FROM chain)"
+        )
+        params.append(str(fs["ancestor"]).lower())
     if fs.get("path"):
         clauses.append("i.path LIKE ? ESCAPE '\\'")
         params.append("%" + _like_escape(fs["path"]) + "%")

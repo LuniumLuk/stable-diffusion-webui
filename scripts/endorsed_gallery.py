@@ -2351,6 +2351,8 @@ def on_image_saved(params):
         if params.pnginfo:
             infotext = params.pnginfo.get("parameters", "") or ""
         parsed = infotext_utils.parse_generation_parameters(infotext, []) if infotext else {}
+        from modules import gallery_lineage
+
         endorsement_db.index_image(
             path=path,
             file_mtime=mtime,
@@ -2369,6 +2371,9 @@ def on_image_saved(params):
             # (Extras / other extension saves cannot know it)
             compiled_prompt=getattr(params, "compiled_prompt", None),
             compiled_negative_prompt=getattr(params, "compiled_negative_prompt", None),
+            # which asset this image was derived from (gallery pin / batch path),
+            # plus how the file itself was produced
+            lineage=gallery_lineage.describe(params.p, path, infotext=infotext),
         )
     except Exception:
         pass

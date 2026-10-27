@@ -9,10 +9,53 @@ produced here; the torch UNet / CLIP paths are never touched.
 from __future__ import annotations
 
 import os
+import time
 
-from modules import devices, images, model_registry, shared
+from modules import devices, images, model_registry, prompt_parser, shared
 from modules.backends import anima
 from modules.backends.sdcpp_server import SdcppError, server
+
+# One try plus two retries: the sd-server intermittently fails to free device memory
+# between jobs (batch count > 1 hits it most), and reports it as a failed generation
+# with no images.  Retries hand the WebUI's cached blocks back and decode the VAE in
+# smaller tiles, the same remedy the Qwen / Krea 2 sidecars use.
+JOB_ATTEMPTS = 3
+RETRY_DELAY = 3.0
+RETRY_TILE_SIZE = 16
+
+
+def _retryable_failure(failure: str) -> bool:
+    """Transient sd-server failures worth another attempt (VRAM / decode flakes)."""
+    text = (failure or "").lower()
+    return "generation_failed" in text or "returned no results" in text
+
+
+def _escalate_vae_tiles(payload: dict) -> None:
+    """Retry attempts decode the VAE in smaller tiles, which asks for less memory."""
+    tiling = dict(payload.get("vae_tiling_params") or {})
+    tiling["enabled"] = True
+    tiling["tile_size_x"] = RETRY_TILE_SIZE
+    tiling["tile_size_y"] = RETRY_TILE_SIZE
+    payload["vae_tiling_params"] = tiling
+
+
+def _generate_with_retries(payload: dict, on_progress, label: str) -> dict:
+    """Submits one payload and polls it, retrying transient sd-server failures."""
+    failure = ""
+    for attempt in range(1, JOB_ATTEMPTS + 1):
+        if attempt > 1:
+            shared.state.textinfo = f"{label} · retry {attempt} ({failure})"
+            time.sleep(RETRY_DELAY)
+            devices.torch_gc()
+            _escalate_vae_tiles(payload)
+        try:
+            return server.wait(server.submit(payload), on_progress=on_progress, cancel_check=lambda: shared.state.interrupted)
+        except SdcppError as error:
+            failure = str(error)
+            if attempt == JOB_ATTEMPTS or not _retryable_failure(failure):
+                hint = f" (retried {attempt - 1}x; if it persists, try a smaller output size)" if attempt > 1 else ""
+                raise SdcppError(f"{failure}{hint}") from error
+    raise SdcppError(failure)
 
 
 def _text_encoder_and_vae():
@@ -92,6 +135,16 @@ def process_images_via_anima(p, model: model_registry.DitModel):
     p.sd_vae_name = os.path.basename(vae)
     p.sd_vae_hash = None
 
+    # the sidecar gets what the SD pipeline conditions on: the branch that runs,
+    # comments gone, directive lines dropped
+    model_prompts = prompt_parser.without_condition_directives(p.all_prompts)
+    model_negative_prompts = prompt_parser.without_condition_directives(p.all_negative_prompts)
+
+    # the source prompts (comments and #if blocks intact) are what the PNG infotext and
+    # the gallery keep next to the compiled ones - same split as the SD pipeline
+    source_prompts = getattr(p, "all_prompts_with_comments", None) or p.all_prompts
+    source_negative_prompts = getattr(p, "all_negative_prompts_with_comments", None) or p.all_negative_prompts
+
     flow_shift = float(getattr(opts, "anima_flow_shift", 0.0) or 0.0)
     p.extra_generation_params.update(_extra_params(text_encoder, flow_shift))
 
@@ -117,8 +170,8 @@ def process_images_via_anima(p, model: model_registry.DitModel):
                 break
 
             shared.state.job_no = index
-            prompt = p.all_prompts[index]
-            negative = p.all_negative_prompts[index]
+            prompt = model_prompts[index]
+            negative = model_negative_prompts[index]
             image_seed = int(p.all_seeds[index])
             image_subseed = int(p.all_subseeds[index])
 
@@ -141,11 +194,7 @@ def process_images_via_anima(p, model: model_registry.DitModel):
                 shared.state.textinfo = f"Anima {index + 1}/{total} · {elapsed:.0f}s"
 
             try:
-                status = server.wait(
-                    server.submit(payload),
-                    on_progress=on_progress,
-                    cancel_check=lambda: shared.state.interrupted,
-                )
+                status = _generate_with_retries(payload, on_progress, f"Anima {index + 1}/{total}")
             except SdcppError as error:
                 if shared.state.interrupted and "cancel" in str(error).lower():
                     break
@@ -156,15 +205,21 @@ def process_images_via_anima(p, model: model_registry.DitModel):
                 raise SdcppError("stable-diffusion.cpp returned no images")
 
             image = decoded[0]
+            source_prompt = source_prompts[index]
+            source_negative = source_negative_prompts[index]
             infotext = processing.create_infotext(
-                p, [prompt], [image_seed], [image_subseed],
-                index=0, all_negative_prompts=[negative],
+                p, [source_prompt], [image_seed], [image_subseed],
+                index=0, all_negative_prompts=[source_negative],
             )
 
             if save_samples:
+                compiled_prompt, compiled_negative = p.compiled_prompts_for_image(index)
                 images.save_image(
-                    image, p.outpath_samples, "", image_seed, prompt,
+                    image, p.outpath_samples, "", image_seed, source_prompt,
                     opts.samples_format, info=infotext, p=p,
+                    # the prompt as written with the picks drawn, indexed next to the source
+                    compiled_prompt=compiled_prompt,
+                    compiled_negative_prompt=compiled_negative,
                 )
 
             output_images.append(image)
