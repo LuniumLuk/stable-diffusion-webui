@@ -95,6 +95,26 @@ def plan_resize(
     }
 
 
+def scaled_size(width, height, factor) -> tuple[int, int]:
+    """Grid-snapped size after the img2img "Resize by" factor; same limits as the pre-resize."""
+    return round8(width * factor), round8(height * factor)
+
+
+def working_size(plan, *, set_output: bool = False, scale_by=None):
+    """img2img working size implied by a pre-resize ``plan``, or ``None`` to leave it alone.
+
+    The "Resize by" factor applies to the *resized* input, because that is the picture img2img
+    encodes; falling back to the raw source dimensions would undo the pre-resize.
+    """
+    if plan is None:
+        return None
+    if scale_by:
+        return scaled_size(plan["width"], plan["height"], scale_by)
+    if set_output:
+        return plan["width"], plan["height"]
+    return None
+
+
 def resize_pair(image, mask, plan):
     """Apply ``plan`` to the image and (optionally) the mask; returns ``(image, mask, detail)``."""
     if plan is None or image is None:

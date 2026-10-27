@@ -58,7 +58,8 @@ class ScriptResizeInput(scripts.ScriptBuiltinUI):
 
             gr.Markdown(
                 "Runs before the init image is encoded: the picture (and the inpaint mask) is resized "
-                "once, downscales with area averaging, upscales with Lanczos.",
+                "once, downscales with area averaging, upscales with Lanczos. The Resize-by tab "
+                "multiplies this resized input.",
                 elem_id=self.elem_id("resize_input_hint"),
             )
 
@@ -67,6 +68,15 @@ class ScriptResizeInput(scripts.ScriptBuiltinUI):
             return gr.update(visible=not by_size), gr.update(visible=by_size)
 
         mode.change(fn=switch_mode, inputs=[mode], outputs=[scale_group, size_group], show_progress=False)
+
+        # the Resize-by preview/auto-detected size must follow the pre-resized input
+        refresh_preview = dict(fn=None, _js="refreshImg2imgResizePreview", inputs=None, outputs=None, show_progress=False)
+        enable.change(**refresh_preview)
+        mode.change(**refresh_preview)
+        fit.change(**refresh_preview)
+        scale.release(**refresh_preview)
+        width.release(**refresh_preview)
+        height.release(**refresh_preview)
 
         self.infotext_fields = [
             PasteField(enable, lambda d: "Input resize" in d),
@@ -129,8 +139,12 @@ class ScriptResizeInput(scripts.ScriptBuiltinUI):
             detail += ", aspect fill)" if first_plan["cover"] else ", stretch)"
         else:
             detail += ", scale)"
+
+        scale_by = getattr(p, "resize_by_scale", None)
+        if scale_by:
+            detail = detail[:-1] + f", x{float(scale_by):g})"
         p.extra_generation_params["Input resize"] = detail
 
-        if set_output:
-            p.width = first_plan["width"]
-            p.height = first_plan["height"]
+        size = input_resize.working_size(first_plan, set_output=set_output, scale_by=scale_by)
+        if size is not None:
+            p.width, p.height = size

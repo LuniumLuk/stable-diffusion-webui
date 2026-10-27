@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, UnidentifiedImageError
 import gradio as gr
 
-from modules import images
+from modules import images, input_resize
 from modules.infotext_utils import create_override_settings_dict, parse_generation_parameters
 from modules.processing import Processed, StableDiffusionProcessingImg2Img, process_images
 from modules.shared import opts, state
@@ -69,8 +69,8 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
         img = ImageOps.exif_transpose(img)
 
         if to_scale:
-            p.width = int(img.width * scale_by)
-            p.height = int(img.height * scale_by)
+            p.width, p.height = input_resize.scaled_size(img.width, img.height, scale_by)
+        p.resize_by_scale = scale_by if to_scale else None
 
         p.init_images = [img] * p.batch_size
         # batch img2img knows the exact input file: no signature matching needed
@@ -284,8 +284,7 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
     if selected_scale_tab == 1 and not is_batch:
         assert image, "Can't scale by because no image is selected"
 
-        width = int(image.width * scale_by)
-        height = int(image.height * scale_by)
+        width, height = input_resize.scaled_size(image.width, image.height, scale_by)
 
     assert 0. <= denoising_strength <= 1., 'can only work with strength in [0.0, 1.0]'
 
@@ -312,6 +311,7 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
         inpaint_full_res_padding=inpaint_full_res_padding,
         inpainting_mask_invert=inpainting_mask_invert,
         override_settings=override_settings,
+        resize_by_scale=scale_by if selected_scale_tab == 1 else None,
     )
 
     p.scripts = modules.scripts.scripts_img2img

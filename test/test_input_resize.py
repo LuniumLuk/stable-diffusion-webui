@@ -117,3 +117,23 @@ def test_resize_pair_without_plan_or_image_is_passthrough():
     image = _image(64, 64)
     assert input_resize.resize_pair(image, None, None) == (image, None, None)
     assert input_resize.resize_pair(None, None, {"width": 8, "height": 8, "mode": "size", "fit": "fill", "cover": True, "downscale": True})[0] is None
+
+
+def test_scaled_size_snaps_to_the_grid_and_clamps():
+    assert input_resize.scaled_size(512, 512, 2) == (1024, 1024)
+    assert input_resize.scaled_size(512, 768, 1.5) == (768, 1152)
+    # clamped like every other size in the UI (64 - 2048, multiples of 8)
+    assert input_resize.scaled_size(512, 512, 0.05) == (64, 64)
+    assert input_resize.scaled_size(1024, 1024, 4) == (2048, 2048)
+
+
+def test_working_size_scales_the_resized_input():
+    # "Resize Input" 512x768 -> 512x512 (aspect fill), then "Resize by" x2 -> 1024x1024
+    plan = input_resize.plan_resize(512, 768, "size", width=512, height=512, fit="fill")
+    assert input_resize.working_size(plan, scale_by=2.0) == (1024, 1024)
+    # the scale wins over "set output size to the resized input"
+    assert input_resize.working_size(plan, set_output=True, scale_by=2.0) == (1024, 1024)
+    # without a factor only the explicit "set output size" applies
+    assert input_resize.working_size(plan, set_output=True) == (512, 512)
+    assert input_resize.working_size(plan, set_output=False) is None
+    assert input_resize.working_size(None, set_output=True, scale_by=2.0) is None

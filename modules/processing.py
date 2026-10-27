@@ -2077,6 +2077,8 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
     initial_noise_multiplier: float = None
     latent_mask: Image = None
     force_task_id: str = None
+    # img2img "Resize by" tab factor; the pre-resize script applies it to the resized input
+    resize_by_scale: float = None
 
     image_mask: Any = field(default=None, init=False)
 

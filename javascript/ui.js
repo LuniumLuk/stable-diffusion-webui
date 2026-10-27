@@ -504,7 +504,15 @@ function selectCheckpoint(name) {
 
 function currentImg2imgSourceResolution(w, h, scaleBy) {
     var img = gradioApp().querySelector('#mode_img2img > div[style="display: block;"] img');
-    return img ? [img.naturalWidth, img.naturalHeight, scaleBy] : [0, 0, scaleBy];
+    if (!img) return [0, 0, scaleBy];
+
+    // the optional "Resize Input" pre-resize is the picture img2img actually works from
+    var effective = typeof img2imgEffectiveInputSize === 'function'
+        ? img2imgEffectiveInputSize(img.naturalWidth, img.naturalHeight)
+        : null;
+    if (effective) return [effective.width, effective.height, scaleBy];
+
+    return [img.naturalWidth, img.naturalHeight, scaleBy];
 }
 
 function updateImg2imgResizeToTextAfterChangingImage() {
