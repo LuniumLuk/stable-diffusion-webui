@@ -18,7 +18,11 @@
  *     panel (seeded with the selection) and Ctrl+D select-next-occurrence multi-editing;
  *   - line-number gutter: the first column shows line numbers; hovering a line swaps its
  *     number for the hover toggle — 💬 comments that single line, ▶/⏸ on a `# ---` section
- *     starter comments / uncomments the whole section.
+ *     starter comments / uncomments the whole section;
+ *   - fold column left of the numbers: ▾/▸ folds a `#if … #endif` block or a `# ---`
+ *     section to a `⋯ N lines` chip (click the chip to unfold);
+ *   - `#if` / `#elseif` macro dropdown: typing a condition suggests TXT2IMG, HIRES_FIX,
+ *     IMG2IMG, INPAINT, POSE_INPAINT and the POSE_INPAINT_PART values inline.
  *
  * The gradio textarea stays the single source of truth and is only visually replaced
  * (the host gets `pedit-cm-mode`): every CM edit rewrites `textarea.value` and dispatches
@@ -124,6 +128,8 @@ function installHost(host) {
       variant: 'inline',
       desktopKeys: true,
       lineGutter: true,
+      foldGutter: true,
+      macroCompletion: true,
       weightStep: readStep,
       getSuggestions: suggestionsFor,
       onAccept: (label) => {

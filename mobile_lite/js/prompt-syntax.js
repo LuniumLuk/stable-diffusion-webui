@@ -369,6 +369,56 @@ export function analyzeConditionLine(line) {
   return info;
 }
 
+/** Enum values of POSE_INPAINT_PART, in the order the dropdown offers them. */
+export const CONDITION_PART_VALUES = ['FACE', 'FEET', 'HANDS', '0', 'NONE'];
+
+const CONDITION_HEAD_RE = /^[ \t]*#(if|elif|elseif)(?![A-Za-z0-9_])(.*)$/i;
+const CONDITION_VALUE_RE = /([A-Za-z_][A-Za-z0-9_]*)[ \t]*(==|!=)[ \t]*$/;
+
+/**
+ * Inline completions for a `#if` / `#elseif` condition.
+ *
+ * `before` is the text of the current line up to the caret.  Returns null when the
+ * line is not a condition, otherwise `{ from, options, macro }`:
+ *   - after `==` / `!=` of POSE_INPAINT_PART: the enum values (FACE / FEET / HANDS / 0);
+ *   - anywhere else: the macro names.
+ * `from` is the absolute offset of the fragment being replaced, `options` carry the
+ * `label` and the `detail` the dropdown shows.  The list is filtered by what is typed.
+ */
+export function conditionCompletions(before) {
+  const text = String(before == null ? '' : before);
+  const head = CONDITION_HEAD_RE.exec(text);
+  if (!head) return null;
+
+  const rest = head[2];
+  const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(rest);
+  const typedText = fragment ? fragment[0] : '';
+  const from = text.length - typedText.length;
+  const upToFragment = rest.slice(0, rest.length - typedText.length);
+  const typed = typedText.toUpperCase();
+
+  // value position: '#if POSE_INPAINT_PART == ' / '#elseif TXT2IMG != 1'
+  const comparison = CONDITION_VALUE_RE.exec(upToFragment);
+  if (comparison) {
+    const macro = comparison[1].toUpperCase();
+    const values = macro === 'POSE_INPAINT_PART' ? CONDITION_PART_VALUES : ['1', '0'];
+    const options = values
+      .filter((value) => !typed || value.startsWith(typed))
+      .map((value) => ({
+        label: value,
+        detail: macro === 'POSE_INPAINT_PART'
+          ? (value === '0' || value === 'NONE' ? 'no pose part (every other stage)' : `${value.toLowerCase()} pose pass`)
+          : (value === '1' ? 'true while the stage runs' : 'false'),
+      }));
+    return { from, options, macro };
+  }
+
+  const options = CONDITION_MACRO_NAMES
+    .filter((name) => !typed || name.startsWith(typed))
+    .map((name) => ({ label: name, detail: CONDITION_MACROS[name] }));
+  return { from, options, macro: '' };
+}
+
 /**
  * Validates every `#if` block of the prompt.
  * Returns one entry per line, `null` for ordinary lines; structural mistakes

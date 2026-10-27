@@ -72,6 +72,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses, e.g. `#if IMG2IMG && POSE_INPAINT_PART == HANDS`
      - the branch is chosen when the stage runs, so the same prompt serves the txt2img pass, Hires. fix, img2img, inpaint and every pose inpaint part
      - the prompt editors highlight the directives and flag unknown macros, a missing `#endif` and a stray `#else`; a block that is not closed is left in the prompt untouched
+     - in the PC editor (text mode) a fold column left of the line numbers folds a `#if … #endif` block or a `# ---` section into a `⋯ N lines` chip (click the chip to unfold), and typing a condition opens an inline dropdown with the macros (and the `POSE_INPAINT_PART` values)
      - the source prompt (PNG metadata, gallery restore) keeps the blocks, the compiled prompt holds the text of the branch that ran
 - Batch Processing, process a group of files using img2img
 - Img2img Alternative, reverse Euler method of cross attention control

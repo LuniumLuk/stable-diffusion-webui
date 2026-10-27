@@ -459,6 +459,16 @@ stage (`prompt_parser.expand_prompt_conditions`), so the same prompt serves the 
 Hires. fix, img2img, inpaint and every pose inpaint part; a `#if` line commented out with the 💬
 gutter becomes `# #if …` instead of losing its `#`.
 
+Two desktop-only CodeMirror options build on that (Mobile Lite keeps the plain editor):
+`foldGutter: true` adds a fold column **left of the line numbers** — `foldRegions()` in
+`prompt-parse.js` maps each `#if … #endif` block (nesting aware) and each `# ---` section to the
+lines it covers, ▾/▸ toggles the fold and the hidden lines become a `⋯ N lines` chip that
+unfolds on click; folds are stored by start-line position so they survive edits above them and
+drop out when the `#endif` / next marker disappears. `macroCompletion: true` makes the
+autocomplete source return the `#if` macros (with the "1 during …" detail) instead of the keyword
+pool, and the `POSE_INPAINT_PART` enum values after `==` / `!=` (`conditionCompletions()` in
+`prompt-syntax.js`).
+
 ### 13.3 Gallery card quick actions
 
 Cards are now `<div class="thumb-wrap">` (the thumb is an ARIA button - a `<button>` cannot
@@ -476,7 +486,7 @@ button becomes "Remove endorsement".
 
 | # | Test | Command | Result |
 | --- | --- | --- | --- |
-| 1 | Parser unit test (round-trip, classification, rebuild, end-to-end edit, `#if` conditions) | `node tmp\lite_pedit_test.mjs` | ✅ 130/130 |
+| 1 | Parser unit test (round-trip, classification, rebuild, end-to-end edit, `#if` conditions, fold regions, macro dropdown) | `node tmp\lite_pedit_test.mjs` | ✅ 150/150 |
 | 2 | API suite (all routes, redirect matrix, real jobs, action cycle) | `.venv\Scripts\python.exe tmp\mlite_api_test.py` | ✅ **48/48** |
 | 3 | iPhone E2E probe (WebKit, real taps) incl. folds, chips editing, quick actions | `node tmp\iosprobe\mlite.js` | ✅ **30/30**, no page errors |
 | 4 | Chromium: chips editing + mode persistence, quick actions, endorse flag round-trip | browser tools | ✅ |

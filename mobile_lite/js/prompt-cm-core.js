@@ -18,6 +18,14 @@
  *                            hover toggle: 💬 comments / uncomments that single line,
  *                            while a `# ---` section starter shows the ▶/⏸ toggle for
  *                            its whole block instead;
+ *   - 🗂 block folding     — `foldGutter: true` (desktop) adds a fold column LEFT of the
+ *                            line numbers: ▾/▸ folds a `#if … #endif` block (the `#endif`
+ *                            goes with it) or a `# ---` section (up to the next marker)
+ *                            into a `⋯ N lines` chip, which unfolds on click;
+ *   - 🏷 macro dropdown    — `macroCompletion: true` (desktop) suggests the `#if` macros
+ *                            (TXT2IMG / HIRES_FIX / IMG2IMG / INPAINT / POSE_INPAINT /
+ *                            POSE_INPAINT_PART) inline, and the enum values after
+ *                            `POSE_INPAINT_PART ==`, instead of the keyword pool;
  *   - drag to rearrange    — TOUCH: press a keyword and move it (ghost + drop bar at the
  *                            top-level comma slots; separators repaired).  MOUSE: left
  *                            drags stay native SELECTION; Alt+drag rearranges instead;
@@ -50,8 +58,8 @@
  * loads lazily on first use; when that fails the caller keeps its plain textarea.
  */
 
-import { blockIsOff, classify, DEFAULT_WEIGHT, findPickGroups, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
-import { analyzeConditionLines, isConditionLine } from './prompt-syntax.js';
+import { blockIsOff, classify, DEFAULT_WEIGHT, findPickGroups, foldRegions, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
+import { analyzeConditionLines, conditionCompletions, isConditionLine } from './prompt-syntax.js';
 // Namespace import on purpose: a browser that still runs a CACHED older copy of this
 // module must not break the whole editor just because a recent op was not there yet —
 // the long-standing names are destructured (present in every CM-era copy) and only the
@@ -117,6 +125,12 @@ function el(tag, props = {}, children = []) {
  * @param {boolean} [options.desktopKeys]       enable Ctrl+↑/↓ and Ctrl+/
  * @param {boolean} [options.lineGutter]        line-number gutter with hover comment /
  *                                              block toggles (desktop)
+ * @param {boolean} [options.foldGutter]        fold column LEFT of the line numbers:
+ *                                              `#if … #endif` blocks and `# ---`
+ *                                              sections fold to a `⋯ N lines` chip
+ * @param {boolean} [options.macroCompletion]   inline dropdown with the `#if` macros
+ *                                              (TXT2IMG, HIRES_FIX, …) and the
+ *                                              POSE_INPAINT_PART values
  * @param {'inline'|'full'} [options.variant]   structural styling variant
  * @param {boolean} [options.gestures]          press/drag/tap + context-menu grammar
  *                                              (default true); false = plain native
@@ -125,11 +139,12 @@ function el(tag, props = {}, children = []) {
  */
 export async function createPromptCM({
   host, text = '', placeholder = '', getSuggestions, onChange, notify, onAccept,
-  weightStep, desktopKeys = false, lineGutter = false, variant = 'inline', gestures = true,
+  weightStep, desktopKeys = false, lineGutter = false, foldGutter = false, macroCompletion = false,
+  variant = 'inline', gestures = true,
 } = {}) {
   const {
     EditorState, StateEffect, StateField,
-    EditorView, Decoration, keymap, placeholder: placeholderExt, dropCursor,
+    EditorView, Decoration, WidgetType, keymap, placeholder: placeholderExt, dropCursor,
     gutter: cmGutter, GutterMarker, drawSelection,
     autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
     history, historyKeymap, defaultKeymap,
@@ -267,6 +282,185 @@ export async function createPromptCM({
     })
     : null;
 
+  /* ------------------------------------------------------------ block folding */
+
+  /**
+   * Fold column (desktop `foldGutter: true`), rendered LEFT of the line numbers:
+   *   - ▾ / ▸ on a `#if … #endif` block (the `#endif` folds into the start line),
+   *   - ▾ / ▸ on a `# ---` section starter (the section folds up to the next marker),
+   *   - nothing on the other lines.
+   * A folded block is replaced by a `⋯ N lines` chip that unfolds on click.
+   *
+   * Folds are kept as the document position of their start line, so an edit above the
+   * block keeps it folded (the position is mapped through the change) and a block whose
+   * `#endif` / next marker disappeared simply stops being foldable.
+   */
+  const canFold = foldGutter && canUseGutter
+    && typeof Decoration.replace === 'function'
+    && typeof WidgetType === 'function';
+
+  /** Foldable regions of the current document, recomputed only when the text changes. */
+  const foldRegionsField = canFold
+    ? StateField.define({
+      create: (stateA) => foldRegions(stateA.doc.toString().split('\n')),
+      update(value, tr) {
+        return tr.docChanged ? foldRegions(tr.state.doc.toString().split('\n')) : value;
+      },
+    })
+    : null;
+
+  /** Document positions (start of line) of the blocks the user folded. */
+  const setFoldedStarts = StateEffect.define();
+  const foldedStartsField = canFold
+    ? StateField.define({
+      create: () => [],
+      update(starts, tr) {
+        let next = starts.map((pos) => tr.changes.mapPos(pos, 1));
+        for (const effect of tr.effects) {
+          if (effect.is(setFoldedStarts)) next = effect.value;
+        }
+        return next.filter((pos, index) => next.indexOf(pos) === index);
+      },
+    })
+    : null;
+
+  const FoldWidget = canFold
+    ? class extends WidgetType {
+      constructor(count, start) {
+        super();
+        this.count = count;
+        this.start = start;     // document position of the folded start line
+      }
+
+      eq(other) {
+        return other instanceof FoldWidget && other.count === this.count && other.start === this.start;
+      }
+
+      toDOM(widgetView) {
+        const chip = el('span', {
+          class: 'pedit-cm-fold-widget',
+          text: `\u22EF ${this.count} line${this.count === 1 ? '' : 's'}`,
+          title: 'Unfold this block',
+        });
+        chip.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setFoldAt(widgetView, this.start, false);
+        });
+        return chip;
+      }
+
+      ignoreEvent() {
+        return true;
+      }
+    }
+    : null;
+
+  const FoldGutterMarker = canFold
+    ? class extends GutterMarker {
+      constructor(number, stateName) {
+        super();
+        this.number = number;
+        this.stateName = stateName;   // 'open' | 'folded' | 'none'
+      }
+
+      eq(other) {
+        return other instanceof FoldGutterMarker
+          && other.number === this.number
+          && other.stateName === this.stateName;
+      }
+
+      toDOM() {
+        const cell = el('div', { class: 'pedit-cm-fold-cell' });
+        cell.dataset.line = String(this.number);
+        if (this.stateName !== 'none') {
+          const folded = this.stateName === 'folded';
+          cell.append(el('span', {
+            class: `pedit-cm-fold-btn${folded ? ' is-folded' : ''}`,
+            text: folded ? '\u25B8' : '\u25BE',
+            title: folded ? 'Unfold this block' : 'Fold this block',
+          }));
+        }
+        return cell;
+      }
+    }
+    : null;
+
+  /** Is the block that starts at the document position `start` folded right now? */
+  function isFolded(stateA, start) {
+    const lineFrom = stateA.doc.lineAt(start).from;
+    return stateA.field(foldedStartsField).some((pos) => stateA.doc.lineAt(pos).from === lineFrom);
+  }
+
+  /** Fold / unfold the block that starts at the document position `start`. */
+  function setFoldAt(viewA, start, fold) {
+    const stateA = viewA.state;
+    const lineFrom = stateA.doc.lineAt(start).from;
+    const starts = stateA.field(foldedStartsField);
+    const folded = starts.some((pos) => stateA.doc.lineAt(pos).from === lineFrom);
+    if (fold === folded) return false;
+    const next = fold
+      ? [...starts, lineFrom]
+      : starts.filter((pos) => stateA.doc.lineAt(pos).from !== lineFrom);
+    viewA.dispatch({ effects: setFoldedStarts.of(next) });
+    return true;
+  }
+
+  /** The folded-range decorations: one replace + line mark per folded block. */
+  function buildFoldDecorations(stateA, starts) {
+    const marks = [];
+    if (!starts.length) return Decoration.none;
+    const regions = stateA.field(foldRegionsField);
+    for (const pos of starts) {
+      const line = stateA.doc.lineAt(pos);
+      const end = regions.get(line.number - 1);
+      if (end === undefined || end <= line.number) continue;   // nothing to hide any more
+      const to = end < stateA.doc.lines ? stateA.doc.line(end + 1).from : stateA.doc.length;
+      if (to <= line.to) continue;
+      marks.push(Decoration.line({ class: 'pedit-cm-folded-line' }).range(line.from));
+      marks.push(Decoration.replace({
+        widget: new FoldWidget(end - line.number, line.from),
+        inclusive: false,
+      }).range(line.to, to));
+    }
+    return Decoration.set(marks, true);
+  }
+
+  const foldDecoField = canFold
+    ? StateField.define({
+      create: (stateA) => buildFoldDecorations(stateA, stateA.field(foldedStartsField)),
+      update(value, tr) {
+        const touched = tr.docChanged || tr.effects.some((effect) => effect.is(setFoldedStarts));
+        return touched ? buildFoldDecorations(tr.state, tr.state.field(foldedStartsField)) : value;
+      },
+      provide: (field) => EditorView.decorations.from(field),
+    })
+    : null;
+
+  const foldGutterExt = canFold
+    ? cmGutter({
+      class: 'pedit-cm-fold-gutters',
+      lineMarker(viewA, block) {
+        const line = viewA.state.doc.lineAt(block.from);
+        if (!viewA.state.field(foldRegionsField).has(line.number - 1)) {
+          return new FoldGutterMarker(line.number, 'none');
+        }
+        return new FoldGutterMarker(line.number, isFolded(viewA.state, line.from) ? 'folded' : 'open');
+      },
+      initialSpacer: () => new FoldGutterMarker(99, 'none'),
+      domEventHandlers: {
+        mousedown(viewA, block, event) {
+          const button = event.target.closest && event.target.closest('.pedit-cm-fold-btn');
+          if (!button) return false;
+          event.preventDefault();
+          const lineFrom = viewA.state.doc.lineAt(block.from).from;
+          setFoldAt(viewA, lineFrom, !isFolded(viewA.state, lineFrom));
+          return true;
+        },
+      },
+    })
+    : null;
+
   /* ------------------------------------------------------------ state plumbing */
 
   const setActiveToken = StateEffect.define();
@@ -354,9 +548,28 @@ export async function createPromptCM({
   /* ------------------------------------------------------------ completion */
 
   function completionSource(context) {
-    if (!getSuggestions) return null;
     const line = context.state.doc.lineAt(context.pos);
     const before = line.text.slice(0, context.pos - line.from);
+
+    // a '#if' / '#elseif' condition gets the macro dropdown instead of the keyword pool
+    if (macroCompletion) {
+      const condition = conditionCompletions(before);
+      if (condition) {
+        if (!condition.options.length) return null;
+        return {
+          from: line.from + condition.from,
+          // the space after '#if' keeps the list open, then filters as the name is typed
+          validFor: /^[\sA-Za-z0-9_]*$/,
+          // no `type` on purpose: a macro is not a keyword, and CM would draw its icon
+          options: condition.options.map((option) => ({
+            label: option.label,
+            detail: option.detail,
+          })),
+        };
+      }
+    }
+
+    if (!getSuggestions) return null;
     const match = /[^,\n]*$/.exec(before);
     if (!match) return null;
     const lead = /^\s*/.exec(match[0])[0].length;
@@ -977,6 +1190,8 @@ export async function createPromptCM({
         placeholderExt(placeholder),
         EditorView.lineWrapping,
         ...(canSearch ? [searchExt({ top: true }), highlightSelectionMatches()] : []),
+        // the fold column sits LEFT of the line numbers: extension order is DOM order
+        ...(canFold ? [foldedStartsField, foldRegionsField, foldDecoField, foldGutterExt] : []),
         ...(lineGutterExt ? [lineGutterExt] : []),
         EditorView.contentAttributes.of({
           autocapitalize: 'off',

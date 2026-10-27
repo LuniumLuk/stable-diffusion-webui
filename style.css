@@ -5551,6 +5551,68 @@ body.resizing .resize-handle {
     display: inline-block;
 }
 
+/* fold column, left of the line numbers: ▾/▸ on #if blocks and '# ---' sections */
+.pedit-cm-wrap .pedit-cm-fold-gutters {
+    background: transparent;
+    border: none;
+}
+
+.pedit-cm-wrap .pedit-cm-fold-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 14px;
+    height: 100%;
+    user-select: none;
+}
+
+.pedit-cm-wrap .pedit-cm-fold-btn {
+    width: 100%;
+    overflow: hidden;
+    text-align: center;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    color: #6b7280;
+    opacity: 0.75;
+}
+
+.pedit-cm-wrap .pedit-cm-fold-btn:hover {
+    opacity: 1;
+    color: #c4b5fd;
+}
+
+.pedit-cm-wrap .pedit-cm-fold-btn.is-folded {
+    color: #a78bfa;
+    opacity: 1;
+}
+
+/* a folded block: the opening line stays, its content becomes a chip */
+.pedit-cm-wrap .pedit-cm-fold-widget {
+    display: inline-block;
+    margin: 0 2px;
+    padding: 0 6px;
+    border: 1px solid rgba(139, 92, 246, 0.45);
+    border-radius: 6px;
+    background: rgba(139, 92, 246, 0.16);
+    color: #c4b5fd;
+    font-size: 10px;
+    line-height: 16px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.pedit-cm-wrap .pedit-cm-fold-widget:hover {
+    border-color: rgba(139, 92, 246, 0.8);
+    background: rgba(139, 92, 246, 0.26);
+}
+
+.pedit-cm-wrap .pedit-cm-folded-line {
+    background: rgba(139, 92, 246, 0.06);
+}
+
 .pedit-cm-wrap .cm-content ::selection {
     background: rgba(89, 161, 240, 0.28);
 }

@@ -364,6 +364,46 @@ export function blockMarker(name) {
   return label ? `# --- ${label} ---` : '# --- ---';
 }
 
+/**
+ * Foldable regions of the prompt, keyed by the 0-based line that starts them.
+ * The value is the 0-based index of the first line AFTER the region, so the covered
+ * lines are `start + 1 .. end - 1` (`end` may be `lines.length` for a section that
+ * runs to the end of the prompt):
+ *
+ *   - `#if … #endif` blocks (nesting aware; the `#endif` line is part of the fold),
+ *   - `# ---` comment sections (the next marker stays visible, the section folds).
+ *
+ * A start line without anything to hide is not listed, and an unclosed `#if` is not
+ * foldable (there is no end to fold to). Example:
+ *
+ *   foldRegions(['#if TXT2IMG', 'a', 'b', '#endif'])  ->  Map { 0 => 4 }
+ */
+export function foldRegions(lines) {
+  const list = Array.isArray(lines) ? lines : [];
+  const regions = new Map();
+
+  const stack = [];
+  list.forEach((lineText, index) => {
+    const condition = analyzeConditionLine(lineText);
+    if (!condition) return;
+    if (condition.keyword === 'if') {
+      stack.push(index);
+    } else if (condition.keyword === 'endif') {
+      const start = stack.pop();
+      if (start !== undefined && index > start) regions.set(start, index + 1);
+    }
+  });
+
+  list.forEach((lineText, index) => {
+    if (!isBlockMarker(lineText)) return;
+    let end = index + 1;
+    while (end < list.length && !isBlockMarker(list[end])) end += 1;
+    if (end > index + 1) regions.set(index, end);
+  });
+
+  return regions;
+}
+
 /** `{ from, to }` line indexes covered by the block opened at `index`, or null. */
 export function blockBounds(lines, index) {
   if (index < 0 || index >= lines.length || !isBlockMarker(lines[index])) return null;
