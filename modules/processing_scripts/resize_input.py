@@ -74,9 +74,10 @@ class ScriptResizeInput(scripts.ScriptBuiltinUI):
         enable.change(**refresh_preview)
         mode.change(**refresh_preview)
         fit.change(**refresh_preview)
-        scale.release(**refresh_preview)
-        width.release(**refresh_preview)
-        height.release(**refresh_preview)
+        for slider in (scale, width, height):
+            # change catches typed values (no release event), release catches drag ends
+            slider.release(**refresh_preview)
+            slider.change(**refresh_preview)
 
         self.infotext_fields = [
             PasteField(enable, lambda d: "Input resize" in d),

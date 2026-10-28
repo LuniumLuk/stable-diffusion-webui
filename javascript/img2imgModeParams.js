@@ -3,9 +3,10 @@
  *
  * Per-mode parameter separation for the img2img tab. The generation settings
  * (prompt, negative prompt, steps, sampler, scheduler, seed, CFG, sizes, batch,
- * denoising, resize mode and the inpaint controls) are SHARED between the six
- * img2img modes (img2img / Sketch / Inpaint / Inpaint sketch / Inpaint upload /
- * Batch). This keeps a private copy per mode:
+ * denoising, resize mode, the inpaint controls and the "Resize Input"
+ * accordion) are SHARED between the six img2img modes (img2img / Sketch /
+ * Inpaint / Inpaint sketch / Inpaint upload / Batch). This keeps a private copy
+ * per mode:
  *
  *   - switching modes manually saves the outgoing mode's current values and
  *     restores the incoming mode's stored values;
@@ -46,6 +47,14 @@
         { key: 'masked_content',      el: 'img2img_inpainting_fill',         type: 'radio' },
         { key: 'inpaint_area',        el: 'img2img_inpaint_full_res',        type: 'radio' },
         { key: 'only_masked_padding', el: 'img2img_inpaint_full_res_padding', type: 'slider' },
+        // "Resize Input" script accordion - a per-mode setting like the size controls above
+        { key: 'resize_input',            el: 'resize_input_enable-checkbox', type: 'checkbox', accordion: 'resize_input_enable' },
+        { key: 'resize_input_mode',       el: 'resize_input_mode',            type: 'radio' },
+        { key: 'resize_input_scale',      el: 'resize_input_scale',           type: 'slider' },
+        { key: 'resize_input_width',      el: 'resize_input_width',           type: 'slider' },
+        { key: 'resize_input_height',     el: 'resize_input_height',          type: 'slider' },
+        { key: 'resize_input_fit',        el: 'resize_input_fit',             type: 'radio' },
+        { key: 'resize_input_set_output', el: 'resize_input_set_output',      type: 'checkbox' },
     ];
 
     var store = loadStore();
@@ -134,6 +143,10 @@
             }
             case 'radio':
                 return radioValueOf(host.querySelector('input[type="radio"]:checked'));
+            case 'checkbox': {
+                var cb = host.querySelector('input[type="checkbox"]');
+                return cb ? cb.checked : undefined;
+            }
         }
         return undefined;
     }
@@ -263,6 +276,19 @@
             case 'radio':
                 setRadio(host, value);
                 break;
+            case 'checkbox': {
+                var box = host.querySelector('input[type="checkbox"]');
+                if (!box || box.checked === !!value) return;
+                // an InputAccordion keeps a hidden checkbox in sync with its visible one
+                if (field.accordion && typeof window.inputAccordionChecked === 'function') {
+                    window.inputAccordionChecked(field.accordion, !!value);
+                    return;
+                }
+                box.checked = !!value;
+                box.dispatchEvent(new Event('input', { bubbles: true }));
+                box.dispatchEvent(new Event('change', { bubbles: true }));
+                break;
+            }
         }
     }
 

@@ -62,10 +62,22 @@ function img2imgEffectiveInputSize(sourceWidth, sourceHeight) {
     return {width: targetWidth, height: targetHeight};
 }
 
-/** Refresh the Resize-by preview after a Resize Input control changed. */
+/** Refresh the Resize-by preview after a Resize Input control changed.
+ *
+ * Coalesced: dragging a slider fires change on every step, but the preview only needs one
+ * refresh once the value settles. Typed values commit through change (no release), so both
+ * events funnel here.
+ */
+var img2imgResizePreviewTimer = null;
+
 function refreshImg2imgResizePreview() {
-    var button = gradioApp().getElementById('img2img_update_resize_to');
-    if (button) button.click();
+    if (img2imgResizePreviewTimer) clearTimeout(img2imgResizePreviewTimer);
+
+    img2imgResizePreviewTimer = setTimeout(function() {
+        img2imgResizePreviewTimer = null;
+        var button = gradioApp().getElementById('img2img_update_resize_to');
+        if (button) button.click();
+    }, 200);
 
     return [];
 }
