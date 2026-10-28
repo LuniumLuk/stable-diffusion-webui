@@ -1130,6 +1130,47 @@ function createSuggestionsFold(field) {
   return details;
 }
 
+/* --------------------------------------------------------------------- lora fold */
+
+/** Anima LoRAs only load on Anima (DiT) checkpoints, so the fold follows the model. */
+function selectedModelIsAnima() {
+  const boot = state.boot;
+  if (!boot) return false;
+  const entry = (boot.models || []).find((model) => model.title === boot.model);
+  return Boolean(entry && entry.family === 'anima');
+}
+
+function createLoraFold(field) {
+  const chips = el('div', { class: 'chips' });
+  const details = el('details', { class: 'fold lora-fold' });
+  details.append(el('summary', { class: 'fold-summary' }, [
+    el('span', { text: '\u{1F9E9} Anima LoRA' }),
+    el('span', { class: 'small muted', text: 'tap a LoRA to append its tag' }),
+  ]));
+  details.append(chips);
+
+  const render = () => {
+    const loras = (state.boot && state.boot.loras) || [];
+    const visible = loras.length > 0 && selectedModelIsAnima();
+    details.style.display = visible ? '' : 'none';
+    chips.replaceChildren();
+    if (!visible) return;
+    for (const lora of loras) {
+      chips.append(el('button', {
+        class: 'chip',
+        type: 'button',
+        text: lora.name,
+        title: lora.path,
+        onClick: () => field.appendKeyword(`<lora:${lora.name}:1>`),
+      }));
+    }
+  };
+
+  on('model', render);
+  render();
+  return details;
+}
+
 /* ------------------------------------------------------------------ public API */
 
 export function createPromptEditor(kind) {
@@ -1139,13 +1180,15 @@ export function createPromptEditor(kind) {
   const positiveField = createChipsField(positiveKey, 'Prompt', 'Prompt');
   const negativeField = createChipsField(negativeKey, 'Negative prompt', 'Negative prompt');
   const suggestionsFold = createSuggestionsFold(positiveField);
+  // the Anima backend applies its LoRAs from prompt tags; Qwen / Krea 2 have their own pipeline
+  const loraFold = ['text', 'image'].includes(kind) ? createLoraFold(positiveField) : null;
 
   const negativeFold = el('details', { class: 'fold negative-fold' }, [
     el('summary', { class: 'fold-summary' }, [el('span', { text: 'Negative prompt' })]),
     negativeField.root,
   ]);
 
-  const root = el('div', { class: 'card pedit-card' }, [positiveField.root, suggestionsFold, negativeFold]);
+  const root = el('div', { class: 'card pedit-card' }, [positiveField.root, suggestionsFold, loraFold, negativeFold]);
 
   return {
     root,

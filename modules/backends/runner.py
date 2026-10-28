@@ -170,7 +170,13 @@ def process_images_via_anima(p, model: model_registry.DitModel):
                 break
 
             shared.state.job_no = index
-            prompt = model_prompts[index]
+            prompt, loras, missing_loras = anima.extract_loras(model_prompts[index], model_registry.find_lora)
+            if missing_loras:
+                raise RuntimeError(
+                    f"Anima LoRA not found: {', '.join(missing_loras)}. "
+                    f"Put the file in {model_registry.lora_dir()} (installed: "
+                    f"{', '.join(model_registry.list_loras()) or 'none'})."
+                )
             negative = model_negative_prompts[index]
             image_seed = int(p.all_seeds[index])
             image_subseed = int(p.all_subseeds[index])
@@ -187,6 +193,7 @@ def process_images_via_anima(p, model: model_registry.DitModel):
                 flow_shift=flow_shift,
                 init_image=init_image,
                 mask_image=mask_image,
+                loras=loras,
                 denoising_strength=denoising_strength,
             )
 

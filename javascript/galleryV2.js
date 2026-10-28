@@ -425,6 +425,20 @@
     }).catch(function (err) { toast('Item lookup failed: ' + err.message, true); });
   }
 
+  // The txt2img/img2img result panel (javascript/outputPanelActions.js) reuses
+  // this menu and the same remembered default, so both entry points send the
+  // identical payloads.
+  window.gallerySendMenu = {
+    actionLabel: sendActionLabel,
+    optionName: sendOptionName,
+    defaultOnly: sendDefaultOnly,
+    openOptions: function (ev, action, onPick) {
+      openSendOptionsMenu(ev, makeSendOptions(action, function (only) {
+        return function () { onPick(only); };
+      }));
+    },
+  };
+
   var _ctxMenuEl = null;
   var _ctxSubEl = null;
 

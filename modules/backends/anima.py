@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 
 from PIL import Image
+
+# A1111 strips <lora:…> tags from the prompt while building SD conditioning; the
+# DiT path never builds conditioning, so the Anima runner resolves the tags itself
+# and hands sd.cpp the same adapters through the payload's "lora" array.
+LORA_TAG = re.compile(r"<lora:([^:>]+)(?::([^>]*))?>", re.IGNORECASE)
 
 # A1111 dropdown label -> sd.cpp sample_method. Matching is done on the label
 # stem so "DPM++ 2M Karras" and "DPM++ 2M" share one entry.
@@ -69,6 +75,40 @@ def clamp_side(value) -> int:
     return max(MIN_SIDE, min(MAX_SIDE, value))
 
 
+def _lora_weight(value: str | None) -> float:
+    # tags may carry A1111's extra multipliers (<lora:name:1:0.8>); sd.cpp takes one
+    head = str(value or "").split(":")[0].strip()
+    try:
+        return float(head)
+    except ValueError:
+        return 1.0
+
+
+def extract_loras(prompt: str, resolve) -> tuple[str, list[dict], list[str]]:
+    """Pull the `<lora:name:weight>` tags of a prompt out of the text.
+
+    `resolve` maps a tag name to the file name inside the Anima LoRA folder (or None
+    when the tag names something that is not installed). Returns the prompt without
+    the tags, the entries for the sd.cpp payload and the names that were not found.
+    """
+    if not isinstance(prompt, str) or "<lora:" not in prompt.lower():
+        return prompt, [], []
+
+    entries: list[dict] = []
+    missing: list[str] = []
+
+    def replace(match):
+        name = match.group(1).strip()
+        filename = resolve(name)
+        if filename is None:
+            missing.append(name)
+            return ""
+        entries.append({"path": filename, "multiplier": _lora_weight(match.group(2)), "is_high_noise": False})
+        return ""
+
+    return LORA_TAG.sub(replace, prompt).strip(), entries, missing
+
+
 def encode_image(image: Image.Image | None, size: tuple[int, int] | None = None) -> str | None:
     if image is None:
         return None
@@ -93,6 +133,7 @@ def build_payload(
     flow_shift: float = 0.0,
     init_image: Image.Image | None = None,
     mask_image: Image.Image | None = None,
+    loras: list[dict] | None = None,
     denoising_strength: float | None = None,
 ) -> dict:
     method, scheduler = map_sampler(sampler_name)
@@ -123,6 +164,8 @@ def build_payload(
         payload["strength"] = float(denoising_strength if denoising_strength is not None else 0.75)
     if mask_image is not None:
         payload["mask_image"] = encode_image(mask_image, (width, height))
+    if loras:
+        payload["lora"] = loras
 
     return payload
 

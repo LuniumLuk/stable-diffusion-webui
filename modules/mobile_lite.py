@@ -519,6 +519,19 @@ def _resolve_hr_upscaler(raw, defaults: dict) -> str:
     return shared.latent_upscale_default_mode
 
 
+def _lora_choices() -> list:
+    """Anima LoRAs (models/Anima/loras) offered as prompt tags by the lite UI."""
+    from modules import model_registry, shared
+
+    if not getattr(shared.opts, "anima_enabled", True):
+        return []
+
+    return [
+        {"name": os.path.splitext(name)[0], "path": name}
+        for name in model_registry.list_loras()
+    ]
+
+
 def _common_args(payload: dict, tab: str) -> dict:
     from modules import sd_samplers
 
@@ -2544,6 +2557,7 @@ def register_routes(app):
             "mode_choices": MODE_CHOICES,
             "model": str(current_model or ""),
             "models": models,
+            "loras": _lora_choices(),
             "samplers": samplers,
             "schedulers": schedulers,
             "upscalers": _hr_upscaler_choices(),

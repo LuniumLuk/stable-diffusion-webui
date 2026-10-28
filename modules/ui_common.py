@@ -246,6 +246,9 @@ class OutputPanel:
     button_composer = None
     stage_payload = None
     stage_capture = None
+    send_infotext = None
+    send_apply = None
+    send_image = None
 
 
 def create_output_panel(tabname, outdir, toprow=None):
@@ -272,30 +275,39 @@ def create_output_panel(tabname, outdir, toprow=None):
         if tabname == "txt2img" and toprow is not None:
             res.button_quick_generate = toprow.quick_generate
 
-        with gr.Column(variant='panel', elem_id=f"{tabname}_results_panel"):
+        # the generation tabs float only the three send actions over the preview;
+        # every other control stays in the DOM (hidden) so the image viewer,
+        # extensions and the keyboard shortcuts can still trigger it
+        compact_actions = tabname in ("txt2img", "img2img")
+
+        def send_label(icon, text):
+            # the floating capsule has room for short labels; the plain rows do not
+            return f'{icon} {text}' if compact_actions else icon
+
+        with gr.Column(variant='panel', elem_id=f"{tabname}_results_panel", elem_classes="floating-actions-host" if compact_actions else None):
             with gr.Group(elem_id=f"{tabname}_gallery_container"):
                 res.gallery = gr.Gallery(label='Output', show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None)
 
-            with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons"):
-                open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
-                compare_button = ToolButton('🔀', elem_id=f'{tabname}_compare', tooltip="Compare two images with a sliding overlay.")
+            with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons floating-actions" if compact_actions else "image-buttons"):
+                open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not compact_actions and not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
+                compare_button = ToolButton('🔀', elem_id=f'{tabname}_compare', visible=not compact_actions, tooltip="Compare two images with a sliding overlay.")
 
                 if tabname != "extras":
-                    save = ToolButton('💾', elem_id=f'save_{tabname}', tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
-                    save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
-                    endorse_btn = ToolButton('\u2b50', elem_id=f'endorse_{tabname}', tooltip="Endorse this image – save a copy and record it in the starred gallery.")
-                    res.button_stage = ToolButton('➕', elem_id=f'{tabname}_stage', tooltip="Capture the current settings into an img2img stage.")
+                    save = ToolButton('💾', elem_id=f'save_{tabname}', visible=not compact_actions, tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
+                    save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', visible=not compact_actions, tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
+                    endorse_btn = ToolButton('\u2b50', elem_id=f'endorse_{tabname}', visible=not compact_actions, tooltip="Endorse this image – save a copy and record it in the starred gallery.")
+                    res.button_stage = ToolButton('➕', elem_id=f'{tabname}_stage', visible=not compact_actions, tooltip="Capture the current settings into an img2img stage.")
 
                 buttons = {
-                    'img2img': ToolButton('🖼️', elem_id=f'{tabname}_send_to_img2img', tooltip="Send image and generation parameters to img2img tab."),
-                    'inpaint': ToolButton('🎨️', elem_id=f'{tabname}_send_to_inpaint', tooltip="Send image and generation parameters to img2img inpaint tab."),
-                    'extras': ToolButton('📐', elem_id=f'{tabname}_send_to_extras', tooltip="Send image and generation parameters to extras tab.")
+                    'img2img': ToolButton(send_label('🖼️', 'To img2img'), elem_id=f'{tabname}_send_to_img2img', tooltip="Send the selected result to img2img – right-click to choose what is sent."),
+                    'inpaint': ToolButton(send_label('🎨️', 'To inpaint'), elem_id=f'{tabname}_send_to_inpaint', tooltip="Send the selected result to inpaint – right-click to choose what is sent."),
+                    'extras': ToolButton('📐', elem_id=f'{tabname}_send_to_extras', visible=not compact_actions, tooltip="Send image and generation parameters to extras tab.")
                 }
 
-                res.button_composer = ToolButton('🧩', elem_id=f'{tabname}_send_to_composer', tooltip="Send the image to the Composer tab.")
+                res.button_composer = ToolButton(send_label('🧩', 'Composer'), elem_id=f'{tabname}_send_to_composer', tooltip="Send the image to the Composer tab.")
 
                 if tabname == 'txt2img':
-                    res.button_upscale = ToolButton('✨', elem_id=f'{tabname}_upscale', tooltip="Create an upscaled version of the current image using hires fix settings.")
+                    res.button_upscale = ToolButton('✨', elem_id=f'{tabname}_upscale', visible=not compact_actions, tooltip="Create an upscaled version of the current image using hires fix settings.")
 
             open_folder_button.click(
                 fn=lambda images, index: open_folder(shared.opts.outdir_samples or outdir, images, index),
@@ -318,9 +330,31 @@ def create_output_panel(tabname, outdir, toprow=None):
             if tabname != "extras":
                 download_files = gr.File(None, file_count="multiple", interactive=False, show_label=False, visible=False, elem_id=f'download_files_{tabname}')
 
-                # the ➕ quick action fills the payload and clicks this hidden button
+                # stage capture bridge wired to Img2imgStageManager.capture in
+                # modules/ui.py; the compact result panel no longer drives it, but
+                # the ➕ button and these fields stay available to extensions
                 res.stage_payload = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_stage_quick_payload')
                 res.stage_capture = gr.Button(visible=False, elem_id=f'{tabname}_stage_quick_capture')
+
+                if compact_actions:
+                    # hidden bridges for the floating send buttons: full infotext
+                    # (prompt + settings) and image-only payloads
+                    res.send_infotext = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_infotext_apply')
+                    res.send_apply = gr.Button(visible=False, elem_id=f'{tabname}_apply_infotext')
+                    parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
+                        paste_button=res.send_apply,
+                        tabname='img2img',
+                        source_text_component=res.send_infotext,
+                    ))
+
+                    res.send_image = {}
+                    for send_target in ('img2img', 'inpaint'):
+                        res.send_image[send_target] = gr.Button(visible=False, elem_id=f'{tabname}_send_image_{send_target}')
+                        parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
+                            paste_button=res.send_image[send_target],
+                            tabname=send_target,
+                            source_image_component=res.gallery,
+                        ))
 
                 with gr.Group():
                     res.infotext = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext")

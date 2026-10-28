@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
 import urllib.request
 
-from modules import shared
+from modules import model_registry, shared
 
 SD_CPP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "sd_cpp")
 SERVER_EXE = os.path.join(SD_CPP_DIR, "sd-server.exe")
@@ -48,6 +49,12 @@ def _failure_hint(details: str) -> str:
             "This checkpoint looks like Anima 2.9B; stable-diffusion.cpp builds the text adapter "
             "1024 wide and rejects the 2048-wide tensors. Use a 2B Anima model (Nova Anime AM v4.0 or earlier)"
         )
+    if "can not found lora" in details or "invalid lora" in details:
+        return (
+            "the sidecar cannot resolve that LoRA from models/Anima/loras; a stable-diffusion.cpp "
+            "instance from an older WebUI run may still hold the port without the LoRA folder - "
+            "stop it (scripts/kill-webuis.ps1) or change the sidecar port in the DiT settings"
+        )
     if "cannot make enough memory available" in details or "reported free 0.00" in details:
         return (
             "the GPU ran out of free VRAM; the SD checkpoint is parked automatically, so close other "
@@ -61,6 +68,15 @@ def get_port() -> int:
         return int(shared.opts.anima_server_port or DEFAULT_PORT)
     except Exception:
         return DEFAULT_PORT
+
+
+def port_is_taken(port: int) -> bool:
+    """True when something already accepts connections on 127.0.0.1:port."""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 class SdcppServer:
@@ -116,6 +132,7 @@ class SdcppServer:
             "--vae", vae,
             "--listen-ip", "127.0.0.1",
             "--listen-port", str(port),
+            "--lora-model-dir", model_registry.lora_dir(),
             "--vae-tiling",
         ]
 
@@ -146,6 +163,20 @@ class SdcppServer:
                     raise SdcppError(f"Anima {label} not found: {path}")
 
             os.makedirs(SD_CPP_DIR, exist_ok=True)
+            # the sidecar scans its LoRA directory at startup; an absent folder is
+            # reported as a scan error, so make sure it exists
+            os.makedirs(model_registry.lora_dir(), exist_ok=True)
+
+            # A sidecar left behind by a previous WebUI run keeps the port warm. The new
+            # child would fail to bind, and the jobs would go to the old process with the
+            # old launch arguments (no LoRA folder, for one) - say so instead.
+            if port_is_taken(port):
+                raise SdcppError(
+                    f"port {port} is already used by another stable-diffusion.cpp instance, "
+                    "probably a sidecar left over from a previous WebUI run; stop it "
+                    "(scripts/kill-webuis.ps1) or change the sidecar port in the DiT settings"
+                )
+
             log = open(LOG_PATH, "wb")
             try:
                 self._proc = subprocess.Popen(

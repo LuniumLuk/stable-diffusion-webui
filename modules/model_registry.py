@@ -7,6 +7,7 @@ category layout:
     models/Anima/diffusion_models/<model>.safetensors|gguf
     models/Anima/text_encoders/<qwen3>.safetensors|gguf
     models/Anima/vae/<qwen-image-vae>.safetensors
+    models/Anima/loras/<lora>.safetensors
 
 The text-adapter width decides whether stable-diffusion.cpp can load a file: the
 Anima 2B line uses a 1024-wide adapter, the 2.9B expansion uses 2048 and is
@@ -28,8 +29,11 @@ SUBDIRS = {
     "models": "diffusion_models",
     "text_encoders": "text_encoders",
     "vae": "vae",
+    "loras": "loras",
 }
 MODEL_EXTS = (".safetensors", ".gguf", ".ckpt")
+# sd.cpp applies LoRAs as runtime adapters; .gguf is a diffusion-model format only
+LORA_EXTS = (".safetensors", ".pt", ".ckpt")
 TITLE_PREFIX = "[Anima] "
 UNSUPPORTED_VARIANTS = {"2.9b": "Anima 2.9B is not supported by stable-diffusion.cpp yet"}
 
@@ -72,6 +76,7 @@ def _folder(kind: str) -> str:
 
 def _list_files(kind: str) -> list[str]:
     folder = _folder(kind)
+    exts = LORA_EXTS if kind == "loras" else MODEL_EXTS
     try:
         mtime = os.path.getmtime(folder)
     except OSError:
@@ -85,7 +90,7 @@ def _list_files(kind: str) -> list[str]:
         names = sorted(
             name
             for name in os.listdir(folder)
-            if name.lower().endswith(MODEL_EXTS) and os.path.isfile(os.path.join(folder, name))
+            if name.lower().endswith(exts) and os.path.isfile(os.path.join(folder, name))
         )
     except OSError:
         names = []
@@ -192,6 +197,30 @@ def list_text_encoders() -> list[str]:
 
 def list_vaes() -> list[str]:
     return _list_files("vae")
+
+
+def lora_dir() -> str:
+    """Directory stable-diffusion.cpp scans for the Anima LoRAs (`--lora-model-dir`)."""
+    return _folder("loras")
+
+
+def list_loras() -> list[str]:
+    return _list_files("loras")
+
+
+def find_lora(name: str) -> str | None:
+    """Match a `<lora:name:weight>` tag to a file name inside the Anima LoRA folder."""
+    if not isinstance(name, str):
+        return None
+
+    wanted = name.strip().lower()
+    if not wanted:
+        return None
+
+    for filename in list_loras():
+        if wanted in (filename.lower(), os.path.splitext(filename)[0].lower()):
+            return filename
+    return None
 
 
 def list_models() -> list[DitModel]:
