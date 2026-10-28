@@ -31,3 +31,23 @@ When a request does not name a UI, do not assume PC only: check both front-ends,
 - Use the VS Code integrated browser tools (`openBrowserPage`, `readPage`, `screenshotPage`, `navigatePage`, `clickElement`, `typeInPage`, `runPlaywrightCode`).
 - Never launch an external browser (Chrome/Edge/Firefox) and never open a URL with `Start-Process`, `start`, `explorer`, `Invoke-Item`, or Python's `webbrowser` - a stray window on the developer's desktop is disruptive.
 - Server-safety rules for runtime verification live in [sd-webui-feature-dev.agent.md](agents/sd-webui-feature-dev.agent.md): never drive or restart the developer's live instance on `7860`.
+
+## Always report: server restart vs browser refresh
+
+Every finished job - from any agent, including sub-agents and background agents - must end its
+final reply with one explicit line telling the user how to pick the change up. Never leave it
+implicit, even for docs-only work.
+
+- **Server restart** when anything the running process executes changed: `modules/**`,
+  `scripts/**`, `webui.py`, `launch.py`, `requirements*.txt`, HTTP routes/endpoints,
+  Gradio component structure (`on_ui_tabs`, `gr.Blocks`), settings/option registration,
+  Python inside extensions.
+- **Browser refresh only** (Ctrl+F5 / hard reload) when only static assets changed:
+  `javascript/**`, `style.css`, `html/**`, `mobile_lite/**` (served at `/mlite/`).
+- **Both** changed → say restart, and note that the restart also reloads the front-end.
+- Nothing runs differently (docs, tests, comments, hand-run scripts) → say so explicitly.
+
+End the reply with a short marker line, for example
+`Reload: **browser refresh** (Ctrl+F5) - JS/CSS only` or
+`Reload: **server restart** - Python route changed`.
+
