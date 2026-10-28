@@ -107,6 +107,12 @@
     return '/gallery/api/blob?id=' + encodeURIComponent(row.uid) + '&kind=' + kind;
   }
 
+  /** Archived items keep only a thumb blob (media policy), so that is the best
+   *  in-app preview available for them. */
+  function detailPreviewUrl(row) {
+    return blobUrl(row, row && row.state === 'archived' ? 'thumb' : 'preview');
+  }
+
   function fmtTime(mtime) {
     if (!mtime) return '';
     var d = new Date(mtime * 1000);
@@ -2210,7 +2216,7 @@
     api('/gallery/api/item?id=' + encodeURIComponent(row.uid)).then(function (item) {
       if (!window.gv2LightboxNav) return; // viewer was closed while loading
       renderDetail(item);
-      detailViewerSrc(item, blobUrl(row, 'preview'), function (src) {
+      detailViewerSrc(item, detailPreviewUrl(row), function (src) {
         if (window.gv2LightboxNav) {
           window.openLightbox(src, { split: window.gv2LightboxNav.split });
         }
@@ -2454,10 +2460,26 @@
       var album = albumById(item.album_id);
       if (album) rows.push(['Album', album.name + (album.bundled ? ' (bundled)' : '')]);
     }
+    // The preview carries the same marks as the grid cards: a coloured ring for
+    // a rating or a stage, grey slashes + a dimmed picture for an archived item.
+    var rating = ratingOf(item);
+    var mediaFlags = '';
+    if (rating === 'endorsed') mediaFlags += ' gv2-detail-media-endorsed';
+    else if (rating === 'disliked') mediaFlags += ' gv2-detail-media-disliked';
+    if (item.state === 'staged') mediaFlags += ' gv2-detail-media-staged';
+    if (item.state === 'archived') mediaFlags += ' gv2-detail-media-archived';
+    // the box hugging the picture is sized from its aspect ratio, so the ring and
+    // the slashes land on the image instead of the empty stage around it
+    var mediaStyle = (item.width && item.height)
+      ? ' style="--gv2-media-ar:' + (item.width / item.height).toFixed(4) + '"'
+      : '';
     var img = item.state === 'trashed'
       ? '<div class="gv2-thumb gv2-thumb-empty">no media (trash)</div>'
-      : '<img class="gv2-detail-img" src="' + blobUrl(item, 'preview') + '" alt="" ' +
-        'title="Click to open the fullscreen viewer (wheel = zoom, drag = pan)">';
+      : '<div class="gv2-detail-media' + mediaFlags + '"' + mediaStyle + '>' +
+          '<img class="gv2-detail-img" src="' + detailPreviewUrl(item) + '" alt="" ' +
+            'title="Click to open the fullscreen viewer (wheel = zoom, drag = pan)">' +
+          (item.state === 'archived' ? '<div class="gv2-strike"></div>' : '') +
+        '</div>';
     var tagPills = (item.tags || []).filter(function (t) { return t.category === 'workflow'; })
       .map(function (t) {
         return '<span class="gv2-tag">' + esc(t.name) +
@@ -2555,6 +2577,21 @@
     }
     var detailImg = box.querySelector('.gv2-detail-img');
     if (detailImg) {
+      // item dimensions can be missing on old rows - the loaded picture knows better
+      var mediaBox = box.querySelector('.gv2-detail-media');
+      var syncMediaRatio = function () {
+        if (!mediaBox || !detailImg.naturalWidth || !detailImg.naturalHeight) return;
+        mediaBox.style.setProperty('--gv2-media-ar',
+          (detailImg.naturalWidth / detailImg.naturalHeight).toFixed(4));
+      };
+      syncMediaRatio();
+      detailImg.addEventListener('load', syncMediaRatio);
+      // a dropped/missing preview blob still leaves the thumb on screen
+      detailImg.addEventListener('error', function () {
+        if (detailImg.dataset.fallback === 'thumb') return;
+        detailImg.dataset.fallback = 'thumb';
+        detailImg.src = blobUrl(item, 'thumb');
+      });
       detailImg.addEventListener('click', function () { openDetailViewer(item); });
     }
     box.querySelectorAll('[data-detail-op]').forEach(function (btn) {

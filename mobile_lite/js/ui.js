@@ -317,9 +317,17 @@ function showViewerHint(text) {
   viewerHintNode.classList.add('show');
 }
 
-export function openViewer({ src, title = '', meta = null, actions = [], tag = '', onNavigate = null, canNavigate = null }) {
+const VIEWER_STATE_CLASSES = ['is-endorsed', 'is-disliked', 'is-staged', 'is-archived'];
+
+export function openViewer({ src, title = '', meta = null, actions = [], tag = '', onNavigate = null, canNavigate = null, stateClass = '' }) {
   document.getElementById('viewerTitle').textContent = title;
   const img = document.getElementById('viewerImg');
+  // the gallery passes its card marks here so the opened image shows the same
+  // ring (endorsed / disliked / staged) and the archived dim
+  img.classList.remove(...VIEWER_STATE_CLASSES);
+  for (const name of String(stateClass || '').split(/\s+/)) {
+    if (VIEWER_STATE_CLASSES.includes(name)) img.classList.add(name);
+  }
   let sameSrc = false;
   try {
     sameSrc = !!src && img.src === new URL(src, location.href).href;

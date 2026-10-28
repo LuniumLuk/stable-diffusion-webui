@@ -7396,13 +7396,57 @@ body.resizing .resize-handle {
     flex: none;
 }
 
+/* The media box hugs the picture - its size comes from the aspect ratio the
+   drawer publishes in --gv2-media-ar - so the state ring and the archived
+   slashes sit on the image instead of on the empty stage around it. */
+.gv2-detail-media {
+    position: relative;
+    width: min(100%, calc(54vh * var(--gv2-media-ar, 1)));
+    aspect-ratio: var(--gv2-media-ar, auto);
+    margin: 0 auto;
+    border-radius: 10px;
+}
+
 .gv2-detail-img {
+    display: block;
     width: 100%;
+    height: 100%;
     max-height: 54vh;
     object-fit: contain;
     background: #0b1220;
     border-radius: 10px;
     cursor: zoom-in;
+}
+
+/* State marks mirrored from the grid cards: endorsed = green ring, disliked =
+   red, staged = orange, archived = grey slashes over a slightly dimmer picture. */
+.gv2-detail-media-endorsed {
+    --gv2-detail-mark: #22c55e;
+    --gv2-detail-mark-glow: rgba(34, 197, 94, 0.45);
+}
+
+.gv2-detail-media-disliked {
+    --gv2-detail-mark: #ef4444;
+    --gv2-detail-mark-glow: rgba(239, 68, 68, 0.4);
+}
+
+.gv2-detail-media-staged {
+    --gv2-detail-mark: #f97316;
+    --gv2-detail-mark-glow: rgba(249, 115, 22, 0.45);
+}
+
+.gv2-detail-media-endorsed,
+.gv2-detail-media-disliked,
+.gv2-detail-media-staged {
+    box-shadow: 0 0 0 2px var(--gv2-detail-mark), 0 0 14px var(--gv2-detail-mark-glow);
+}
+
+.gv2-detail-media-archived .gv2-detail-img {
+    filter: brightness(0.78) saturate(0.85);
+}
+
+.gv2-detail-media .gv2-strike {
+    border-radius: 10px;
 }
 
 /* Detail drawer layouts (toggle in the drawer):
@@ -7440,12 +7484,19 @@ body.resizing .resize-handle {
     justify-content: center;
     width: 100%;
     height: 100%;
+    container-type: size; /* lets the preview size itself from cqw/cqh below */
     pointer-events: none; /* empty space around the preview belongs to the stage (closes the drawer) */
 }
 
+.gv2-detail.gv2-detail-media-left .gv2-detail-media {
+    width: min(100cqw, calc(100cqh * var(--gv2-media-ar, 1)));
+    height: min(100cqh, calc(100cqw / var(--gv2-media-ar, 1)));
+    margin: 0;
+}
+
 .gv2-detail.gv2-detail-media-left .gv2-detail-img {
-    width: auto;
-    height: auto;
+    width: 100%;
+    height: 100%;
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
@@ -7455,6 +7506,12 @@ body.resizing .resize-handle {
 /* the fullscreen viewer already fills the left side; keep only the drawer panel visible */
 .gv2-detail.gv2-detail-split .gv2-detail-stage {
     display: none;
+}
+
+/* In split mode the fullscreen viewer fills the left side, so the drawer must not
+   paint its media-left backdrop over it (same specificity, so this rule comes last). */
+.gv2-detail.gv2-detail-media-left.gv2-detail-split {
+    background: transparent;
 }
 
 .gv2-detail-media-toggle {

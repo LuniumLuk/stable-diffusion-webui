@@ -11,6 +11,7 @@ The server exposes the native job API used here:
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import socket
@@ -120,6 +121,63 @@ def port_is_taken(port: int) -> bool:
         return False
 
 
+def _orphaned_sidecar(port: int):
+    """The sd-server.exe listening on *port* whose WebUI parent is gone, if any."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+
+    try:
+        listeners = [
+            conn.pid
+            for conn in psutil.net_connections(kind="tcp")
+            if conn.pid and conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port
+        ]
+    except (psutil.Error, OSError):
+        return None
+
+    mine = os.getpid()
+    for pid in set(listeners) - {mine}:
+        try:
+            proc = psutil.Process(pid)
+            if os.path.normcase(os.path.abspath(proc.exe())) != os.path.normcase(os.path.abspath(SERVER_EXE)):
+                continue
+            parent_pid = proc.ppid()
+            if not parent_pid or not psutil.pid_exists(parent_pid):
+                return proc
+            # a WebUI that is still running owns it - leave it alone
+            if "python" not in " ".join(psutil.Process(parent_pid).cmdline()).lower():
+                return proc
+        except (psutil.Error, OSError):
+            continue
+    return None
+
+
+def _reclaim_orphaned_sidecar(port: int) -> bool:
+    """Stop a sidecar left behind by a previous run so the port can be bound again."""
+    try:
+        import psutil
+    except ImportError:
+        return False
+
+    proc = _orphaned_sidecar(port)
+    if proc is None:
+        return False
+
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except psutil.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+    except (psutil.Error, OSError):
+        return False
+    print(f"stopped leftover stable-diffusion.cpp sidecar (pid {proc.pid}) holding port {port}")
+    return True
+
+
 class SdcppServer:
     """Process + HTTP client for one sd.cpp server instance."""
 
@@ -217,7 +275,13 @@ class SdcppServer:
 
             # A sidecar left behind by a previous WebUI run keeps the port warm. The new
             # child would fail to bind, and the jobs would go to the old process with the
-            # old launch arguments (no LoRA folder, for one) - say so instead.
+            # old launch arguments (no LoRA folder, for one) - so reclaim the port from an
+            # orphan, and say so when something else holds it.
+            if port_is_taken(port):
+                _reclaim_orphaned_sidecar(port)
+                deadline = time.time() + 10.0
+                while port_is_taken(port) and time.time() < deadline:
+                    time.sleep(POLL_INTERVAL)
             if port_is_taken(port):
                 raise SdcppError(
                     f"port {port} is already used by another stable-diffusion.cpp instance, "
@@ -332,3 +396,5 @@ class SdcppServer:
 
 
 server = SdcppServer()
+# without this a Ctrl+C or a closed console leaves sd-server.exe holding the port
+atexit.register(server.stop)

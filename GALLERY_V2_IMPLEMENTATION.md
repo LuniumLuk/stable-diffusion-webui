@@ -142,6 +142,33 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   switches modes live; Escape/close returns to the drawer, a second Escape closes the
   drawer, and prev/next navigation plus wheel zoom and drag panning work in both modes.
   Up/Down still endorse/dislike the open item instead of scrolling the page.
+- **Bug fix — preview on the left could not open the viewer**: the media-left layout paints an
+  82 %-black backdrop over the whole viewport on a drawer stacked above `#lightboxModal`
+  (z-index 1152 vs 1151). In split mode that backdrop covered the freshly opened viewer, so a
+  click on the left-hand preview looked like a no-op while the same click worked with the
+  preview in the panel. The split state now clears the backdrop
+  (`.gv2-detail.gv2-detail-media-left.gv2-detail-split`), and the viewer takes the left stage
+  exactly as it already did from the panel layout.
+
+## Detail preview marks
+
+- The drawer preview mirrors the grid-card marks (`renderDetail` in `javascript/galleryV2.js`,
+  `.gv2-detail-media-*` CSS): a 2 px ring in the state colour — green endorsed, red disliked,
+  orange staged — plus, for an archived item, the same grey `.gv2-strike` slashes over a
+  slightly dimmed (`brightness(0.78) saturate(0.85)`) picture. The marks are drawn on the
+  preview box, so they follow the picture in both layouts (panel and left stage).
+- The preview box is sized from the image's aspect ratio (`--gv2-media-ar`, taken from
+  `item.width/height` and corrected from the loaded image) instead of filling the panel/stage;
+  a ring or the slashes therefore land on the picture, never on the empty letterbox around it.
+  The left stage sizes the box with container-query units (`100cqw` / `100cqh`) so it stays a
+  perfect "contain" fit at any window size.
+- The drawer asks for the `thumb` blob of an archived item (`detailPreviewUrl`): the media policy
+  keeps previews for active/staged rows only, so the old unconditional `preview` request 404'd
+  and left a blank box exactly where the archived marks belong. A preview that fails for any
+  other reason falls back to the thumb as well.
+- **SD Lite parity**: `openViewer` takes the item's `stateClass` and applies the same ring plus
+  the archived dim to `#viewerImg` in the full-screen item viewer. The slash overlay stays
+  card-only there: the viewer is a pinch-zoom surface, so an overlay cannot track the picture.
 
 ## Card state highlights + stage shortcut (S)
 

@@ -1,5 +1,6 @@
 param(
-    [int[]]$Ports = @(7860, 7861, 7862, 7863, 7864),
+    # 7866 is the default DiT sidecar port; it keeps the port warm after a crash
+    [int[]]$Ports = @(7860, 7861, 7862, 7863, 7864, 7866),
     [switch]$DryRun,
     [switch]$VerboseOutput
 )

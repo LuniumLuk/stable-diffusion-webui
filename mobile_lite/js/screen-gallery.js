@@ -220,15 +220,19 @@ async function sendToKrea2Ref(item) {
   await addImageAsKrea2Ref({ path: item.path, url: item.url });
 }
 
-function cardNode(item, onTap, withActions) {
-  const badges = badgesHtml(item);
-  // endorsed = green, disliked = red, staged = orange, archived = dimmed (mobile parity)
-  const stateClass = [
+/** endorsed = green, disliked = red, staged = orange, archived = dimmed (mobile parity) */
+function stateClassOf(item) {
+  return [
     item.endorsed ? 'is-endorsed' : '',
     item.disliked ? 'is-disliked' : '',
     item.archived ? 'is-archived' : '',
     item.staged ? 'is-staged' : '',
   ].filter(Boolean).join(' ');
+}
+
+function cardNode(item, onTap, withActions) {
+  const badges = badgesHtml(item);
+  const stateClass = stateClassOf(item);
   const muted = !!(item.disliked || item.archived);
   const thumb = el('div', {
     class: `thumb ${stateClass}`.trim(),
@@ -397,6 +401,7 @@ function openItemViewer(item, list = null) {
       ],
       onNavigate: move,
       canNavigate: canMove,
+      stateClass: stateClassOf(current),
     });
   };
 
