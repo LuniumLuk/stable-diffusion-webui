@@ -170,7 +170,22 @@
 
   function sendDefaultOnly(action) {
     var only = state.sendDefaults[action];
+    if (only === undefined) {
+      // prefs load asynchronously with the gallery tab; until that ran, trust the
+      // stored value so the first click after a page load already honours it
+      var stored = storedSendDefaults();
+      if (stored) only = stored[action];
+    }
     return SEND_ONLY_VALUES.indexOf(only) > -1 ? only : '';
+  }
+
+  function storedSendDefaults() {
+    try {
+      var prefs = JSON.parse(window.localStorage && window.localStorage.getItem(PREFS_KEY) || '{}') || {};
+      return prefs.sendDefaults && typeof prefs.sendDefaults === 'object' ? prefs.sendDefaults : null;
+    } catch (err) {
+      return null;
+    }
   }
 
   function setSendDefault(action, only) {

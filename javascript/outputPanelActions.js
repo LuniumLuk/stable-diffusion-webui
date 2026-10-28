@@ -33,10 +33,27 @@
     const input = host && host.querySelector("textarea, input");
     if (!input) return false;
 
-    const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(input, value);
+    if (input.value !== value) {
+      // the prompt editors chain their own value setter; going through it keeps
+      // them in sync, otherwise they may render their stale value back
+      const own = Object.getOwnPropertyDescriptor(input, "value");
+      if (own && own.set) {
+        own.set.call(input, value);
+      } else {
+        const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, "value").set.call(input, value);
+      }
+    }
+
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
+  }
+
+  function textboxValue(id) {
+    const host = gradioApp().getElementById(id);
+    const input = host && host.querySelector("textarea, input");
+    return input ? input.value : null;
   }
 
   function resultImage(tabname, index) {
@@ -69,6 +86,8 @@
   // ---------------------------------------------------------------- send variations
   // the gallery and the result panels share one menu and one remembered default
   // (javascript/galleryV2.js exposes it as window.gallerySendMenu)
+  const PREFS_KEY = "gv2.prefs.v1";
+  const SEND_VARIANTS = ["", "prompt", "image_prompt", "all"];
 
   function sendMenu() {
     return window.gallerySendMenu || null;
@@ -76,7 +95,16 @@
 
   function sendVariation(action) {
     const menu = sendMenu();
-    return menu ? menu.defaultOnly(action) : "";
+    if (menu) return menu.defaultOnly(action);
+
+    // galleryV2.js did not load: still honour the stored default
+    try {
+      const prefs = JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}") || {};
+      const only = prefs.sendDefaults ? prefs.sendDefaults[action] : "";
+      return SEND_VARIANTS.indexOf(only) > -1 ? only : "";
+    } catch (e) {
+      return "";
+    }
   }
 
   function selectedInfotext(tabname) {
@@ -109,8 +137,10 @@
     };
   }
 
-  // prompt + negative only: no image and no other setting is touched
-  function applyPromptOnly(tabname) {
+  // prompt + negative only: no image and no other setting is touched.
+  // The write is verified because the prompt editors (CodeMirror / chips) can
+  // render their own state back over the textarea.
+  function applyPromptOnly(tabname, retries) {
     const infotext = selectedInfotext(tabname);
     const parts = splitInfotext(infotext);
     if (!infotext || (!parts.prompt && !parts.negative)) {
@@ -118,9 +148,19 @@
       return false;
     }
 
-    if (parts.prompt) setHiddenTextbox("img2img_prompt", parts.prompt);
-    if (parts.negative) setHiddenTextbox("img2img_neg_prompt", parts.negative);
-    return true;
+    const targets = [];
+    if (parts.prompt) targets.push(["img2img_prompt", parts.prompt]);
+    if (parts.negative) targets.push(["img2img_neg_prompt", parts.negative]);
+
+    let pending = targets;
+    for (let attempt = retries == null ? 1 : retries; attempt >= 0; attempt--) {
+      pending.forEach(([id, text]) => setHiddenTextbox(id, text));
+      pending = targets.filter(([id, text]) => textboxValue(id) !== text);
+      if (pending.length === 0) return true;
+    }
+
+    banner("Could not write the prompt into img2img", "error");
+    return false;
   }
 
   // full infotext (prompt + every parameter) through the tab's hidden paste bridge
@@ -131,9 +171,21 @@
       return false;
     }
 
+    const inputId = tabname + "_infotext_apply";
     const apply = gradioApp().getElementById(tabname + "_apply_infotext");
-    if (!apply || !setHiddenTextbox(tabname + "_infotext_apply", infotext)) {
+    if (!apply) {
       banner("Send bridge is missing (reload the UI)", "error");
+      return false;
+    }
+
+    // gradio sends the textbox value it saw at click time, so make sure the write landed
+    let written = false;
+    for (let attempt = 0; attempt < 2 && !written; attempt++) {
+      setHiddenTextbox(inputId, infotext);
+      written = textboxValue(inputId) === infotext;
+    }
+    if (!written) {
+      banner("Could not hand the generation info to the send bridge", "error");
       return false;
     }
 
@@ -161,13 +213,23 @@
     return true;
   }
 
+  // the prompt editors can write their state back a frame later; confirm the text
+  // survived before sending anything
+  function whenPromptSettled(tabname, done) {
+    setTimeout(function () {
+      if (applyPromptOnly(tabname, 0)) done();
+    }, 80);
+  }
+
   function runSend(tabname, action, only) {
     const label = action === "inpaint" ? "inpaint" : "img2img";
 
     if (only === "prompt") {
       if (!applyPromptOnly(tabname)) return;
-      switchToTarget(action);
-      banner("Prompt sent to " + label, "success");
+      whenPromptSettled(tabname, function () {
+        switchToTarget(action);
+        banner("Prompt sent to " + label, "success");
+      });
       return;
     }
 
@@ -176,7 +238,18 @@
       return;
     }
 
-    if (only === "image_prompt" && !applyPromptOnly(tabname)) return;
+    if (only === "image_prompt") {
+      if (!applyPromptOnly(tabname)) return;
+      whenPromptSettled(tabname, function () {
+        if (!sendImage(tabname, action)) {
+          banner("Send bridge is missing (reload the UI)", "error");
+          return;
+        }
+        banner("Image + prompt sent to " + label, "success");
+      });
+      return;
+    }
+
     if (only === "all" && !applyInfotext(tabname)) return;
 
     if (!sendImage(tabname, action)) {
@@ -188,8 +261,7 @@
       switchToTarget(action);
     }
 
-    const sent = only === "image_prompt" ? "Image + prompt" : only === "all" ? "Image + prompt + settings" : "Image";
-    banner(sent + " sent to " + label, "success");
+    banner((only === "all" ? "Image + prompt + settings" : "Image") + " sent to " + label, "success");
   }
 
   function sendToComposer(tabname, index) {
