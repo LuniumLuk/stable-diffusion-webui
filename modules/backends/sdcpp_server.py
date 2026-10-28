@@ -29,6 +29,47 @@ DEFAULT_PORT = 7866
 STARTUP_TIMEOUT = 300.0
 POLL_INTERVAL = 0.25
 
+# Speed switches that do not change the maths: flash attention in the DiT and direct
+# convolutions in the VAE decoder. Measured on a 2B Anima checkpoint / RTX 5070 Ti,
+# 20 steps, CFG 4: 832x1216 drops from 27.9s to 16.0s and 512x768 from 8.5s to 5.6s.
+# They are also what keeps the cost per pixel flat as the resolution grows - without
+# flash attention a 1 MP job pays ~30% more per pixel than a 0.4 MP one. Older sd.cpp
+# builds do not know the flags, so they are only passed when the executable lists them
+# in --help.
+PERF_FLAGS = ("--diffusion-fa", "--vae-conv-direct")
+
+_perf_flags_cache: dict[tuple[str, float], tuple[str, ...]] = {}
+
+
+def supported_perf_flags() -> tuple[str, ...]:
+    """The PERF_FLAGS entries this sd-server build accepts (probed once per executable)."""
+    try:
+        stamp = os.path.getmtime(SERVER_EXE)
+    except OSError:
+        return ()
+
+    key = (SERVER_EXE, stamp)
+    if key in _perf_flags_cache:
+        return _perf_flags_cache[key]
+
+    flags: tuple[str, ...] = ()
+    try:
+        probe = subprocess.run(
+            [SERVER_EXE, "--help"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        text = probe.stdout.decode("utf-8", "replace")
+        flags = tuple(flag for flag in PERF_FLAGS if flag in text)
+    except Exception:
+        flags = ()
+
+    _perf_flags_cache[key] = flags
+    return flags
+
 
 class SdcppError(RuntimeError):
     def __init__(self, message, details=""):
@@ -118,13 +159,19 @@ class SdcppServer:
 
     def ready_for(self, model: str, text_encoder: str, vae: str) -> bool:
         """True when this process already serves exactly this model configuration."""
-        config = (os.path.abspath(model), os.path.abspath(text_encoder), os.path.abspath(vae), get_port())
+        config = self._config_for(model, text_encoder, vae, get_port())
         with self._lock:
             return self._proc is not None and self._proc.poll() is None and self._config == config
 
     # --------------------------------------------------------------- process
     @staticmethod
-    def _args(model, text_encoder, vae, port):
+    def _config_for(model: str, text_encoder: str, vae: str, port: int) -> tuple:
+        # the speed flags belong to the identity too: a sidecar started before this
+        # build of the WebUI knew them has to be restarted, not reused
+        return (os.path.abspath(model), os.path.abspath(text_encoder), os.path.abspath(vae), port, supported_perf_flags())
+
+    @staticmethod
+    def _args(model, text_encoder, vae, port, flags=()):
         return [
             SERVER_EXE,
             "--diffusion-model", model,
@@ -134,6 +181,7 @@ class SdcppServer:
             "--listen-port", str(port),
             "--lora-model-dir", model_registry.lora_dir(),
             "--vae-tiling",
+            *flags,
         ]
 
     def _log_tail(self, limit=1200):
@@ -149,7 +197,7 @@ class SdcppServer:
     def ensure_running(self, model: str, text_encoder: str, vae: str) -> None:
         """Start the sidecar, or restart it when the model configuration changed."""
         port = get_port()
-        config = (os.path.abspath(model), os.path.abspath(text_encoder), os.path.abspath(vae), port)
+        config = self._config_for(model, text_encoder, vae, port)
 
         with self._lock:
             if self.is_alive() and self._config == config and self.health():
@@ -180,7 +228,7 @@ class SdcppServer:
             log = open(LOG_PATH, "wb")
             try:
                 self._proc = subprocess.Popen(
-                    self._args(model, text_encoder, vae, port),
+                    self._args(model, text_encoder, vae, port, config[-1]),
                     cwd=SD_CPP_DIR,
                     stdout=log,
                     stderr=subprocess.STDOUT,

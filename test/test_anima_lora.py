@@ -83,6 +83,50 @@ def test_sidecar_points_at_the_anima_lora_folder():
     assert args[args.index("--lora-model-dir") + 1] == model_registry.lora_dir()
 
 
+def test_sidecar_passes_the_speed_flags_it_was_given():
+    args = SdcppServer._args("model.safetensors", "te.gguf", "vae.safetensors", 7866, sdcpp_server.PERF_FLAGS)
+
+    assert "--vae-tiling" in args
+    for flag in sdcpp_server.PERF_FLAGS:
+        assert flag in args
+
+
+def test_sidecar_identity_includes_the_speed_flags(monkeypatch):
+    monkeypatch.setattr(sdcpp_server, "supported_perf_flags", lambda: ("--diffusion-fa",))
+
+    config = SdcppServer._config_for("model.safetensors", "te.gguf", "vae.safetensors", 7866)
+
+    assert config[-1] == ("--diffusion-fa",)
+
+
+def test_supported_perf_flags_keeps_only_the_flags_the_build_lists(tmp_path, monkeypatch):
+    exe = tmp_path / "sd-server.exe"
+    exe.write_bytes(b"")
+    monkeypatch.setattr(sdcpp_server, "SERVER_EXE", str(exe))
+    monkeypatch.setattr(sdcpp_server, "_perf_flags_cache", {})
+
+    class Probe:
+        stdout = b"  --fa  use flash attention\n  --vae-conv-direct  direct convolutions\n"
+
+    monkeypatch.setattr(sdcpp_server.subprocess, "run", lambda *args, **kwargs: Probe())
+
+    assert sdcpp_server.supported_perf_flags() == ("--vae-conv-direct",)
+
+
+def test_supported_perf_flags_is_empty_when_the_probe_fails(tmp_path, monkeypatch):
+    exe = tmp_path / "sd-server.exe"
+    exe.write_bytes(b"")
+    monkeypatch.setattr(sdcpp_server, "SERVER_EXE", str(exe))
+    monkeypatch.setattr(sdcpp_server, "_perf_flags_cache", {})
+
+    def explode(*args, **kwargs):
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(sdcpp_server.subprocess, "run", explode)
+
+    assert sdcpp_server.supported_perf_flags() == ()
+
+
 def _listening_socket():
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
