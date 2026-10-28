@@ -362,6 +362,10 @@
         target = Math.max(0, Math.min(MODE_KEYS.length - 1, Math.round(target)));
         var outgoing = currentModeIndex();
         var before = freshSnapshot();
+        // the pre-paste snapshot belongs to this one switch: keeping it around
+        // made a later switch diff the target's values against the state from
+        // before the previous send and copy them into the wrong mode
+        snapshot = null;
         var changed = null;
         if (before) changed = diffValues(before, captureAll());
 
@@ -516,6 +520,12 @@
         onUiLoaded(install);
         if (typeof onAfterUiUpdate === 'function') onAfterUiUpdate(restoreOnceOnLoad);
     }
+
+    // Send flows (result panel capsule, gallery cards) write a prompt or paste
+    // parameters and switch modes right after. They refresh the pre-paste
+    // snapshot first so the switch diffs against the true pre-send state even
+    // when the last pointerdown is older than SNAP_TTL.
+    window.img2imgModeParamsBeginPaste = takeSnapshot;
 
     // exposed for node tests (tmp/img2img_mode_params_test.js): pure helpers only
     window.img2imgModeParamsDebug = {

@@ -295,8 +295,8 @@ def create_output_panel(tabname, outdir, toprow=None):
                 if tabname != "extras":
                     save = ToolButton('💾', elem_id=f'save_{tabname}', visible=not compact_actions, tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
                     save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', visible=not compact_actions, tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
-                    endorse_btn = ToolButton('\u2b50', elem_id=f'endorse_{tabname}', visible=not compact_actions, tooltip="Endorse this image – save a copy and record it in the starred gallery.")
-                    res.button_stage = ToolButton('➕', elem_id=f'{tabname}_stage', visible=not compact_actions, tooltip="Capture the current settings into an img2img stage.")
+                    endorse_btn = ToolButton(send_label('\u2b50', 'Endorse'), elem_id=f'endorse_{tabname}', tooltip="Endorse this image – save a copy and record it in the starred gallery.")
+                    res.button_stage = ToolButton(send_label('➕', 'Stage'), elem_id=f'{tabname}_stage', tooltip="Capture the current settings into an img2img stage.")
 
                 buttons = {
                     'img2img': ToolButton(send_label('🖼️', 'To img2img'), elem_id=f'{tabname}_send_to_img2img', tooltip="Send the selected result to img2img – right-click to choose what is sent."),

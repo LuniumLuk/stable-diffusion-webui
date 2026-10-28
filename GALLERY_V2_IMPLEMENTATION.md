@@ -143,6 +143,21 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   drawer, and prev/next navigation plus wheel zoom and drag panning work in both modes.
   Up/Down still endorse/dislike the open item instead of scrolling the page.
 
+## Card state highlights + stage shortcut (S)
+
+- **Card visuals** (`cardHtml` in `javascript/galleryV2.js`, `.gv2-card-*` CSS): every card carries a
+  state class next to `.gv2-card` — `gv2-card-endorsed` (green border), `gv2-card-disliked` (red border,
+  dimmed thumb + grey slash overlay), `gv2-card-archived` (dimmed thumb + grey slash overlay) and
+  `gv2-card-staged` (orange border). The overlay is a single `.gv2-strike` child rendered for
+  disliked/archived rows; badges, actions and the selection veil still paint above it.
+- **Stage shortcut in the detail drawer**: `S` stages / unstages the open item (the drawer's
+  keyboard help lists it). Like the API, it refuses rated items (endorse/dislike) and archived items
+  with a toast instead of a silent no-op; typing in the drawer's tag input is unaffected. Staging is
+  only offered while the drawer is open — the gallery-wide `S` still toggles select mode.
+- **SD Lite parity**: the same four signals are applied to `.thumb` (`is-endorsed` / `is-disliked` /
+  `is-archived` / `is-staged`) with the same `.strike` overlay in `mobile_lite/style.css`. The mobile
+  gallery is touch-first, so the `S` shortcut (a desktop detail-drawer feature) is not mirrored.
+
 ## Source vs compiled prompt
 
 Every generated image stores two prompts in both stores (`items` and `generated_images`,

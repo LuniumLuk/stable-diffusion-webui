@@ -1,9 +1,11 @@
 // Result panel quick actions: the generation preview carries a floating capsule
-// with three buttons only.
+// with the two send actions, Composer, Endorse and Stage.
 //  - 🖼️ To img2img / 🎨 To inpaint: a plain click runs the variation starred as
 //    the default in the gallery's detail panel (image only unless changed
 //    there), right-click opens that same "what gets sent" menu;
 //  - 🧩 Composer: load the selected result image into the Composer tab;
+//  - ⭐ Endorse / ➕ Stage: plain Gradio buttons (the stage popup lives in
+//    javascript/img2imgStagePanel.js);
 //  - log lines marked by modules/ui_common.py quick_action_message() (endorse,
 //    save, ...) are also popped up as global banners.
 (function () {
@@ -137,30 +139,42 @@
     };
   }
 
-  // prompt + negative only: no image and no other setting is touched.
-  // The write is verified because the prompt editors (CodeMirror / chips) can
-  // render their own state back over the textarea.
-  function applyPromptOnly(tabname, retries) {
-    const infotext = selectedInfotext(tabname);
-    const parts = splitInfotext(infotext);
-    if (!infotext || (!parts.prompt && !parts.negative)) {
-      banner("No prompt to send for the selected result", "error");
-      return false;
-    }
-
+  // Prompt + negative only: no image and no other setting is touched.
+  // Gradio (and the prompt editors) can re-apply a component's previous value a
+  // frame or two after the mode restore, so the write is confirmed over a short
+  // window instead of a single tick.
+  function applyPromptSettled(tabname, done) {
+    const parts = splitInfotext(selectedInfotext(tabname));
     const targets = [];
     if (parts.prompt) targets.push(["img2img_prompt", parts.prompt]);
     if (parts.negative) targets.push(["img2img_neg_prompt", parts.negative]);
 
-    let pending = targets;
-    for (let attempt = retries == null ? 1 : retries; attempt >= 0; attempt--) {
-      pending.forEach(([id, text]) => setHiddenTextbox(id, text));
-      pending = targets.filter(([id, text]) => textboxValue(id) !== text);
-      if (pending.length === 0) return true;
+    if (targets.length === 0) {
+      banner("No prompt to send for the selected result", "error");
+      done(false);
+      return;
     }
 
-    banner("Could not write the prompt into img2img", "error");
-    return false;
+    let tries = 0;
+    const check = function () {
+      const pending = targets.filter(([id, text]) => textboxValue(id) !== text);
+      if (pending.length === 0) {
+        done(true);
+        return;
+      }
+      tries += 1;
+      if (tries >= 6) {
+        banner("Could not write the prompt into img2img", "error");
+        done(false);
+        return;
+      }
+      pending.forEach(([id, text]) => setHiddenTextbox(id, text));
+      setTimeout(check, 150);
+    };
+
+    // write now, then confirm once the component's own late re-render landed
+    targets.forEach(([id, text]) => setHiddenTextbox(id, text));
+    setTimeout(check, 150);
   }
 
   // full infotext (prompt + every parameter) through the tab's hidden paste bridge
@@ -213,22 +227,41 @@
     return true;
   }
 
-  // the prompt editors can write their state back a frame later; confirm the text
-  // survived before sending anything
-  function whenPromptSettled(tabname, done) {
-    setTimeout(function () {
-      if (applyPromptOnly(tabname, 0)) done();
-    }, 80);
+  function hasPromptToSend(tabname) {
+    const parts = splitInfotext(selectedInfotext(tabname));
+    return !!(parts.prompt || parts.negative);
+  }
+
+  // js/img2imgModeParams.js restores the target mode's own prompt when the
+  // img2img/inpaint mode switches, so a prompt written before switching is
+  // replaced by that stored value. Switch first, then write the payload into
+  // the now-active mode (the switch itself starts after 250 ms and its restore
+  // lands 50 ms later).
+  const AFTER_MODE_SWITCH_MS = 420;
+
+  function afterModeSwitch(fn) {
+    setTimeout(fn, AFTER_MODE_SWITCH_MS);
   }
 
   function runSend(tabname, action, only) {
     const label = action === "inpaint" ? "inpaint" : "img2img";
 
+    // the per-mode parameter store diffs a full infotext paste against this
+    // snapshot (a right-click pick can come long after the pointerdown)
+    if (typeof window.img2imgModeParamsBeginPaste === "function") {
+      window.img2imgModeParamsBeginPaste();
+    }
+
     if (only === "prompt") {
-      if (!applyPromptOnly(tabname)) return;
-      whenPromptSettled(tabname, function () {
-        switchToTarget(action);
-        banner("Prompt sent to " + label, "success");
+      if (!hasPromptToSend(tabname)) {
+        banner("No prompt to send for the selected result", "error");
+        return;
+      }
+      switchToTarget(action);
+      afterModeSwitch(function () {
+        applyPromptSettled(tabname, function (ok) {
+          if (ok) banner("Prompt sent to " + label, "success");
+        });
       });
       return;
     }
@@ -239,13 +272,20 @@
     }
 
     if (only === "image_prompt") {
-      if (!applyPromptOnly(tabname)) return;
-      whenPromptSettled(tabname, function () {
-        if (!sendImage(tabname, action)) {
-          banner("Send bridge is missing (reload the UI)", "error");
-          return;
-        }
-        banner("Image + prompt sent to " + label, "success");
+      if (!hasPromptToSend(tabname)) {
+        banner("No prompt to send for the selected result", "error");
+        return;
+      }
+      switchToTarget(action);
+      afterModeSwitch(function () {
+        applyPromptSettled(tabname, function (ok) {
+          if (!ok) return;
+          if (!sendImage(tabname, action)) {
+            banner("Send bridge is missing (reload the UI)", "error");
+            return;
+          }
+          banner("Image + prompt sent to " + label, "success");
+        });
       });
       return;
     }

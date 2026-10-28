@@ -42,8 +42,28 @@ function getImg2imgStageFields() {
     return IMG2IMG_STAGE_FALLBACK_FIELDS;
 }
 
-function setImg2imgStagePayload(value) {
-    const wrap = gradioApp().getElementById('img2img_stage_payload');
+// The result panel's ➕ Stage button (ui_common.create_output_panel) captures the
+// same settings through its own hidden bridge; modules/ui.py wires only these
+// components into the txt2img bridge, so img2img-only fields are not offered.
+const TXT2IMG_STAGE_KEYS = [
+    'prompt', 'negative_prompt', 'steps', 'sampler_name', 'scheduler', 'seed',
+    'cfg_scale', 'width', 'height', 'batch_count', 'batch_size',
+];
+
+/** Hidden capture bridge of one generation tab (img2img toprow by default). */
+function stageBridgeFor(tabname) {
+    if (tabname === 'txt2img' || tabname === 'img2img') {
+        return {
+            payloadId: tabname + '_stage_quick_payload',
+            captureId: tabname + '_stage_quick_capture',
+            keys: tabname === 'txt2img' ? TXT2IMG_STAGE_KEYS : null,
+        };
+    }
+    return { payloadId: 'img2img_stage_payload', captureId: 'img2img_stage_capture_btn', keys: null };
+}
+
+function setStagePayload(payloadId, value) {
+    const wrap = gradioApp().getElementById(payloadId);
     if (!wrap) return false;
     const ta = wrap.querySelector('textarea');
     if (!ta) return false;
@@ -53,15 +73,20 @@ function setImg2imgStagePayload(value) {
     return true;
 }
 
-function clickImg2imgStageButton(btnId) {
+function clickStageButton(btnId) {
     setTimeout(function() {
         const btn = gradioApp().getElementById(btnId);
         if (btn) btn.click();
     }, 60);
 }
 
-function openImg2imgStagePopup() {
-    const fields = getImg2imgStageFields();
+function openImg2imgStagePopup(bridge) {
+    // Gradio calls this from the toprow "Add stage" button without arguments
+    if (!bridge || !bridge.payloadId) bridge = stageBridgeFor('img2img');
+
+    const fields = getImg2imgStageFields().filter(function(field) {
+        return !bridge.keys || bridge.keys.indexOf(field.key) >= 0;
+    });
 
     const wrapper = document.createElement('div');
     wrapper.className = 'img2img-stage-popup';
@@ -124,12 +149,12 @@ function openImg2imgStagePopup() {
         }
         const name = (nameInput.value || '').trim();
         const payload = JSON.stringify({ name: name, fields: selected });
-        if (!setImg2imgStagePayload(payload)) {
+        if (!setStagePayload(bridge.payloadId, payload)) {
             console.warn('[img2imgStagePanel] payload textbox not found');
             return;
         }
         if (typeof closePopup === 'function') closePopup();
-        clickImg2imgStageButton('img2img_stage_capture_btn');
+        clickStageButton(bridge.captureId);
     });
 
     cancelBtn.addEventListener('click', function() {
@@ -146,11 +171,11 @@ function openImg2imgStagePopup() {
 function img2imgStageApply(btnEl) {
     const name = (btnEl && btnEl.dataset && btnEl.dataset.stage) || '';
     if (!name) return;
-    if (!setImg2imgStagePayload(name)) {
+    if (!setStagePayload('img2img_stage_payload', name)) {
         console.warn('[img2imgStagePanel] payload textbox not found');
         return;
     }
-    clickImg2imgStageButton('img2img_stage_apply_btn');
+    clickStageButton('img2img_stage_apply_btn');
     notifyStageApplied(name);
 }
 
@@ -168,11 +193,11 @@ function notifyStageApplied(name) {
 function img2imgStageDrop(btnEl) {
     const name = (btnEl && btnEl.dataset && btnEl.dataset.stage) || '';
     if (!name) return;
-    if (!setImg2imgStagePayload(name)) {
+    if (!setStagePayload('img2img_stage_payload', name)) {
         console.warn('[img2imgStagePanel] payload textbox not found');
         return;
     }
-    clickImg2imgStageButton('img2img_stage_drop_btn');
+    clickStageButton('img2img_stage_drop_btn');
 }
 
 /**
@@ -215,6 +240,18 @@ function syncImg2imgResizeTab(value) {
     }
     return [];
 }
+
+// Quick action in the result panel (ui_common.create_output_panel): the ➕ Stage
+// button opens the same field picker and captures through that tab's hidden
+// bridge, so it works from both txt2img and img2img results.
+document.addEventListener('click', function(event) {
+    const btn = event.target instanceof Element ? event.target.closest('button[id]') : null;
+    if (!btn || (btn.id !== 'txt2img_stage' && btn.id !== 'img2img_stage')) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    openImg2imgStagePopup(stageBridgeFor(btn.id === 'txt2img_stage' ? 'txt2img' : 'img2img'));
+}, true);
 
 // Alt+1..9 applies the 1st..9th stage in the list (img2img tab only).
 document.addEventListener('keydown', function(event) {

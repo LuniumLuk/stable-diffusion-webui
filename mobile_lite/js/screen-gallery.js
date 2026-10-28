@@ -222,8 +222,16 @@ async function sendToKrea2Ref(item) {
 
 function cardNode(item, onTap, withActions) {
   const badges = badgesHtml(item);
+  // endorsed = green, disliked = red, staged = orange, archived = dimmed (mobile parity)
+  const stateClass = [
+    item.endorsed ? 'is-endorsed' : '',
+    item.disliked ? 'is-disliked' : '',
+    item.archived ? 'is-archived' : '',
+    item.staged ? 'is-staged' : '',
+  ].filter(Boolean).join(' ');
+  const muted = !!(item.disliked || item.archived);
   const thumb = el('div', {
-    class: 'thumb',
+    class: `thumb ${stateClass}`.trim(),
     role: 'button',
     tabindex: '0',
     onClick: () => onTap(item),
@@ -244,6 +252,7 @@ function cardNode(item, onTap, withActions) {
         thumb.classList.add('has-broken');
       },
     }),
+    muted ? el('div', { class: 'strike' }) : null,
     badges ? el('span', { class: 'badge', text: badges }) : null,
     lineageHtml(item),
   ]);

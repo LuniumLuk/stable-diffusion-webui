@@ -70,16 +70,24 @@
 
     const footer = gradioApp().getElementById("footer");
     if (footer) {
-      // gap, footer and the page's bottom padding are all laid out below the
-      // row, so they do not depend on the height the row is about to get
+      // gap and footer are laid out below the row, so they do not depend on the
+      // height the row is about to get (the footer itself is a zero-height flow
+      // slot - its strip paints fixed in the top header, see style.css)
       const footerRect = footer.getBoundingClientRect();
-      const footerTop = footerRect.top + window.scrollY;
-      const footerBottom = footerRect.bottom + window.scrollY;
-      const docHeight = document.documentElement.scrollHeight;
-
-      reserved += Math.max(0, footerTop - (rowRect.bottom + window.scrollY));
+      reserved += Math.max(0, (footerRect.top + window.scrollY) - (rowRect.bottom + window.scrollY));
       reserved += footerRect.height;
-      reserved += Math.max(0, docHeight - footerBottom);
+      reserved += parseFloat(window.getComputedStyle(footer).marginBottom) || 0;
+
+      // The app container pads the page below its content (1rem). Read that from
+      // the style: document.scrollHeight never drops below the viewport, so
+      // deriving it from the page height made the panel flip between two fixed
+      // heights - and the page scrollbar blink - on every layout pass.
+      const container = footer.closest(".gradio-container");
+      if (container) {
+        const containerStyle = window.getComputedStyle(container);
+        reserved += parseFloat(containerStyle.paddingBottom) || 0;
+        reserved += parseFloat(containerStyle.borderBottomWidth) || 0;
+      }
     }
 
     const height = Math.floor(window.innerHeight - rowTop - reserved);

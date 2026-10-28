@@ -1120,9 +1120,10 @@ div#extras_scale_to_tab div.form{
     justify-content: center;
 }
 
-/* The txt2img/img2img result panel keeps only the three send actions, as a
-   capsule floating over the bottom of the preview. The other buttons stay in
-   the DOM (hidden) for the image viewer and extensions. */
+/* The txt2img/img2img result panel keeps only the quick actions, as a capsule
+   floating over the bottom of the preview: the two send actions, Composer,
+   Endorse and Stage. The other buttons stay in the DOM (hidden) for the image
+   viewer and extensions. */
 #txt2img_results_panel, #img2img_results_panel {
     position: relative;
 }
@@ -1153,7 +1154,8 @@ div#extras_scale_to_tab div.form{
 #image_buttons_txt2img.floating-actions > .form,
 #image_buttons_img2img.floating-actions > .form {
     width: auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 0.4em;
     padding: 0;
     border: none;
@@ -1841,16 +1843,63 @@ footer {
 }
 
 #footer{
-    text-align: center;
+    /* zero-height flow slot: it keeps the tabs' natural bottom gap in the layout
+       while the strip itself paints in the empty top-left header area */
+    flex: 0 0 auto !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: none !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    pointer-events: none;
 }
 
-#footer div{
-    display: inline-block;
+#footer .footer-strip{
+    position: fixed;
+    top: 25px;
+    left: 10px;
+    z-index: 100;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 14px;
+    max-width: min(68vw, 1040px);
+    max-height: calc(var(--webui-top-header-height) - 26px);
+    overflow: hidden;
+    text-align: left;
+    font-size: 10.5px;
+    line-height: 1.45;
+    opacity: 0.72;
+    pointer-events: auto;
+}
+
+#footer .footer-strip:hover,
+#footer .footer-strip:focus-within{
+    opacity: 1;
+}
+
+#footer .footer-strip > div{
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 6px;
+    min-width: 0;
+}
+
+#footer .footer-sep{
+    opacity: 0.6;
+}
+
+#footer a{
+    font-weight: 600;
 }
 
 #footer .versions{
-    font-size: 85%;
-    opacity: 0.85;
+    font-size: 1em;
+    opacity: 0.9;
 }
 
 /* extra networks UI */
@@ -6858,6 +6907,46 @@ body.resizing .resize-handle {
 .gv2-card-current {
     outline: 2px solid var(--gv2-accent);
     box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
+}
+
+/* rating / state highlights: endorsed = green, disliked = red, staged = orange,
+   archived = dimmed with grey slashes (no colour of its own) */
+.gv2-card-endorsed {
+    --gv2-mark: #22c55e;
+    --gv2-mark-glow: rgba(34, 197, 94, 0.45);
+}
+
+.gv2-card-disliked {
+    --gv2-mark: #ef4444;
+    --gv2-mark-glow: rgba(239, 68, 68, 0.4);
+}
+
+.gv2-card-staged {
+    --gv2-mark: #f97316;
+    --gv2-mark-glow: rgba(249, 115, 22, 0.45);
+}
+
+.gv2-card-endorsed,
+.gv2-card-disliked,
+.gv2-card-staged {
+    border-color: var(--gv2-mark);
+    box-shadow: 0 0 0 1px var(--gv2-mark), 0 0 8px var(--gv2-mark-glow);
+}
+
+.gv2-card-disliked .gv2-thumb,
+.gv2-card-archived .gv2-thumb {
+    filter: grayscale(0.8) brightness(0.5);
+}
+
+.gv2-strike {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(
+        45deg,
+        rgba(148, 163, 184, 0.32) 0 5px,
+        rgba(148, 163, 184, 0.02) 5px 16px
+    );
 }
 
 .gv2-root.gv2-dragging {

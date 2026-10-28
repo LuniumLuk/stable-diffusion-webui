@@ -1404,6 +1404,22 @@ body.text-editing { overflow: hidden; }
 
 .thumb-wrap { position: relative; }
 .gallery-grid .thumb { width: 100%; cursor: pointer; position: relative; }
+/* endorsed = green, disliked = red, staged = orange, archived = dimmed with grey slashes */
+.gallery-grid .thumb.is-endorsed { border-color: #22c55e; box-shadow: 0 0 0 1px #22c55e, 0 0 6px rgba(34, 197, 94, 0.45); }
+.gallery-grid .thumb.is-disliked { border-color: #ef4444; box-shadow: 0 0 0 1px #ef4444, 0 0 6px rgba(239, 68, 68, 0.4); }
+.gallery-grid .thumb.is-staged { border-color: #f97316; box-shadow: 0 0 0 1px #f97316, 0 0 6px rgba(249, 115, 22, 0.45); }
+.gallery-grid .thumb.is-disliked img,
+.gallery-grid .thumb.is-archived img { filter: grayscale(0.8) brightness(0.5); }
+.gallery-grid .thumb .strike {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(148, 163, 184, 0.32) 0 5px,
+    rgba(148, 163, 184, 0.02) 5px 16px
+  );
+}
 .thumb img.broken { visibility: hidden; }
 .thumb.has-broken::after {
   content: '\26A0 no file';

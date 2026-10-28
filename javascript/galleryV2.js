@@ -345,7 +345,9 @@
   // drop the image into that sub-tab's OWN component.  The img2img and Inpaint
   // sub-tabs have SEPARATE gradio components (#img2img_image vs #img2maskimg), so
   // injecting into the wrong one "loses" the image in the hidden sub-tab.
-  function goToImg2ImgSub(sub, item) {
+  // `after` runs once the switch (and its per-mode prompt restore) has landed:
+  // writing the prompt before the switch would be overwritten by that restore.
+  function goToImg2ImgSub(sub, item, after) {
     setTimeout(function () { switchToTabByName('img2img'); }, 200);
     setTimeout(function () {
       if (sub === 'inpaint') {
@@ -354,7 +356,16 @@
         window.switch_to_img2img();
       }
       if (item) injectImageInto(item, sub === 'inpaint' ? 'img2maskimg' : 'img2img_image');
+      if (typeof after === 'function') setTimeout(after, 160);
     }, 360);
+  }
+
+  /** Write the prompt into the now-active mode; Gradio can re-apply the restored
+   *  value a frame later, so the write is repeated once after it settles. */
+  function applyPromptAfterSwitch(item) {
+    if (!applyPromptOnly(item)) return false;
+    setTimeout(function () { applyPromptOnly(item); }, 300);
+    return true;
   }
 
   function sendableText(item) {
@@ -370,6 +381,9 @@
 
   function sendItemTo(item, action, opts) {
     var only = (opts && opts.only) || '';
+    // the per-mode parameter store diffs a full infotext paste against this
+    // snapshot; without it, the mode switch's restore could undo the paste
+    if (typeof window.img2imgModeParamsBeginPaste === 'function') window.img2imgModeParamsBeginPaste();
     var path = item.path || item.alias_path || '';
     var text = sendableText(item);
     if (action === 'txt2img') {
@@ -379,13 +393,13 @@
       toast('To txt2img');
     } else if (action === 'img2img') {
       if (only === 'prompt') {
-        if (!applyPromptOnly(item)) return;
-        goToImg2ImgSub('img2img');
-        toast('To img2img \u2014 prompt + negative only');
+        goToImg2ImgSub('img2img', null, function () {
+          if (applyPromptAfterSwitch(item)) toast('To img2img \u2014 prompt + negative only');
+        });
       } else if (only === 'image_prompt') {
-        if (!applyPromptOnly(item)) return;
-        goToImg2ImgSub('img2img', item);
-        toast('To img2img \u2014 image + prompt');
+        goToImg2ImgSub('img2img', item, function () {
+          if (applyPromptAfterSwitch(item)) toast('To img2img \u2014 image + prompt');
+        });
       } else if (only === 'all') {
         if (text && !applyInfotext(text, 'img2img')) return;
         goToImg2ImgSub('img2img', item);
@@ -396,13 +410,13 @@
       }
     } else if (action === 'inpaint') {
       if (only === 'prompt') {
-        if (!applyPromptOnly(item)) return;
-        goToImg2ImgSub('inpaint');
-        toast('To inpaint \u2014 prompt + negative only');
+        goToImg2ImgSub('inpaint', null, function () {
+          if (applyPromptAfterSwitch(item)) toast('To inpaint \u2014 prompt + negative only');
+        });
       } else if (only === 'image_prompt') {
-        if (!applyPromptOnly(item)) return;
-        goToImg2ImgSub('inpaint', item);
-        toast('To inpaint \u2014 image + prompt');
+        goToImg2ImgSub('inpaint', item, function () {
+          if (applyPromptAfterSwitch(item)) toast('To inpaint \u2014 image + prompt');
+        });
       } else if (only === 'all') {
         if (text && !applyInfotext(text, 'img2img')) return;
         goToImg2ImgSub('inpaint', item);
@@ -1698,6 +1712,12 @@
   function cardHtml(row) {
     var rating = ratingOf(row);
     var expired = expiryText(row);
+    var muted = row.state === 'archived' || rating === 'disliked';
+    var flags = '';
+    if (rating === 'endorsed') flags += ' gv2-card-endorsed';
+    else if (rating === 'disliked') flags += ' gv2-card-disliked';
+    if (row.state === 'archived') flags += ' gv2-card-archived';
+    if (row.state === 'staged') flags += ' gv2-card-staged';
     var badges = '';
     if (rating === 'endorsed') badges += badge('\u2605 endorsed', 'gv2-badge-endorsed');
     else if (rating === 'disliked') badges += badge('\u{1F44E} disliked', 'gv2-badge-disliked');
@@ -1725,8 +1745,9 @@
     if (stamp) caps.push('<span class="gv2-capsule">' + stamp + '</span>');
 
     var selected = state.selected.has(row.uid) ? ' gv2-card-selected' : '';
-    return '<div class="gv2-card' + selected + '" data-key="' + esc(row.uid) + '">' +
+    return '<div class="gv2-card' + selected + flags + '" data-key="' + esc(row.uid) + '">' +
       thumb +
+      (muted ? '<div class="gv2-strike"></div>' : '') +
       '<div class="gv2-veil"></div>' +
       '<div class="gv2-card-topleft">' + lineageCapsules(row) +
         '<div class="gv2-card-badges">' + badges + '</div>' +
@@ -2230,6 +2251,20 @@
     });
   }
 
+  function detailToggleStage() {
+    var row = detailRow();
+    if (!row || row.state === 'trashed') return;
+    if (row.state === 'archived') {
+      toast('unarchive it first to stage', true);
+      return;
+    }
+    if (row.state !== 'staged' && ratingOf(row)) {
+      toast('rated items (endorse/dislike) cannot be staged', true);
+      return;
+    }
+    detailApply('stage');
+  }
+
   function markDetailCard(scroll) {
     document.querySelectorAll('.gv2-card.gv2-card-current').forEach(function (card) {
       card.classList.remove('gv2-card-current');
@@ -2463,6 +2498,7 @@
             '<span><kbd>\u2193</kbd> dislike</span>' +
             '<span><kbd>Del</kbd> trash</span>' +
             '<span><kbd>A</kbd> archive</span>' +
+            '<span><kbd>S</kbd> stage</span>' +
             '<span><kbd>Esc</kbd> close</span>' +
           '</div>' +
           '<div class="gv2-detail-section"><div class="gv2-detail-label"><span>Send to</span>' +
@@ -2834,6 +2870,10 @@
       else if (ev.key === 'ArrowDown') { ev.preventDefault(); detailApply('dislike'); }
       else if (ev.key === 'Delete') { ev.preventDefault(); detailTrash(); }
       else if (ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); detailApply('archive'); }
+      else if (ev.key === 's' || ev.key === 'S') {
+        ev.preventDefault();
+        if (!ev.repeat) detailToggleStage();
+      }
     });
     var detailBox = el('gv2-detail');
     if (detailBox) {
