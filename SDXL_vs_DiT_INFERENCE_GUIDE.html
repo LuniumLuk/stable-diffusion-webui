@@ -1,0 +1,1632 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inference pipelines: SDXL vs DiT — an interactive walkthrough</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel2: #1d2129;
+    --panel3: #232833;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #7c9cff;
+    --accent2: #66d9a3;
+    --accent3: #c792ea;
+    --warn: #f2b84b;
+    --bad: #ef7a7a;
+    --border: #2a2f3a;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 "Segoe UI", system-ui, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 28px 20px 90px; }
+
+  header.hero {
+    background: linear-gradient(135deg, #1b2340, #10131a 60%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 28px;
+    margin-bottom: 22px;
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: .3px; line-height: 1.2; }
+  header.hero .sub { color: var(--muted); margin: 0; font-size: 14.5px; max-width: 780px; }
+  header.hero .tags { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+  }
+
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    background: #12151c; border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 26px; position: sticky; top: 8px; z-index: 20;
+  }
+  nav.toc a {
+    font-size: 13px; color: var(--muted); border: 1px solid var(--border);
+    padding: 4px 10px; border-radius: 999px; background: var(--panel2);
+  }
+  nav.toc a:hover { color: var(--text); border-color: var(--accent); text-decoration: none; }
+  nav.toc a.active { color: #0f1115; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+  h2 {
+    font-size: 22px; margin: 40px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border); scroll-margin-top: 108px;
+  }
+  h3 { font-size: 16px; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 14px; margin: 18px 0 6px; color: var(--accent2); text-transform: uppercase; letter-spacing: .6px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code {
+    font-family: var(--mono); font-size: 13px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+    overflow-wrap: anywhere;
+  }
+  pre {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px;
+    line-height: 1.55; margin: 10px 0;
+  }
+  pre code { background: none; border: 0; padding: 0; overflow-wrap: normal; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  b, strong { color: #fff; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; margin: 14px 0;
+  }
+  .card.tight { padding: 14px 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 > *, .grid3 > * { min-width: 0; }
+  @media (max-width: 820px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+
+  .note {
+    border-left: 3px solid var(--accent); background: #151a26;
+    padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 14px;
+  }
+  .note.warn { border-color: var(--warn); background: #1e1a12; }
+  .note.measured { border-color: var(--accent2); background: #11211b; }
+  .note .lbl { font-size: 11px; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  .tablewrap { overflow-x: auto; margin: 12px 0; }
+  .tablewrap table { margin: 0; }
+  @media (max-width: 700px) {
+    .wrap { padding: 20px 14px 70px; }
+    header.hero { padding: 20px 18px; }
+    header.hero h1 { font-size: 24px; }
+    nav.toc { position: static; }
+    h2 { scroll-margin-top: 14px; }
+    .stage-card { min-height: 0; }
+  }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .5px; }
+  tr:last-child td { border-bottom: 0; }
+  td code { font-size: 12px; }
+
+  /* ---------------- stepper ---------------- */
+  .stepper { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 16px 0; }
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; }
+  .chip {
+    font-size: 12px; padding: 5px 10px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+    transition: all .12s ease; white-space: nowrap;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
+  .chip.active { background: var(--accent); border-color: var(--accent); color: #0f1115; font-weight: 600; }
+  .chip.done { border-color: #33507a; color: #c3d4ff; }
+  .chip.k-text.active { background: var(--accent3); border-color: var(--accent3); }
+  .chip.k-vae.active { background: var(--accent2); border-color: var(--accent2); }
+  .chip .x2 { font-size: 10px; opacity: .85; margin-left: 4px; }
+  .arrow { color: #3d4655; font-size: 12px; }
+  .stage-card {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; min-height: 210px;
+  }
+  .stage-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .stage-title { font-size: 16px; font-weight: 600; }
+  .shapes { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 8px; }
+  .shape {
+    font-family: var(--mono); font-size: 11.5px; padding: 2px 8px; border-radius: 5px;
+    background: #10141c; border: 1px solid #2d3442; color: #8fb7ff;
+  }
+  .shape.out { color: var(--accent2); border-color: #2c4a3d; }
+  .stage-body { font-size: 14px; }
+  .stage-foot { font-size: 12px; color: var(--muted); margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .controls { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 8px; cursor: pointer;
+    background: var(--panel3); color: var(--text); border: 1px solid var(--border);
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0f1115; font-weight: 600; }
+  label.check { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  /* ---------------- sliders / readouts ---------------- */
+  .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+  .row .lbl { font-size: 13px; color: var(--muted); min-width: 108px; }
+  input[type="range"] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+  .val { font-family: var(--mono); font-size: 13px; color: var(--accent2); min-width: 58px; text-align: right; }
+  canvas { display: block; width: 100%; border-radius: 10px; background: #0b0e14; border: 1px solid var(--border); }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 12px 0; }
+  .kpi { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .kpi .k { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .kpi .v { font-size: 19px; font-family: var(--mono); color: var(--text); margin-top: 2px; }
+  .kpi .v small { font-size: 12px; color: var(--muted); }
+
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .presets button { font-size: 12px; padding: 4px 10px; }
+
+  /* ---------------- quiz ---------------- */
+  .q { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 10px 0; background: var(--panel2); }
+  .q p.qtext { font-weight: 600; margin: 0 0 8px; }
+  .q label.opt { display: block; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13.5px; }
+  .q label.opt:hover { background: var(--panel3); }
+  .q .explain { display: none; margin-top: 8px; font-size: 13px; border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
+  .q.revealed .explain { display: block; }
+  .q.right { border-color: #2f6b4f; }
+  .q.wrong { border-color: #7a3b3b; }
+  .q .mark { font-size: 13px; font-weight: 700; margin-left: 6px; }
+  .q.right .mark { color: var(--accent2); }
+  .q.wrong .mark { color: var(--bad); }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .flexrow { display: flex; gap: 16px; flex-wrap: wrap; }
+  .flexrow > * { flex: 1 1 300px; min-width: 280px; }
+  footer { margin-top: 50px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--border); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Inference pipelines: SDXL vs DiT</h1>
+  <p class="sub">
+    A hands-on walkthrough of what actually runs between pressing <em>Generate</em> and getting pixels — the
+    two architectures side by side, with the tensor shapes of the checkpoints that live in this repo,
+    the sampler math, and interactive toys for the parts that are easier to feel than to read.
+  </p>
+  <div class="tags">
+    <span class="tag">SDXL · UNet + dual CLIP · ε-prediction</span>
+    <span class="tag">DiT · transformer + LLM text encoder · flow matching</span>
+    <span class="tag">shapes measured from local checkpoints</span>
+    <span class="tag">no external dependencies</span>
+  </div>
+</header>
+
+<nav class="toc" id="toc">
+  <a href="#skeleton">0 · shared skeleton</a>
+  <a href="#sdxl">1 · SDXL pipeline</a>
+  <a href="#dit">2 · DiT pipeline</a>
+  <a href="#samplers">3 · samplers &amp; flow</a>
+  <a href="#cfg">4 · CFG</a>
+  <a href="#cost">5 · cost calculator</a>
+  <a href="#compare">6 · side by side</a>
+  <a href="#repo">7 · this repo</a>
+  <a href="#quiz">8 · quiz</a>
+</nav>
+
+<h2 id="skeleton">0 · The skeleton both share</h2>
+
+<p>
+  You already know how to train a small network, so drop the "AI magic" framing. Inference for both
+  families is one loop wrapped in two adapters:
+</p>
+
+<div class="card">
+<pre><code>prompt ──► text encoder ──► conditioning   c            (runs ONCE per prompt)
+                                  │
+noise  x_T ~ N(0, I)              │
+   │                              ▼
+   └────────►  for t = T … 1:  x ← step( model(x, t, c), x, t )      ← runs N times
+                                  │
+                                  ▼
+                          VAE decoder ──► RGB image</code></pre>
+  <p class="small muted" style="margin-bottom:0">
+    Everything that differs between SDXL and DiT lives in <code>text encoder</code>, <code>model</code>
+    and <code>step</code>. The wrappers (tokenizer in, PNG out) are the same.
+  </p>
+</div>
+
+<p>Three consequences you can already predict, and that the rest of the page makes concrete:</p>
+<ul>
+  <li><b>Text encoding is free, sampling is not.</b> The prompt is encoded once; the model runs once per
+    step per CFG pass. A 20-step CFG-4 job is 40 forward passes of a multi-billion-parameter network.</li>
+  <li><b>Resolution enters through the latent grid.</b> Both families downscale by 8 per side, so a
+    1024×1024 image is a <code>128×128</code> latent. Cost then follows the number of latent
+    cells — or, for a transformer, the number of <em>tokens</em> those cells become.</li>
+  <li><b>The model never sees pixels.</b> It sees a tensor that the VAE can decode. That is why the VAE
+    is quality-critical (anime line art is brutal on VAEs) and why its decode time is a real line item.</li>
+</ul>
+
+<div class="note warn">
+  <span class="lbl">Vocabulary check</span>
+  "Latent diffusion" (SDXL) and "DiT" (SD3, Flux, Qwen-Image, Anima/Astra) are both
+  <em>latent</em> models. The words describe the denoiser's architecture, not the pipeline:
+  SDXL uses a convolutional UNet, DiT uses a plain transformer over image patches. Both are
+  wrapped in the same text-in / VAE-out harness.
+</div>
+
+<h2 id="sdxl">1 · SDXL: dual CLIP into a UNet</h2>
+
+<p>
+  SDXL's denoiser is a 2.57&nbsp;B-parameter UNet (measured: 1&nbsp;680 tensors in the checkpoint this
+  fork loads). It is a U-shaped stack of residual+attention blocks that keeps a full 2-D feature map
+  at every scale, and it conditions on text through <b>cross-attention inserted at several scales</b>.
+  Step through it:
+</p>
+
+<div class="stepper" id="stepper-sdxl" data-stages="sdxl">
+  <div class="flow" data-role="flow"></div>
+  <div class="stage-card" data-role="stage"></div>
+  <div class="controls">
+    <button data-act="prev">◀ Prev</button>
+    <button data-act="next" class="primary">Next ▶</button>
+    <button data-act="play">▶ Auto-play</button>
+    <button data-act="reset">↺ Reset</button>
+    <label class="check"><input type="checkbox" data-role="cfg"> CFG on (2 passes per step)</label>
+  </div>
+</div>
+
+<h3>Why two text encoders</h3>
+<p>
+  SDXL concatenates the penultimate hidden states of <b>CLIP ViT-L/14</b> (12 layers, width 768) and
+  <b>OpenCLIP ViT-bigG/14</b> (32 layers, width 1280) along the channel axis:
+  <code>768 + 1280 = 2048</code>. That 2048 is exactly the input width of every cross-attention
+  <code>k</code> projection in the UNet — you can read it straight out of the weights
+  (<code>attn2.to_k.weight</code> is <code>[1280, 2048]</code> at the deep levels and
+  <code>[640, 2048]</code> at the 640-channel level).
+</p>
+<p>
+  The second signal CLIP provides is <b>pooled</b>: bigG's <code>text_embeds</code>, a single 1280-vector
+  that summarises the whole prompt. It is <em>added</em> to the timestep embedding instead of being
+  attended to, so it acts as a global style/length knob rather than per-token information.
+</p>
+
+<div class="note measured">
+  <span class="lbl">measured in this repo's checkpoint</span>
+  <code>time_embedding.linear_1.weight</code> is <code>[1280, 320]</code> → the 320-dim sinusoidal
+  timestep embedding is lifted to 1280. <code>add_embedding.linear_1.weight</code> is
+  <code>[1280, 2816]</code>, and <code>2816 = 1280 (timestep) + 6 × 256</code>: the six
+  <code>time_ids</code> numbers (original height/width, crop y/x, target height/width) each get a
+  256-dim Fourier expansion. That is how SDXL knows the requested resolution and crop — not through
+  the text.
+</div>
+
+<h3>Inside one UNet step (1024×1024)</h3>
+<table>
+  <thead><tr><th>stage</th><th>channels</th><th>spatial</th><th>attention tokens</th><th>what happens</th></tr></thead>
+  <tbody>
+    <tr><td><code>conv_in</code></td><td>4 → 320</td><td>128²</td><td>—</td><td>latent → feature map</td></tr>
+    <tr><td>down block 0</td><td>320</td><td>128²</td><td>none</td><td>2× ResBlock, no attention</td></tr>
+    <tr><td>down block 1</td><td>640</td><td>64²</td><td>4 096</td><td>ResBlock + <b>self-attn + cross-attn</b></td></tr>
+    <tr><td>down block 2</td><td>1280</td><td>32²</td><td>1 024</td><td>same, wider</td></tr>
+    <tr><td>down block 3</td><td>1280</td><td>16²</td><td>256</td><td>same</td></tr>
+    <tr><td>mid block</td><td>1280</td><td>16²</td><td>256</td><td>attn → ResBlock → attn</td></tr>
+    <tr><td>up blocks 0–3</td><td>1280 → 320</td><td>16² → 128²</td><td>mirror of down</td><td>concat skip connection, then blocks</td></tr>
+    <tr><td><code>conv_out</code></td><td>320 → 4</td><td>128²</td><td>—</td><td>back to latent space</td></tr>
+  </tbody>
+</table>
+<p class="small muted">
+  The cheapest-to-notice detail: the highest-resolution level is <b>convolution only</b>. Attention is
+  quadratic in tokens, so 128² = 16 384 tokens would be four times the cost of the 64² level; SDXL
+  simply does not put attention there. (Why SD 1.5 duplicated heads above 512² is a different story —
+  that one is mostly about the training-resolution distribution, which is exactly what SDXL's
+  1024² multi-aspect bucketing fixed.)
+</p>
+
+<h3>The refiner (optional second stage)</h3>
+<p>
+  SDXL base can hand its latents to a second, separate UNet — the refiner — trained on the
+  <em>last ~20 %</em> of the noise schedule, i.e. only the low-noise part where texture and micro-detail
+  are decided. It shares the text encoders and the VAE but drops cross-attention at its
+  highest-resolution block: by then the composition is fixed and only local detail is left. Practically
+  it is "hires-fix without the upscale", which is why it is usually skipped when you are going to
+  upscale anyway.
+</p>
+
+<h2 id="dit">2 · DiT: patches in, transformer out</h2>
+
+<p>
+  A DiT throws away the U-shape, the convolutions and the multi-resolution feature maps. It turns the
+  latent into a sequence of tokens and runs a <b>plain transformer</b> over them, exactly like a language
+  model over words. The concrete numbers below are this repo's <code>novaAnimeAM_v40</code>
+  (Anima 2B, 28 blocks, 2.091 B parameters).
+</p>
+
+<div class="stepper" id="stepper-dit" data-stages="dit">
+  <div class="flow" data-role="flow"></div>
+  <div class="stage-card" data-role="stage"></div>
+  <div class="controls">
+    <button data-act="prev">◀ Prev</button>
+    <button data-act="next" class="primary">Next ▶</button>
+    <button data-act="play">▶ Auto-play</button>
+    <button data-act="reset">↺ Reset</button>
+    <label class="check"><input type="checkbox" data-role="cfg"> CFG on (2 passes per step)</label>
+  </div>
+</div>
+
+<h3>Patchify: the image becomes a sentence</h3>
+<p>
+  The VAE gives a <code>16 × 128 × 128</code> latent for 1024×1024 (16 channels instead of SDXL's 4).
+  A 2×2 patch taken across all channels is one token of <code>2 × 2 × 16 = 64</code> numbers, and a
+  single linear layer maps it to the model width. A 1024² image therefore becomes
+  <code>64 × 64 = 4 096</code> tokens of width 2048. Sequence length is
+  <b>pixels ÷ 256</b> — that single line explains almost every timing you will measure.
+</p>
+
+<div class="note measured">
+  <span class="lbl">measured in this repo's checkpoint</span>
+  <code>x_embedder.proj.1.weight</code> is <code>[2048, 68]</code>. 68 = 2×2×17, so the patch is
+  2×2 over <em>17</em> planes — the Qwen/Wan VAE in <code>models/Anima/vae</code> is 16-channel
+  (<code>decoder.conv1.weight</code> = <code>[384, 16, 3, 3, 3]</code>), so this checkpoint folds one
+  extra plane into the patch embedding. Checkpoint-specific detail; the pattern (patch → linear →
+  sequence) is universal.
+</div>
+
+<h3>adaLN: how time and text enter a token transformer</h3>
+<p>
+  A transformer has no idea what "step 12 of 20" means, and attention alone cannot inject a global
+  scale/shift. DiTs use <b>adaptive layer norm</b>: the conditioning vector predicts, per block and per
+  sub-layer, a <b>shift</b>, a <b>scale</b> and a <b>gate</b>. Concretely, from the weights:
+  <code>adaln_modulation_self_attn</code>, <code>…_cross_attn</code> and <code>…_mlp</code> are each
+  <code>[256, 2048] → SiLU → [6144, 256]</code>, and 6144 = 3 × 2048 — one shift/scale/gate triple per
+  sub-layer.
+</p>
+<p>Play with the transform itself:</p>
+
+<div class="card">
+  <div class="flexrow">
+    <div>
+      <canvas id="adaLN-canvas" height="200"></canvas>
+      <div class="legend">
+        <span><i style="background:#54607a"></i> normalised feature x̂</span>
+        <span><i style="background:#7c9cff"></i> modulated: gate · ((1+scale)·x̂ + shift)</span>
+      </div>
+    </div>
+    <div>
+      <div class="row"><span class="lbl">scale</span><input type="range" id="ad-scale" min="-1" max="1" step="0.02" value="0.4"><span class="val" id="ad-scale-v">0.40</span></div>
+      <div class="row"><span class="lbl">shift</span><input type="range" id="ad-shift" min="-1" max="1" step="0.02" value="0.15"><span class="val" id="ad-shift-v">0.15</span></div>
+      <div class="row"><span class="lbl">gate</span><input type="range" id="ad-gate" min="0" max="1.5" step="0.02" value="1"><span class="val" id="ad-gate-v">1.00</span></div>
+      <p class="small muted" style="margin-bottom:0">
+        Set <b>gate = 0</b>: the block outputs nothing, i.e. it is the identity.
+        That is the <em>adaLN-Zero</em> initialisation — every block starts as a no-op and is
+        "switched on" during training, which is why these models train stably without warmup tricks.
+      </p>
+    </div>
+  </div>
+</div>
+
+<h3>What the conditioning actually is here</h3>
+<ul>
+  <li><b>Text encoder:</b> Qwen3-0.6B, a causal LLM — not CLIP. No 77-token window, no pooled vector;
+    the token count is the real prompt length (plus a template), and the width is 1024.</li>
+  <li><b>How it enters:</b> the DiT's <code>cross_attn.k_proj</code> / <code>v_proj</code> weights are
+    <code>[2048, 1024]</code> — they read the 1024-wide LLM states directly, while
+    <code>q_proj</code> is <code>[2048, 2048]</code> from the image tokens. So image tokens query,
+    text tokens are the keys/values, at every one of the 28 blocks.</li>
+  <li><b>Self-attention:</b> <code>q/k/v/o</code> are all 2048×2048 with <code>q_norm</code>/<code>k_norm</code>
+    of size 128 → <b>16 heads × 128</b>. QK-norm is the modern stabiliser (same idea as in ViT-22B /
+    Chameleon): RMS/LayerNorm applied to q and k before the dot product.</li>
+  <li><b>MLP:</b> 2048 → 8192 → 2048 (4× expansion). One block ≈ 12·d² ≈ 50 M parameters;
+    28 blocks ≈ 1.4 B, plus embeddings and the 2048-wide text adapter.</li>
+</ul>
+
+<div class="note">
+  <b>Joint vs cross attention.</b> Some DiTs (SD3, Flux, Qwen-Image) concatenate image and text tokens
+  into one sequence and let them attend to each other bidirectionally ("MMDiT" / joint attention);
+  others (this Anima checkpoint) keep a separate cross-attention. The compute difference is minor — both
+  are just attention over a longer key set — but it changes how strongly text can rewrite image tokens at
+  every layer. Both variants share the patchify + adaLN skeleton above.
+</div>
+
+<h2 id="samplers">3 · Samplers: adding noise back vs. integrating a velocity</h2>
+
+<p>Two different maths hide behind the same "steps" slider.</p>
+
+<table>
+  <thead><tr><th></th><th>SDXL (variance-preserving diffusion)</th><th>DiT (flow matching)</th></tr></thead>
+  <tbody>
+    <tr><td>model predicts</td><td>ε — the noise that was added</td><td>v — the velocity <code>x₁ − x₀</code> along a straight path</td></tr>
+    <tr><td>time</td><td>discrete timesteps 999…0 with a β-schedule</td><td>continuous σ from 1 → 0</td></tr>
+    <tr><td>update</td><td><code>x(t−1) = √ᾱ(t−1) · x̂₀ + √(1 − ᾱ(t−1)) · ε̂</code> (DDIM), or the Euler/DPM++ equivalent in σ space</td><td><code>x ← x + (σ_next − σ) · v</code></td></tr>
+    <tr><td>noise re-injection</td><td>yes in <b>ancestral</b> samplers (Euler a): a fraction of σ is added back each step, which is why "Euler a" differs at every step count</td><td>no in the base sampler; flow is deterministic</td></tr>
+    <tr><td>knobs that matter</td><td>sampler + σ schedule (Karras, exponential, …)</td><td><b>shift</b> (a.k.a. flow shift): remaps where the steps land</td></tr>
+  </tbody>
+</table>
+
+<h3>Flow shift, interactively</h3>
+<p>
+  Flow matching samples σ on a straight line from 1 to 0, but the <em>useful</em> part of that line
+  depends on resolution: a 1-megapixel image needs more of its steps in the high-noise region than a
+  0.1-megapixel one. The fix is a one-line remap applied to the schedule, not to the model:
+</p>
+<pre><code>σ' = shift · σ / (1 + (shift − 1) · σ)        # shift = 1 → unchanged, shift = 3 → steps crowd the noisy end</code></pre>
+
+<div class="card">
+  <canvas id="shift-canvas" height="240"></canvas>
+  <div class="row"><span class="lbl">shift</span><input type="range" id="shift-s" min="0.5" max="5" step="0.1" value="1" ><span class="val" id="shift-s-v">1.0</span></div>
+  <div class="row"><span class="lbl">steps</span><input type="range" id="shift-n" min="3" max="40" step="1" value="20"><span class="val" id="shift-n-v">20</span></div>
+  <p class="small muted" style="margin-bottom:0">
+    Drag <b>shift</b> up and watch the markers slide toward σ≈1. The endpoints never move — only the
+    distribution of steps along the path. sd.cpp exposes this as <code>--flow-shift</code>; A1111 exposes
+    it for Anima as the <em>Anima flow shift</em> setting (leave it at 0 / auto unless you are chasing a
+    specific look).
+  </p>
+</div>
+
+<h3>Integrate a velocity field yourself</h3>
+<p>
+  Below is a real flow-matching sampler, not an animation: particles start as standard Gaussian noise
+  and are pushed by the <em>exact</em> velocity field of a two-blob target distribution (closed form:
+  <code>v = E[x₁−x₀ | x_t]</code> for a Gaussian mixture, so there is no network involved and no
+  hand-waving). The only thing that changes between good and bad results is <b>how many Euler steps you
+  take</b> and <b>where you put them</b>.
+</p>
+
+<div class="card">
+  <canvas id="flow-canvas" height="330"></canvas>
+  <div class="controls">
+    <button id="flow-play" class="primary">▶ Run</button>
+    <button id="flow-reset">↺ New noise</button>
+    <span class="muted small" id="flow-status">t = 0.00 · step 0/20</span>
+  </div>
+  <div class="row"><span class="lbl">steps</span><input type="range" id="flow-steps" min="2" max="40" step="1" value="20"><span class="val" id="flow-steps-v">20</span></div>
+  <div class="row"><span class="lbl">shift</span><input type="range" id="flow-shift" min="1" max="4" step="0.1" value="1"><span class="val" id="flow-shift-v">1.0</span></div>
+  <div class="kpis">
+    <div class="kpi"><div class="k">σ_x (target)</div><div class="v" id="flow-sx">—</div></div>
+    <div class="kpi"><div class="k">σ_y (target)</div><div class="v" id="flow-sy">—</div></div>
+    <div class="kpi"><div class="k">distance to mode ↓</div><div class="v" id="flow-err">—</div></div>
+  </div>
+  <p class="small" id="flow-hint" style="min-height:2.6em;margin:0"></p>
+  <p class="small muted" style="margin-bottom:0">
+    Try 2 steps: the blobs arrive squashed and rotated. Try 40: they match. Raise <b>shift</b> with 8
+    steps: the extra high-noise steps buy back accuracy on the big blob — the same reason high-resolution
+    images like a shift above 1.
+  </p>
+</div>
+
+<h2 id="cfg">4 · CFG: the setting that doubles your bill</h2>
+
+<p>
+  Classifier-free guidance evaluates the model twice per step — once with the prompt, once with the
+  negative prompt — and extrapolates away from the unconditional prediction:
+</p>
+<pre><code>v̂ = v_uncond + s · (v_cond − v_uncond)          # same formula for ε in SDXL, v in a DiT
+                                            # s = 1 → the uncond pass is a no-op
+                                            # s = 0 → pure unconditional (prompt ignored)</code></pre>
+
+<div class="card">
+  <canvas id="cfg-canvas" height="190"></canvas>
+  <div class="row"><span class="lbl">guidance s</span><input type="range" id="cfg-s" min="0" max="12" step="0.1" value="4"><span class="val" id="cfg-s-v">4.0</span></div>
+  <div class="kpis" style="margin-bottom:0">
+    <div class="kpi"><div class="k">forward passes / step</div><div class="v" id="cfg-passes">2</div></div>
+    <div class="kpi"><div class="k">sampling time at 832×1216 · 20 steps <small>(measured)</small></div><div class="v" id="cfg-time">15.5 s</div></div>
+    <div class="kpi"><div class="k">same job at s = 1.0</div><div class="v" id="cfg-time1">7.8 s</div></div>
+  </div>
+</div>
+
+<div class="note measured">
+  <span class="lbl">measured on this machine, 2B Anima DiT, 832×1216, 20 steps</span>
+  CFG 1.0 → <b>7.8 s</b> sampling · CFG 4.0 → <b>15.5 s</b> sampling. The ratio is 2.0, not 1.9 —
+  because at <code>s = 1</code> the unconditioned branch is skipped entirely and only one pass runs.
+  Every published "20 steps" number you see is really "20 or 40 network evaluations" depending on CFG.
+</div>
+
+<p>
+  Two practical notes that fall out of the formula. First, <code>s ≤ 1</code> makes the negative prompt
+  mathematically irrelevant — it is multiplied by <code>s − 1 ≤ 0</code>. Second, nothing about CFG is
+  architecture-specific: SDXL, DiT, UNet, transformer, all the same. It is applied to whatever the model
+  predicts, before the sampler update.
+</p>
+
+<h2 id="cost">5 · Where the seconds go</h2>
+
+<p>
+  For a DiT the estimate is short enough to do in your head. Tokens are
+  <code>N = (W/16)·(H/16)</code>; a dense block costs <code>2·N·P_block</code> FLOPs for its linears plus
+  <code>4·N²·d</code> for attention. So the attention share of one pass is:
+</p>
+<pre><code>attn_share ≈ N² · 4d  /  (N² · 4d + N · 12d²)  =  N / (N + 6d)
+   N = 1536 tokens (512×768)  → 11 %
+   N = 4096 tokens (1024×1024) → 25 %        # d = 2048, 28 blocks</code></pre>
+<p class="small muted">
+  That is exactly the superlinearity the profiler found: with the slow attention path, the cost per
+  megapixel grew ~27 % from 0.39 to 1.01 MPx; with flash attention it grows ~11 %.
+</p>
+
+<div class="card">
+  <h4 style="margin-top:0">Resolution / cost calculator — DiT path, calibrated on this GPU</h4>
+  <div class="presets" id="calc-presets">
+    <button data-w="512" data-h="768">512×768</button>
+    <button data-w="640" data-h="896">640×896</button>
+    <button data-w="832" data-h="1216">832×1216</button>
+    <button data-w="1024" data-h="1024">1024×1024</button>
+    <button data-w="1024" data-h="1280">1024×1280</button>
+    <button data-w="1280" data-h="1280">1280×1280</button>
+  </div>
+  <div class="row"><span class="lbl">width</span><input type="range" id="calc-w" min="256" max="1536" step="16" value="832"><span class="val" id="calc-w-v">832</span></div>
+  <div class="row"><span class="lbl">height</span><input type="range" id="calc-h" min="256" max="1536" step="16" value="1216"><span class="val" id="calc-h-v">1216</span></div>
+  <div class="row"><span class="lbl">steps</span><input type="range" id="calc-steps" min="1" max="60" step="1" value="20"><span class="val" id="calc-steps-v">20</span></div>
+  <div class="row"><span class="lbl">CFG s</span><input type="range" id="calc-cfg" min="0.5" max="9" step="0.1" value="4"><span class="val" id="calc-cfg-v">4.0</span></div>
+  <div class="kpis">
+    <div class="kpi"><div class="k">megapixels</div><div class="v" id="calc-mpx">1.01</div></div>
+    <div class="kpi"><div class="k">latent grid</div><div class="v" id="calc-lat">104×152</div></div>
+    <div class="kpi"><div class="k">DiT tokens</div><div class="v" id="calc-tok">3 952</div></div>
+    <div class="kpi"><div class="k">attention share</div><div class="v" id="calc-attn">24 %</div></div>
+    <div class="kpi"><div class="k">forward passes</div><div class="v" id="calc-passes">40</div></div>
+    <div class="kpi"><div class="k">est. sampling</div><div class="v" id="calc-samp">15.5 s</div></div>
+    <div class="kpi"><div class="k">est. VAE decode</div><div class="v" id="calc-vae">1.2 s</div></div>
+    <div class="kpi"><div class="k">est. total</div><div class="v" id="calc-total">16.7 s</div></div>
+  </div>
+  <p class="small muted" style="margin-bottom:0" id="calc-note">
+    Model: <code>t = passes · steps · (0.33·MPx + 0.03·MPx²) + 1.15·MPx</code> — fitted to the
+    measurements in §7 on an RTX 5070 Ti with <code>--diffusion-fa --vae-conv-direct</code>. Spot checks:
+    832×1216 / 20 steps / CFG 4 → 16.0 s measured, 1024×1024 → 16.6 s, 512×768 → 5.6 s.
+  </p>
+</div>
+
+<div class="note warn">
+  <b>Why SDXL does not follow this law.</b> Its 2.57 B parameters are not applied uniformly: the
+  320-channel blocks run on 128² grids while the 1280-channel blocks run on 16². Cost still grows with
+  pixels, but the constant per pixel is dominated by convolutions at high resolution, not by attention
+  over all tokens. A UNet at 512² therefore tends to be cheaper per pixel than a DiT at 512². The exact
+  crossover depends on the GPU, but this is the real reason the 1-MP bucket is the sweet spot for DiTs:
+  below it the transformer is under-utilised, above it the attention term starts compounding.
+</div>
+
+<h2 id="compare">6 · Side by side</h2>
+
+<table>
+  <thead><tr><th></th><th>SDXL</th><th>DiT (Anima 2B / SD3 / Flux family)</th></tr></thead>
+  <tbody>
+    <tr><td>text encoder</td><td>CLIP ViT-L/14 (768) + OpenCLIP ViT-bigG/14 (1280), both penultimate layer</td><td>an LLM — Qwen3-0.6B (1024 wide) in this checkpoint, T5-XXL or Qwen2.5-VL in others</td></tr>
+    <tr><td>context</td><td>(B, 77, 2048) + pooled (B, 1280)</td><td>(B, L, 1024) — real prompt length, no cap, no pooled vector</td></tr>
+    <tr><td>how text enters</td><td>cross-attention at 64², 32², 16² of the UNet</td><td>cross-attention at <em>every</em> block (or joint self-attention over concatenated tokens)</td></tr>
+    <tr><td>backbone</td><td>2.57 B UNet, 4 levels, 320/640/1280/1280 channels, conv + ResBlock + attention</td><td>2.09 B transformer, 28 blocks, width 2048, 16 heads × 128</td></tr>
+    <tr><td>timestep injection</td><td>Fourier embedding → MLP → <b>added</b> to every ResBlock</td><td><b>adaLN</b>: per-block shift/scale/gate predicted from the embedding</td></tr>
+    <tr><td>latent</td><td>4 ch, ÷8, single <code>scaling_factor ≈ 0.130</code></td><td>16 ch, ÷8, Wan-style causal 3-D conv VAE, per-channel mean/std normalisation</td></tr>
+    <tr><td>prediction target</td><td>ε (noise)</td><td>v (velocity, flow matching)</td></tr>
+    <tr><td>tokens at 1024²</td><td>4 096 at its deepest attention level; the 128² level is pure convolution</td><td>4 096 — the whole model, every block</td></tr>
+    <tr><td>params applied per token</td><td>only the blocks at that resolution</td><td>all 2.09 B, every token, every step</td></tr>
+    <tr><td>extra stages</td><td>optional refiner UNet on the last 20 % of the schedule</td><td>none; one model end to end</td></tr>
+    <tr><td>negative prompts</td><td>effective for s &gt; 1</td><td>effective for s &gt; 1</td></tr>
+    <tr><td>CFG cost</td><td>2× UNet passes</td><td>2× transformer passes</td></tr>
+    <tr><td>scaling with resolution</td><td>linear in pixels with a conv-heavy constant; attention only at ≤64²</td><td>linear in tokens <b>plus</b> a 4N²d attention term that matters above ~1 MP</td></tr>
+    <tr><td>typical artefacts</td><td>over-sharpened textures at high CFG, VAE colour shift</td><td>smeared text/letters at low token counts, detail loss when the VAE is 8× on line art</td></tr>
+    <tr><td>control surfaces in A1111</td><td>sampler, σ schedule, CFG, refiner switch, VAE</td><td>sampler, CFG, flow shift, LoRA (applied at runtime), VAE</td></tr>
+  </tbody>
+</table>
+
+<h2 id="repo">7 · How this fork runs both</h2>
+
+<p>
+  Same UI, two very different code paths. The router is <code>modules/backends/__init__.py</code>:
+  <code>process_images()</code> asks <code>resolve(p)</code> whether the selected checkpoint is a DiT
+  model; if it is, the torch UNet/CLIP pipeline is never touched.
+</p>
+
+<div class="grid2">
+  <div class="card tight">
+    <h4 style="margin-top:0">SDXL checkpoint</h4>
+    <pre style="margin-bottom:0"><code>sd_models.load_model()
+  → sd_hijack (CLIP-L + CLIP-G)
+  → StableDiffusionProcessing
+  → UNet.forward  ×steps ×cfg
+  → VAE.decode</code></pre>
+    <p class="small muted" style="margin:8px 0 0">
+      All in-process, torch. Memory is a single 6–8 GB lump you can watch shrink when you
+      switch to a DiT model.
+    </p>
+  </div>
+  <div class="card tight">
+    <h4 style="margin-top:0">Anima / DiT checkpoint</h4>
+    <pre style="margin-bottom:0"><code>backends.resolve(p) → runner.process_images_via_anima()
+  → park the SD checkpoint on CPU
+  → sd_cpp/sd-server.exe  (HTTP sidecar)
+       --diffusion-model … --llm … --vae …
+       --diffusion-fa --vae-conv-direct
+  → POST /sdcpp/v1/img_gen  {prompt, w, h, seed,
+        sample_params:{sample_method, sample_steps,
+                       guidance:{txt_cfg}}}
+  → poll /sdcpp/v1/jobs/&lt;id&gt; → b64 PNG</code></pre>
+    <p class="small muted" style="margin:8px 0 0">
+      Out of process, in stable-diffusion.cpp's ggml/CUDA stack. A1111 keeps the prompts, seeds,
+      infotext and file saving; it never builds conditioning.
+    </p>
+  </div>
+</div>
+
+<div class="note measured">
+  <span class="lbl">measured on this machine — 2B Anima, 20 steps, Euler a, CFG 4, total job time</span>
+  <table style="margin:6px 0 0">
+    <thead><tr><th>resolution</th><th>MPx</th><th>before tuning</th><th>after <code>--diffusion-fa --vae-conv-direct</code></th></tr></thead>
+    <tbody>
+      <tr><td>512×768</td><td>0.39</td><td>8.5 s</td><td>5.6 s</td></tr>
+      <tr><td>832×1216</td><td>1.01</td><td>27.9 s</td><td>16.0 s</td></tr>
+      <tr><td>1024×1024</td><td>1.05</td><td>28.5 s</td><td>16.6 s</td></tr>
+    </tbody>
+  </table>
+  <p class="small" style="margin:8px 0 0">
+    832×1216 and 1024×1024 differ by 3.5 % in pixels, so they cost the same — the "recommended
+    resolution" is about the aspect buckets the model was trained on, not about speed. The 43 %
+    gain came from flash attention in the DiT plus direct VAE convolutions; CFG 4 vs 1 is another
+    2× on top of that.
+  </p>
+</div>
+
+<h2 id="quiz">8 · Check yourself</h2>
+<p class="small muted">Answer, then hit <em>Check</em>. Explanations are the point, not the score.</p>
+
+<div id="quiz-root"></div>
+<div class="controls">
+  <button id="quiz-check" class="primary">Check answers</button>
+  <button id="quiz-reset">↺ Reset</button>
+  <span class="muted small" id="quiz-score"></span>
+</div>
+
+<footer>
+  <p>
+    Shapes quoted as <em>measured</em> come from the safetensors headers of
+    <code>models/Stable-diffusion/realism-illustrious-by-stable-yogi-v1fp16-sdxl/unet</code>,
+    <code>models/Anima/diffusion_models/novaAnimeAM_v40.safetensors</code> and
+    <code>models/Anima/vae/qwen_image_vae.safetensors</code>; timings from
+    <code>sd_cpp/anima_server.log</code> plus controlled sweeps on the RTX 5070 Ti in this machine.
+    One page, no libraries, works offline.
+  </p>
+</footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* =====================================================================
+     small helpers
+     ===================================================================== */
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+  const fmt = (n, d) => n.toLocaleString("en-US", { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
+
+  function fitCanvas(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width || canvas.clientWidth || 600;
+    const cssH = parseFloat(canvas.getAttribute("height")) || 200;
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    canvas.style.height = cssH + "px";
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w: cssW, h: cssH };
+  }
+
+  /* =====================================================================
+     1. pipeline steppers
+     ===================================================================== */
+  const STAGES = {
+    sdxl: [
+      {
+        label: "tokenize", kind: "text",
+        title: "Tokenize the prompt",
+        shapes: [["(B, 77) int64", "out"]],
+        body: `<p>CLIP's byte-pair tokenizer, always padded or truncated to exactly <b>77</b> tokens
+               (start token, then EOT padding). Two separate tokenizers are not needed — both SDXL text
+               encoders share the same CLIP vocabulary — but two encoders will read the same 77 ids.</p>
+               <p>The negative prompt is a second sequence: either a second row of the batch, or a
+               separate pass when CFG is on.</p>`,
+        cost: "≈ 0 ms — CPU work, once per prompt"
+      },
+      {
+        label: "CLIP-L", kind: "text",
+        title: "CLIP ViT-L/14 — 12 layers, width 768",
+        shapes: [["(B, 77, 768)", "out"], ["layer −2", ""]],
+        body: `<p>The <em>penultimate</em> hidden state is kept, not the last: the final layer has already
+               collapsed towards the contrastive objective, the second-to-last keeps more local detail.
+               No pooling is used from this encoder.</p>`,
+        cost: "≈ 5 ms per pass"
+      },
+      {
+        label: "CLIP-G", kind: "text",
+        title: "OpenCLIP ViT-bigG/14 — 32 layers, width 1280",
+        shapes: [["(B, 77, 1280)", "out"], ["pooled (B, 1280)", ""]],
+        body: `<p>Same trick, a much wider and deeper encoder. From this one SDXL also keeps the
+               <b>pooled</b> vector — one 1280-dim summary of the whole prompt. It will not be attended
+               to; it will be added to the timestep embedding.</p>`,
+        cost: "≈ 15 ms per pass"
+      },
+      {
+        label: "concat", kind: "text",
+        title: "Concatenate along channels",
+        shapes: [["(B, 77, 2048)", "out"]],
+        body: `<p><code>torch.cat([clip_l, clip_g], dim=-1)</code> → 2048. This is <em>the</em>
+               cross-attention context: every <code>attn2.to_k</code> in the UNet expects exactly this
+               width (the weights say so: <code>[1280, 2048]</code>).</p>
+               <p>With CFG on, the batch holds the negative and positive sequences together, so one
+               forward pass produces both predictions.</p>`,
+        cfg: true,
+        cost: "free"
+      },
+      {
+        label: "cond", kind: "text",
+        title: "Timestep + size conditioning",
+        shapes: [["t → 320 → 1280", ""], ["6 time_ids × 256 = 1536", ""], ["1280×2816 → 1280", "out"]],
+        body: `<p>The sampler's current σ becomes a 320-dim sinusoidal embedding, expanded to 1280.
+               SDXL also encodes six numbers — original (h, w), crop (x, y), target (h, w) — each with a
+               256-dim Fourier expansion. They are concatenated with the timestep embedding
+               (1280 + 6·256 = <b>2816</b>) and projected back to 1280; the pooled text vector is added
+               on top.</p>`,
+        cost: "≈ 0.1 ms"
+      },
+      {
+        label: "latent", kind: "latent",
+        title: "Start from pure noise",
+        shapes: [["(B, 4, 128, 128)", "out"]],
+        body: `<p>A 1024×1024 / 8 = 128×128 grid with <b>4</b> channels, sampled from N(0, 1) and
+               multiplied by the current σ (before the VAE's <code>0.130</code> scaling factor is
+               applied — the model works in unit-variance space).</p>`,
+        cost: "free"
+      },
+      {
+        label: "UNet ×N", kind: "model",
+        title: "One UNet forward pass = one step",
+        shapes: [["(B, 4, 128, 128)", ""], ["ε̂ (B, 4, 128, 128)", "out"]],
+        body: `<p>Down (320 → 640 → 1280 → 1280, attention from the 640 level down) → mid → up with skip
+               connections. Cross-attention injects the 2048-wide text context at 64², 32² and 16²;
+               the timestep+size vector is added to every ResBlock.</p>
+               <p>The output is the predicted noise for <em>this</em> noise level. 20 steps at CFG 4
+               means 40 of these passes.</p>`,
+        cfg: true,
+        cost: "the whole bill — see §5"
+      },
+      {
+        label: "scheduler", kind: "model",
+        title: "Turn ε̂ into the next latent",
+        shapes: [["x_{t−1} (B, 4, 128, 128)", "out"]],
+        body: `<p>DDIM: <code>x̂₀ = (x_t − √(1 − ᾱ_t) · ε̂) / √ᾱ_t</code>, then re-noise to the next σ.
+               Euler / DPM++ do the same integral in σ space with a different discretisation.</p>
+               <p><b>Ancestral</b> samplers (Euler a) add a slice of fresh noise back at every step, which
+               is why their output changes with step count. Deterministic samplers converge to the same
+               image as steps increase; ancestral ones converge to the same <em>distribution</em>.</p>`,
+        cost: "≈ 1 ms"
+      },
+      {
+        label: "loop", kind: "model",
+        title: "Repeat step + scheduler N times",
+        shapes: [["t = T … 1", ""]],
+        body: `<p>σ goes from its maximum down to ~0. The loop is the only part whose cost scales with
+               the steps slider; everything before it ran once.</p>`,
+        cost: "N × (UNet + scheduler)"
+      },
+      {
+        label: "VAE", kind: "vae",
+        title: "VAE decode → pixels",
+        shapes: [["latent (B, 4, 128, 128)", ""], ["image (B, 3, 1024, 1024)", "out"]],
+        body: `<p>Convolutional decoder, ×8 upsampling, three output channels. A 4-channel latent cannot
+               carry every fine detail, which is why the VAE (not the UNet) is usually the culprit for
+               blurry text or colour drift.</p>
+               <p>Because it is a conv stack, its cost is linear in pixels and independent of step count —
+               at 1024² it is typically 5–15 % of the job.</p>`,
+        cost: "usually 5–15 % of an SDXL job"
+      }
+    ],
+    dit: [
+      {
+        label: "tokenize", kind: "text",
+        title: "Tokenize with the LLM's tokenizer",
+        shapes: [["(B, L) int64 — variable L", "out"]],
+        body: `<p>No 77-token window. The template and the prompt are tokenised by the LLM's own
+               vocabulary and the sequence is as long as it needs to be, so a 300-word prompt really does
+               produce more keys and values than a 5-word one.</p>`,
+        cost: "≈ 0 ms"
+      },
+      {
+        label: "LLM", kind: "text",
+        title: "Text encoder = a causal language model",
+        shapes: [["(B, L, 1024)", "out"]],
+        body: `<p>This checkpoint uses <b>Qwen3-0.6B</b>: 28 transformer layers, width 1024, 16 query / 8 KV
+               heads (GQA), loaded as a quantised GGUF (<code>Qwen3-0.6B-Base-Q8_0</code>, 604 MB — read
+               straight from the file's own metadata). All layers run once; the DiT consumes the final
+               hidden states.</p>
+               <p>Why an LLM instead of CLIP: better prompt-following, real compositional structure, and
+               no fixed 77-token bottleneck. Why it is not free: a causal model looks <em>backwards</em>
+               only, so token <i>i</i> never sees token <i>i+1</i> — fine for conditioning, unlike the
+               bidirectional CLIP text tower whose states are context-averaged.</p>`,
+        cost: "≈ 50–300 ms, once"
+      },
+      {
+        label: "patchify", kind: "latent",
+        title: "Cut the latent into patches → tokens",
+        shapes: [["latent (B, 16, 128, 128)", ""], ["(B, 4096, 64)", ""], ["(B, 4096, 2048)", "out"]],
+        body: `<p>A 2×2 patch across all 16 VAE channels is one 64-dim token; a single linear layer
+               (<code>x_embedder</code>) maps it to the model width of 2048. 1024² → 64×64 = <b>4096</b>
+               tokens. <b>Tokens = pixels / 256</b>: that one equation is the DiT cost model.</p>
+               <p>Positional information is added here (2-D sincos, or rotary inside attention in newer
+               variants). Nothing else in the model knows about 2-D neighbourhoods — locality has to be
+               learned.</p>`,
+        cost: "≈ 1 ms"
+      },
+      {
+        label: "adaLN", kind: "model",
+        title: "Predict shift / scale / gate from the timestep",
+        shapes: [["t → (B, 2048) → (B, 256)", ""], ["→ 3 × 2048 per sub-layer", "out"]],
+        body: `<p>Each block owns three small MLPs (self-attn, cross-attn, MLP), each producing a
+               <em>shift</em>, <em>scale</em> and <em>gate</em> vector of width 2048. The transform applied
+               to the normalised activations is
+               <code>gate · ((1 + scale) · LN(x) + shift)</code>.</p>
+               <p>Gates are initialised to zero, so every block starts as the identity — training then
+               "dials in" how much each block contributes. That trick (adaLN-Zero) is why DiTs train
+               without a fragile warmup.</p>`,
+        cost: "≈ 0.2 ms per block"
+      },
+      {
+        label: "DiT ×N", kind: "model",
+        title: "One transformer pass = one step",
+        shapes: [["(B, 4096, 2048)", ""], ["v̂ (B, 4096, 64)", "out"]],
+        body: `<p>28 identical blocks. Each one: normalise → <b>self-attention</b> (16 heads × 128, with
+               QK-norm) → gated residual → normalise → <b>cross-attention</b> to the text tokens
+               (<code>q</code> from image, <code>k</code>/<code>v</code> from the 1024-wide LLM states) →
+               gated residual → normalise → <b>MLP</b> 2048→8192→2048 → gated residual.</p>
+               <p>All 2.09 B parameters touch <em>every</em> token at <em>every</em> step, unlike a UNet
+               whose deep blocks only ever see 16×16 grids. The output is a velocity field, not noise.</p>`,
+        cfg: true,
+        cost: "≈ 90 % of a 1 MP job, ≈ 0.39 s per pass"
+      },
+      {
+        label: "unpatchify", kind: "model",
+        title: "Final layer → latent",
+        shapes: [["(B, 4096, 68)", "out"], ["(B, 16, 128, 128)", "out"]],
+        body: `<p>One more adaLN-modulated block, then a linear from 2048 back to the patch size
+               (68 numbers here), then a fold that scatters the patches back into a 16×128×128 grid.</p>`,
+        cost: "≈ 2 ms"
+      },
+      {
+        label: "integrate", kind: "model",
+        title: "Euler step on the velocity",
+        shapes: [["x ← x + (σ_next − σ)·v̂", "out"]],
+        body: `<p>Flow matching integrates <code>dx/dσ = −v</code> from σ = 1 to σ = 0. One Euler step is
+               literally one add-and-scale — the sampler is cheap; the network call is not.</p>
+               <p>With CFG the two velocities are first combined:
+               <code>v̂ = v_uncond + s·(v_cond − v_uncond)</code>.</p>`,
+        cost: "≈ 0.1 ms"
+      },
+      {
+        label: "VAE", kind: "vae",
+        title: "Decode 16 latent channels → pixels",
+        shapes: [["(B, 16, 128, 128)", ""], ["(B, 3, 1024, 1024)", "out"]],
+        body: `<p>This is a Wan-style VAE: causal 3-D convolutions, 16 latent channels, per-channel
+               mean/std normalisation instead of a single scaling factor, 127 M parameters. More latent
+               channels than SDXL's four, which is one reason these models hold thin line art better.</p>
+               <p>It is also the second-largest line item at high resolution — here it is decoded in
+               tiles, and <code>--vae-conv-direct</code> made it ~2.4× faster.</p>`,
+        cost: "≈ 1.2–1.4 s at 1 MP, tiled"
+      }
+    ]
+  };
+
+  function buildStepper(root) {
+    const key = root.dataset.stages;
+    const stages = STAGES[key];
+    const flow = $('[data-role="flow"]', root);
+    const stageEl = $('[data-role="stage"]', root);
+    const cfgBox = $('[data-role="cfg"]', root);
+    let index = 0;
+    let timer = null;
+
+    function cfgOn() { return cfgBox && cfgBox.checked; }
+
+    function render() {
+      flow.innerHTML = "";
+      stages.forEach((stage, i) => {
+        if (i > 0) {
+          const arrow = document.createElement("span");
+          arrow.className = "arrow";
+          arrow.textContent = "→";
+          flow.appendChild(arrow);
+        }
+        const chip = document.createElement("button");
+        chip.className = "chip k-" + stage.kind + (i === index ? " active" : i < index ? " done" : "");
+        chip.innerHTML = stage.label + (stage.cfg && cfgOn() ? '<span class="x2">×2</span>' : "");
+        chip.addEventListener("click", () => { stop(); index = i; render(); });
+        flow.appendChild(chip);
+      });
+
+      const stage = stages[index];
+      const shapes = stage.shapes.map(([text, cls]) =>
+        `<span class="shape ${cls || ""}">${text}</span>`).join("");
+      const cfgNote = stage.cfg && cfgOn()
+        ? `<span style="color: var(--warn)">runs twice: uncond + cond batched together</span>` : "";
+      stageEl.innerHTML = `
+        <div class="stage-head">
+          <span class="stage-title">${stage.title}</span>
+          <span class="muted small">stage ${index + 1} / ${stages.length}</span>
+        </div>
+        <div class="shapes">${shapes}</div>
+        <div class="stage-body">${stage.body}</div>
+        <div class="stage-foot"><span>${stage.cost}</span>${cfgNote}</div>`;
+    }
+
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+      const play = $('[data-act="play"]', root);
+      if (play) play.textContent = "▶ Auto-play";
+    }
+
+    root.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-act]");
+      if (!button) return;
+      const act = button.dataset.act;
+      if (act === "prev") { stop(); index = (index - 1 + stages.length) % stages.length; render(); }
+      if (act === "next") { stop(); index = (index + 1) % stages.length; render(); }
+      if (act === "reset") { stop(); index = 0; render(); }
+      if (act === "play") {
+        if (timer) { stop(); return; }
+        index = 0; render();
+        button.textContent = "❚❚ Pause";
+        timer = setInterval(() => {
+          index += 1;
+          if (index >= stages.length) { stop(); index = stages.length - 1; }
+          render();
+        }, 1600);
+      }
+    });
+
+    if (cfgBox) cfgBox.addEventListener("change", render);
+    render();
+  }
+
+  $$("[data-stages]").forEach(buildStepper);
+
+  /* =====================================================================
+     2. adaLN widget
+     ===================================================================== */
+  (function adaLN() {
+    const canvas = $("#adaLN-canvas");
+    if (!canvas) return;
+
+    const N = 48;
+    const base = [];
+    for (let i = 0; i < N; i++) {
+      // deterministic pseudo-random "normalised activations" with structure
+      const v = Math.sin(i * 1.7) * 0.55 + Math.sin(i * 0.41 + 1.2) * 0.45 + Math.sin(i * 3.1) * 0.18;
+      base.push(Math.max(-1.6, Math.min(1.6, v)));
+    }
+
+    const scaleEl = $("#ad-scale"), shiftEl = $("#ad-shift"), gateEl = $("#ad-gate");
+
+    function draw() {
+      const scale = parseFloat(scaleEl.value);
+      const shift = parseFloat(shiftEl.value);
+      const gate = parseFloat(gateEl.value);
+      $("#ad-scale-v").textContent = scale.toFixed(2);
+      $("#ad-shift-v").textContent = shift.toFixed(2);
+      $("#ad-gate-v").textContent = gate.toFixed(2);
+
+      const mod = base.map((x) => gate * ((1 + scale) * x + shift));
+
+      const { ctx, w, h } = fitCanvas(canvas);
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 10, padR = 10, padT = 14, padB = 18;
+      const midY = (h - padT - padB) / 2 + padT;
+      const amp = (h - padT - padB) / 2 - 6;
+      const slot = (w - padL - padR) / N;
+
+      // zero line
+      ctx.strokeStyle = "#232833";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, midY); ctx.lineTo(w - padR, midY); ctx.stroke();
+
+      for (let i = 0; i < N; i++) {
+        const x = padL + i * slot;
+
+        // base (normalised) feature, wide and dim
+        ctx.fillStyle = "#3b4557";
+        const y0 = midY - base[i] * amp;
+        ctx.fillRect(x + 0.5, Math.min(midY, y0), Math.max(1, slot - 1), Math.abs(midY - y0));
+
+        // modulated feature, narrow and bright, so both stay readable
+        ctx.fillStyle = "#7c9cff";
+        const y1 = midY - mod[i] * amp;
+        const bw = Math.max(1.5, slot * 0.42);
+        ctx.fillRect(x + (slot - bw) / 2, Math.min(midY, y1), bw, Math.abs(midY - y1));
+      }
+    }
+
+    [scaleEl, shiftEl, gateEl].forEach((el) => el.addEventListener("input", draw));
+    draw();
+    window.addEventListener("resize", draw);
+  })();
+
+  /* =====================================================================
+     3. flow-shift schedule plot
+     ===================================================================== */
+  (function shiftPlot() {
+    const canvas = $("#shift-canvas");
+    if (!canvas) return;
+    const sEl = $("#shift-s"), nEl = $("#shift-n");
+
+    function draw() {
+      const shift = parseFloat(sEl.value);
+      const steps = parseInt(nEl.value, 10);
+      $("#shift-s-v").textContent = shift.toFixed(1);
+      $("#shift-n-v").textContent = steps;
+
+      const { ctx, w, h } = fitCanvas(canvas);
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 46, padR = 16, padT = 16, padB = 42;
+      const pw = w - padL - padR, ph = h - padT - padB;
+      const X = (p) => padL + p * pw;
+      const Y = (sigma) => padT + (1 - sigma) * ph;
+
+      // axes
+      ctx.strokeStyle = "#2a2f3a"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + ph); ctx.lineTo(padL + pw, padT + ph); ctx.stroke();
+
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "11px ui-monospace, Consolas, monospace";
+      ctx.textAlign = "right";
+      ctx.fillText("σ=1  (pure noise)", padL + pw - 6, padT + 12);
+      ctx.textAlign = "left";
+      ctx.fillText("σ=0  (image)", padL + 10, padT + ph - 8);
+      ctx.textAlign = "right";
+      ctx.fillText("step →", padL + pw, padT + ph + 20);
+      ctx.textAlign = "left";
+
+      const sigmas = [];
+      for (let i = 0; i < steps; i++) {
+        const linear = 1 - i / (steps - 1);
+        sigmas.push(shift * linear / (1 + (shift - 1) * linear));
+      }
+
+      // shifted curve
+      ctx.strokeStyle = "#7c9cff"; ctx.lineWidth = 2;
+      ctx.beginPath();
+      sigmas.forEach((sigma, i) => {
+        const x = X(steps === 1 ? 0 : i / (steps - 1));
+        const y = Y(sigma);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // unshifted reference
+      ctx.strokeStyle = "#2f3a4d"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(X(0), Y(1)); ctx.lineTo(X(1), Y(0));
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // markers
+      sigmas.forEach((sigma, i) => {
+        const x = X(steps === 1 ? 0 : i / (steps - 1));
+        const y = Y(sigma);
+        ctx.fillStyle = "#66d9a3";
+        ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2); ctx.fill();
+        if (steps <= 14 && i > 0 && i < steps - 1) {
+          ctx.fillStyle = "#9aa3b2";
+          ctx.font = "10px ui-monospace, Consolas, monospace";
+          ctx.textAlign = i > steps * 0.8 ? "right" : "left";
+          ctx.fillText(sigma.toFixed(2), x - (i > steps * 0.8 ? 6 : 0) + (i > steps * 0.8 ? 0 : -8), y + 15);
+          ctx.textAlign = "left";
+        }
+      });
+
+      // gradient band showing where steps are concentrated
+      ctx.fillStyle = "rgba(124,156,255,0.10)";
+      ctx.fillRect(padL, padT, pw, ph);
+    }
+
+    sEl.addEventListener("input", draw);
+    nEl.addEventListener("input", draw);
+    draw();
+    window.addEventListener("resize", draw);
+  })();
+
+  /* =====================================================================
+     4. flow-matching particle demo
+        exact velocity field of a 2-component Gaussian mixture
+        x_t = (1-t) x0 + t x1,  x0 ~ N(0,I),  x1 ~ mixture
+        v(x,t) = E[x1 | x_t] - E[x0 | x_t]
+     ===================================================================== */
+  (function flowDemo() {
+    const canvas = $("#flow-canvas");
+    if (!canvas) return;
+
+    const MODES = [
+      { pi: 0.6, m: [1.55, 0.55], s: [0.55, 0.22] },
+      { pi: 0.4, m: [-1.55, -0.75], s: [0.28, 0.55] }
+    ];
+
+    const COUNT = 520;
+    const stepsEl = $("#flow-steps"), shiftEl = $("#flow-shift");
+    const playBtn = $("#flow-play"), resetBtn = $("#flow-reset");
+    const statusEl = $("#flow-status");
+
+    let pts = [];
+    let t = 0;
+    let stepIndex = 0;
+    let totalSteps = 20;
+    let timer = null;
+
+    // target std per axis (mixture moments)
+    function targetStd() {
+      const out = [0, 0];
+      for (let d = 0; d < 2; d++) {
+        let mean = 0, second = 0;
+        MODES.forEach((c) => { mean += c.pi * c.m[d]; second += c.pi * (c.s[d] * c.s[d] + c.m[d] * c.m[d]); });
+        out[d] = Math.sqrt(Math.max(1e-9, second - mean * mean));
+      }
+      return out;
+    }
+    const TARGET_STD = targetStd();
+
+    function randn() {
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    function reset() {
+      stop();
+      pts = [];
+      for (let i = 0; i < COUNT; i++) pts.push({ x: randn(), y: randn() });
+      t = 0;
+      stepIndex = 0;
+      totalSteps = parseInt(stepsEl.value, 10);
+      updateKpis();
+      draw();
+    }
+
+    function posteriorMean1(x, y, tc) {
+      // weights
+      const logp = MODES.map((c) => {
+        let lp = Math.log(c.pi);
+        const sd2x = (1 - tc) * (1 - tc) + tc * tc * c.s[0] * c.s[0];
+        const sd2y = (1 - tc) * (1 - tc) + tc * tc * c.s[1] * c.s[1];
+        lp += -0.5 * (x - tc * c.m[0]) * (x - tc * c.m[0]) / sd2x - 0.5 * Math.log(2 * Math.PI * sd2x);
+        lp += -0.5 * (y - tc * c.m[1]) * (y - tc * c.m[1]) / sd2y - 0.5 * Math.log(2 * Math.PI * sd2y);
+        return lp;
+      });
+      const mx = Math.max.apply(null, logp);
+      const ws = logp.map((lp) => Math.exp(lp - mx));
+      const sum = ws[0] + ws[1];
+
+      const m1 = [0, 0];
+      MODES.forEach((c, k) => {
+        const wk = ws[k] / sum;
+        const sd2x = (1 - tc) * (1 - tc) + tc * tc * c.s[0] * c.s[0];
+        const sd2y = (1 - tc) * (1 - tc) + tc * tc * c.s[1] * c.s[1];
+        m1[0] += wk * (c.m[0] + tc * c.s[0] * c.s[0] * (x - tc * c.m[0]) / sd2x);
+        m1[1] += wk * (c.m[1] + tc * c.s[1] * c.s[1] * (y - tc * c.m[1]) / sd2y);
+      });
+      return m1;
+    }
+
+    function velocity(x, y, tc) {
+      const clamped = Math.min(tc, 0.98);
+      const m1 = posteriorMean1(x, y, clamped);
+      const m0x = (x - clamped * m1[0]) / (1 - clamped);
+      const m0y = (y - clamped * m1[1]) / (1 - clamped);
+      return [m1[0] - m0x, m1[1] - m0y];
+    }
+
+    function schedule() {
+      const shift = parseFloat(shiftEl.value);
+      const out = [];
+      for (let i = 0; i < totalSteps; i++) {
+        const linear = 1 - i / (totalSteps - 1);
+        // sigma after shift; t = 1 - sigma
+        const sigma = shift * linear / (1 + (shift - 1) * linear);
+        out.push(1 - sigma);
+      }
+      return out;
+    }
+
+    function eulerStep() {
+      const ts = schedule();
+      if (stepIndex >= totalSteps - 1) { stop(); return; }
+      const t0 = ts[stepIndex];
+      const t1 = ts[stepIndex + 1];
+      const dt = t1 - t0;
+      pts.forEach((p) => {
+        const v = velocity(p.x, p.y, t0);
+        p.x += dt * v[0];
+        p.y += dt * v[1];
+      });
+      stepIndex += 1;
+      t = t1;
+      updateKpis();
+      draw();
+      if (stepIndex >= totalSteps - 1) stop();
+    }
+
+    function updateKpis() {
+      statusEl.textContent = `t = ${t.toFixed(2)} · step ${stepIndex}/${totalSteps - 1}`;
+      let mx = 0, my = 0;
+      pts.forEach((p) => { mx += p.x; my += p.y; });
+      mx /= pts.length; my /= pts.length;
+      let sx = 0, sy = 0;
+      pts.forEach((p) => { sx += (p.x - mx) * (p.x - mx); sy += (p.y - my) * (p.y - my); });
+      sx = Math.sqrt(sx / pts.length); sy = Math.sqrt(sy / pts.length);
+
+      let err = 0;
+      pts.forEach((p) => {
+        let best = Infinity;
+        MODES.forEach((c) => {
+          const d = Math.hypot(p.x - c.m[0], p.y - c.m[1]);
+          if (d < best) best = d;
+        });
+        err += best;
+      });
+      err /= pts.length;
+
+      $("#flow-sx").innerHTML = `${sx.toFixed(2)} <small>/ ${TARGET_STD[0].toFixed(2)}</small>`;
+      $("#flow-sy").innerHTML = `${sy.toFixed(2)} <small>/ ${TARGET_STD[1].toFixed(2)}</small>`;
+      $("#flow-err").textContent = err.toFixed(2);
+
+      const hint = $("#flow-hint");
+      if (hint) {
+        const done = stepIndex >= totalSteps - 1;
+        if (totalSteps <= 2 && done) {
+          hint.innerHTML = '<span style="color: var(--warn)">One Euler jump of size 1 is mathematically exact only for a single Gaussian: every particle lands on the mean and the spread vanishes. This is why 1-step generators have to be distilled from a many-step teacher instead of just using 1 step.</span>';
+        } else if (totalSteps <= 8 && done) {
+          hint.innerHTML = '<span style="color: var(--warn)">Squeezed but recognisable: the spread is still too narrow and the small blob is partly absorbed. More steps — or more shift — fix it.</span>';
+        } else if (done) {
+          hint.innerHTML = 'The empirical spread has converged to the target (compare σ with the target in the KPIs).';
+        } else {
+          hint.innerHTML = 'Press <b>Run</b> — each tick is one sampler step, exactly like the loop inside a real pipeline.';
+        }
+      }
+    }
+
+    function draw() {
+      const { ctx, w, h } = fitCanvas(canvas);
+      ctx.clearRect(0, 0, w, h);
+
+      const RANGE = 3.4;
+      const scale = Math.min(w, h) / (2 * RANGE);
+      const cx = w / 2, cy = h / 2;
+      const sx = (x) => cx + x * scale;
+      const sy = (y) => cy - y * scale;
+
+      // grid
+      ctx.strokeStyle = "#141922"; ctx.lineWidth = 1;
+      for (let g = -3; g <= 3; g++) {
+        ctx.beginPath(); ctx.moveTo(sx(g), 0); ctx.lineTo(sx(g), h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, sy(g)); ctx.lineTo(w, sy(g)); ctx.stroke();
+      }
+
+      // target modes (1σ ellipses)
+      MODES.forEach((c) => {
+        ctx.strokeStyle = "rgba(102,217,163,0.55)";
+        ctx.fillStyle = "rgba(102,217,163,0.07)";
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.ellipse(sx(c.m[0]), sy(c.m[1]), c.s[0] * scale, c.s[1] * scale, 0, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+      });
+
+      // particles
+      pts.forEach((p) => {
+        ctx.fillStyle = "rgba(124,156,255,0.75)";
+        ctx.fillRect(sx(p.x) - 1.1, sy(p.y) - 1.1, 2.2, 2.2);
+      });
+
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "11px ui-monospace, Consolas, monospace";
+      ctx.fillText("green: target modes · blue: particles", 10, h - 10);
+    }
+
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (playBtn) playBtn.textContent = "▶ Run";
+    }
+
+    if (playBtn) {
+      playBtn.addEventListener("click", () => {
+        if (timer) { stop(); return; }
+        if (stepIndex >= totalSteps - 1) reset();
+        playBtn.textContent = "❚❚ Pause";
+        timer = setInterval(eulerStep, 220);
+        eulerStep();
+      });
+    }
+    if (resetBtn) resetBtn.addEventListener("click", reset);
+    stepsEl.addEventListener("input", () => { totalSteps = parseInt(stepsEl.value, 10); $("#flow-steps-v").textContent = totalSteps; reset(); });
+    shiftEl.addEventListener("input", () => { $("#flow-shift-v").textContent = parseFloat(shiftEl.value).toFixed(1); reset(); });
+
+    $("#flow-steps-v").textContent = stepsEl.value;
+    $("#flow-shift-v").textContent = parseFloat(shiftEl.value).toFixed(1);
+    reset();
+    window.addEventListener("resize", draw);
+  })();
+
+  /* =====================================================================
+     5. CFG visual
+     ===================================================================== */
+  (function cfgDemo() {
+    const canvas = $("#cfg-canvas");
+    if (!canvas) return;
+    const sEl = $("#cfg-s");
+
+    function draw() {
+      const s = parseFloat(sEl.value);
+      $("#cfg-s-v").textContent = s.toFixed(1);
+
+      const { ctx, w, h } = fitCanvas(canvas);
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 50, padR = 30, padT = 30, padB = 46;
+      const pw = w - padL - padR;
+      const yLine = padT + (h - padT - padB) / 2;
+
+      // map value -1..+1 (a toy 1-D prediction)
+      const X = (v) => padL + ((v + 0.6) / 1.6) * pw;
+
+      ctx.strokeStyle = "#2a2f3a"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL - 10, yLine); ctx.lineTo(w - padR + 10, yLine); ctx.stroke();
+
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "11px ui-monospace, Consolas, monospace";
+      ctx.fillText("a 1-D slice of the prediction", padL, h - 12);
+      ctx.fillText("0", X(0) - 3, yLine + 16);
+
+      const vUncond = 0.05;
+      const vCond = 0.45;
+      const vHat = vUncond + s * (vCond - vUncond);
+
+      function dot(value, color, label, above) {
+        const x = X(Math.max(-0.58, Math.min(0.98, value)));
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(x, yLine, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#9aa3b2";
+        ctx.font = "11px ui-monospace, Consolas, monospace";
+        ctx.fillText(label, x - 22, above ? yLine - 14 : yLine + 26);
+      }
+
+      dot(vUncond, "#54607a", "v_uncond", true);
+      dot(vCond, "#66d9a3", "v_cond", false);
+      dot(vHat, "#7c9cff", "v̂", true);
+
+      // arrow from uncond to vhat
+      ctx.strokeStyle = "#7c9cff"; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(X(vUncond), yLine - 8);
+      ctx.lineTo(X(Math.max(-0.58, Math.min(0.98, vHat))), yLine - 8);
+      ctx.stroke();
+
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "12px ui-monospace, Consolas, monospace";
+      ctx.fillText(`v̂ = ${vUncond.toFixed(2)} + ${s.toFixed(1)} × (${vCond.toFixed(2)} − ${vUncond.toFixed(2)}) = ${vHat.toFixed(2)}`,
+        padL, padT - 10);
+
+      const passes = s > 1 ? 2 : 1;
+      $("#cfg-passes").textContent = String(passes);
+      // measured: 832x1216, 20 steps => 7.75 s per pass-set at s=1 (15.5 for two passes)
+      $("#cfg-time").textContent = (7.75 * passes).toFixed(1) + " s";
+      $("#cfg-time1").textContent = "7.8 s";
+    }
+
+    sEl.addEventListener("input", draw);
+    draw();
+    window.addEventListener("resize", draw);
+  })();
+
+  /* =====================================================================
+     6. resolution / cost calculator
+     ===================================================================== */
+  (function calculator() {
+    const wEl = $("#calc-w"), hEl = $("#calc-h"), sEl = $("#calc-steps"), cEl = $("#calc-cfg");
+    if (!wEl) return;
+
+    function update() {
+      const width = parseInt(wEl.value, 10);
+      const height = parseInt(hEl.value, 10);
+      const steps = parseInt(sEl.value, 10);
+      const cfg = parseFloat(cEl.value);
+
+      $("#calc-w-v").textContent = width;
+      $("#calc-h-v").textContent = height;
+      $("#calc-steps-v").textContent = steps;
+      $("#calc-cfg-v").textContent = cfg.toFixed(1);
+
+      const mpx = (width * height) / 1e6;
+      const latW = Math.ceil(width / 8), latH = Math.ceil(height / 8);
+      const tokW = Math.ceil(width / 16), tokH = Math.ceil(height / 16);
+      const tokens = tokW * tokH;
+      const d = 2048;
+      const attnShare = tokens / (tokens + 6 * d);
+      const passes = cfg > 1 ? 2 : 1;
+
+      const sampling = passes * steps * (0.33 * mpx + 0.03 * mpx * mpx);
+      const vae = 1.15 * mpx;
+
+      $("#calc-mpx").textContent = mpx.toFixed(2);
+      $("#calc-lat").textContent = `${latW}×${latH}`;
+      $("#calc-tok").textContent = fmt(tokens);
+      $("#calc-attn").textContent = Math.round(attnShare * 100) + " %";
+      $("#calc-passes").textContent = String(passes * steps);
+      $("#calc-samp").textContent = sampling.toFixed(1) + " s";
+      $("#calc-vae").textContent = vae.toFixed(1) + " s";
+      $("#calc-total").textContent = (sampling + vae).toFixed(1) + " s";
+
+      const known = { "832x1216": [16.0, 15.99], "1024x1024": [16.6, 16.57], "512x768": [5.6, 5.58] };
+      const key = `${width}x${height}`;
+      const note = $("#calc-note");
+      if (known[key] && steps === 20 && Math.abs(cfg - 4) < 0.05) {
+        note.innerHTML = `This configuration was <b>measured</b>: ${known[key][0].toFixed(1)} s. The model predicts ${(sampling + vae).toFixed(1)} s.`;
+      } else {
+        note.innerHTML = `Model: <code>t = passes · steps · (0.33·MPx + 0.03·MPx²) + 1.15·MPx</code>, fitted to measured runs on an RTX 5070 Ti with <code>--diffusion-fa --vae-conv-direct</code>.`;
+      }
+    }
+
+    [wEl, hEl, sEl, cEl].forEach((el) => el.addEventListener("input", update));
+    $$("#calc-presets button").forEach((button) => {
+      button.addEventListener("click", () => {
+        wEl.value = button.dataset.w;
+        hEl.value = button.dataset.h;
+        update();
+      });
+    });
+    update();
+  })();
+
+  /* =====================================================================
+     7. quiz
+     ===================================================================== */
+  (function quiz() {
+    const root = $("#quiz-root");
+    if (!root) return;
+
+    const QUESTIONS = [
+      {
+        q: "A 20-step job at CFG 4 runs how many forward passes of the denoiser?",
+        options: ["20", "40", "80", "depends on the VAE"],
+        answer: 1,
+        why: "One pass per step for the conditioning, plus one for the negative prompt — CFG batches them but the network still sees two samples. 20 × 2 = 40."
+      },
+      {
+        q: "Why does 832×1216 cost essentially the same as 1024×1024 on a DiT?",
+        options: [
+          "Because the model pads both to the same square latent",
+          "Because DiT cost follows token count, and 1.01 MPx ≈ 1.05 MPx",
+          "Because the VAE dominates and it is resolution independent",
+          "Because Euler a always takes 20 fixed steps"
+        ],
+        answer: 1,
+        why: "Tokens = pixels / 256. 832×1216 = 3952 tokens, 1024×1024 = 4096 — a 3.5 % difference, so the runtimes match within noise."
+      },
+      {
+        q: "SDXL's UNet performs no attention at 128×128. What is the architectural reason?",
+        options: [
+          "Attention is numerically unstable at that width",
+          "Self-attention over 16 384 tokens would be the most expensive layer in the model",
+          "The VAE cannot decode attended features",
+          "Cross-attention only works below 64×64"
+        ],
+        answer: 1,
+        why: "Attention is O(N²). Its first attention level sits at 64² (4096 tokens); 128² would be 16 384 tokens, four times that cost for the least informative features."
+      },
+      {
+        q: "In this Anima checkpoint, what is the cross-attention key/value width and why?",
+        options: [
+          "2048 — same as the model width",
+          "1024 — the hidden width of the Qwen3-0.6B text encoder, read directly",
+          "77 — the CLIP token window",
+          "1280 — the OpenCLIP bigG width"
+        ],
+        answer: 1,
+        why: "k_proj and v_proj are [2048, 1024]: the text states come straight from the 1024-wide LLM and are projected up to 2048 inside the attention. Only q_proj takes the 2048-wide image tokens."
+      },
+      {
+        q: "You raise the flow shift from 1.0 to 3.0. What changes?",
+        options: [
+          "The model weights are rescaled",
+          "The step positions are remapped so more steps land in the high-noise region",
+          "The text encoder output is sharpened",
+          "Nothing — shift only affects training"
+        ],
+        answer: 1,
+        why: "σ' = shift·σ/(1+(shift−1)·σ) is applied to the schedule, not the network. The endpoints stay at 1 and 0; only where the intermediate steps sit changes."
+      },
+      {
+        q: "Which statement about the adaLN gate is true at initialisation?",
+        options: [
+          "Gate = 1, so each block starts as the identity",
+          "Gate = 0, so each block starts as a no-op and is dialled in by training",
+          "Gate is sampled from N(0,1) per forward pass",
+          "Gates only exist in the final layer"
+        ],
+        answer: 1,
+        why: "adaLN-Zero initialises the gates to zero: every residual branch outputs nothing at step 0, which stabilises training of very deep DiTs."
+      }
+    ];
+
+    QUESTIONS.forEach((question, qi) => {
+      const card = document.createElement("div");
+      card.className = "q";
+      const options = question.options.map((text, oi) =>
+        `<label class="opt"><input type="radio" name="q${qi}" value="${oi}"> ${text}</label>`).join("");
+      card.innerHTML = `<p class="qtext">${qi + 1}. ${question.q}<span class="mark"></span></p>${options}
+        <div class="explain"><b>Why:</b> ${question.why}</div>`;
+      root.appendChild(card);
+    });
+
+    $("#quiz-check").addEventListener("click", () => {
+      let right = 0;
+      QUESTIONS.forEach((question, qi) => {
+        const card = root.children[qi];
+        const picked = card.querySelector(`input[name="q${qi}"]:checked`);
+        card.classList.add("revealed", "q");
+        card.classList.remove("right", "wrong");
+        const mark = card.querySelector(".mark");
+        if (!picked) {
+          mark.textContent = "—";
+          return;
+        }
+        const ok = parseInt(picked.value, 10) === question.answer;
+        card.classList.add(ok ? "right" : "wrong");
+        mark.textContent = ok ? "✔ correct" : "✘ not quite";
+        if (ok) right += 1;
+      });
+      $("#quiz-score").textContent = `${right} / ${QUESTIONS.length} correct`;
+    });
+
+    $("#quiz-reset").addEventListener("click", () => {
+      $$("#quiz-root .q").forEach((card) => {
+        card.classList.remove("revealed", "right", "wrong");
+        card.querySelector(".mark").textContent = "";
+        $$("input[type=radio]", card).forEach((input) => { input.checked = false; });
+      });
+      $("#quiz-score").textContent = "";
+    });
+  })();
+
+  /* =====================================================================
+     8. responsive table wrappers
+     ===================================================================== */
+  $$("table").forEach((table) => {
+    const wrap = document.createElement("div");
+    wrap.className = "tablewrap";
+    table.parentNode.insertBefore(wrap, table);
+    wrap.appendChild(table);
+  });
+
+  /* =====================================================================
+     9. TOC active state
+     ===================================================================== */
+  (function toc() {    const links = $$("#toc a");
+    const sections = links.map((link) => document.querySelector(link.getAttribute("href"))).filter(Boolean);
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        links.forEach((link) => link.classList.toggle("active", link.getAttribute("href") === "#" + entry.target.id));
+      });
+    }, { rootMargin: "-30% 0px -60% 0px", threshold: 0 });
+
+    sections.forEach((section) => observer.observe(section));
+  })();
+})();
+</script>
+</body>
+</html>

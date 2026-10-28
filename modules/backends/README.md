@@ -5,6 +5,10 @@ tabs. Jobs whose checkpoint is a DiT model are routed to `sd_cpp/sd-server.exe`
 (stable-diffusion.cpp) instead of A1111's UNet/CLIP pipeline; prompts, seeds, batch, infotext,
 saving and the gallery all keep working through `processing.process_images()`.
 
+For a guided, interactive comparison of the two pipelines — dual CLIP vs LLM conditioning,
+patchify + adaLN, ε-prediction vs flow matching, CFG and what dominates the runtime — open
+`SDXL_vs_DiT_INFERENCE_GUIDE.html` from the repo root in a browser (single file, no dependencies).
+
 ## Requirements
 
 - `sd_cpp/sd-server.exe` and its DLLs — shipped with this fork, nothing to build.
