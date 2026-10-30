@@ -1140,7 +1140,9 @@ div#extras_scale_to_tab div.form{
     bottom: 0.7em;
     transform: translateX(-50%);
     z-index: 30;
-    width: auto;
+    /* left: 50% only leaves half the panel for an auto width, so the buttons
+       wrap; max-content keeps them on one row until the panel is too narrow */
+    width: max-content;
     max-width: calc(100% - 1.6em);
     padding: 0.32em 0.45em;
     border-radius: 999px;
