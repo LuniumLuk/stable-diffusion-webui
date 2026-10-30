@@ -8,7 +8,7 @@
  *   - suggestions while typing    (the same MRU + endorsed + extra-network pool the
  *                                  chips editor uses, via window.promptEditorPool);
  *   - `#` comment + `# ---` block markers styled like the old backdrop overlay, and
- *     `#if` / `#elseif` / `#else` / `#endif` stage conditions on their own line
+ *     `@IF` / `@ELSEIF` / `@ELSE` / `@ENDIF` stage conditions on their own line
  *     (checked, hinted and never treated as a comment);
  *   - left-click / left-drag stay NATIVE (caret + text selection) — the manipulation
  *     popup opens on RIGHT-CLICK only: on a keyword, or inside a selection to apply
@@ -19,10 +19,11 @@
  *   - line-number gutter: the first column shows line numbers; hovering a line swaps its
  *     number for the hover toggle — 💬 comments that single line, ▶/⏸ on a `# ---` section
  *     starter comments / uncomments the whole section;
- *   - fold column left of the numbers: ▾/▸ folds a `#if … #endif` block or a `# ---`
+ *   - fold column left of the numbers: ▾/▸ folds an `@IF … @ENDIF` block or a `# ---`
  *     section to a `⋯ N lines` chip (click the chip to unfold);
- *   - `#if` / `#elseif` macro dropdown: typing a condition suggests TXT2IMG, HIRES_FIX,
- *     IMG2IMG, INPAINT, POSE_INPAINT and the POSE_INPAINT_PART values inline.
+ *   - `@IF` / `@ELSEIF` macro dropdown: typing a condition suggests TXT2IMG, HIRES_FIX,
+ *     IMG2IMG, INPAINT, POSE_INPAINT, the POSE_INPAINT_PART values and any user
+ *     `@MACRO` names / enum aliases inline; inactive branches are dimmed.
  *
  * The gradio textarea stays the single source of truth and is only visually replaced
  * (the host gets `pedit-cm-mode`): every CM edit rewrites `textarea.value` and dispatches
@@ -121,6 +122,7 @@ function installHost(host) {
   function ensure() {
     if (instance || creating) return Promise.resolve(instance);
     creating = true;
+    const macroStage = hostId.startsWith('img2img') ? 'img2img' : 'txt2img';
     return createPromptCM({
       host: wrap,
       text: textarea.value || '',
@@ -130,6 +132,10 @@ function installHost(host) {
       lineGutter: true,
       foldGutter: true,
       macroCompletion: true,
+      macroStage,
+      getMacroValues: () => (window.promptMacros ? window.promptMacros.valuesFor(macroStage) : {}),
+      getMacros: () => (window.promptMacros ? window.promptMacros.macrosFor(macroStage) : null),
+      getMacroContext: () => (window.promptMacros ? window.promptMacros.contextFor(macroStage) : null),
       weightStep: readStep,
       getSuggestions: suggestionsFor,
       onAccept: (label) => {
@@ -140,6 +146,9 @@ function installHost(host) {
     }).then((created) => {
       instance = created;
       instances.set(hostId, created);
+      window.addEventListener('pedit-macros-changed', (event) => {
+        if (!event.detail || !event.detail.tab || event.detail.tab === macroStage) created.refreshMacros();
+      });
       return created;
     }).catch((error) => {
       creating = false; // bundle unavailable — the plain textarea stays usable

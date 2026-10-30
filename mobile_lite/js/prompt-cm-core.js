@@ -9,7 +9,7 @@
  *   - ✨ inline suggestions — typing opens an autocomplete list fed by the caller's
  *                            `getSuggestions(query)` pool (MRU + endorsed + networks);
  *   - 💬 comments          — `# ...` lines and `# ---` markers are styled like the old
- *                            overlay (`#if` / `#elseif` / `#else` / `#endif` stage
+ *                            overlay (`@IF` / `@ELSEIF` / `@ELSE` / `@ENDIF` stage
  *                            conditions get their own mark and are not comments);
  *                            the token popup comments / uncomments a line, and
  *                            on a `# ---` marker it toggles the whole block;
@@ -19,10 +19,12 @@
  *                            while a `# ---` section starter shows the ▶/⏸ toggle for
  *                            its whole block instead;
  *   - 🗂 block folding     — `foldGutter: true` (desktop) adds a fold column LEFT of the
- *                            line numbers: ▾/▸ folds a `#if … #endif` block (the `#endif`
+ *                            line numbers: ▾/▸ folds an `@IF … @ENDIF` block (the `@ENDIF`
  *                            goes with it) or a `# ---` section (up to the next marker)
  *                            into a `⋯ N lines` chip, which unfolds on click;
- *   - 🏷 macro dropdown    — `macroCompletion: true` (desktop) suggests the `#if` macros
+ *   - 🏷 macro dropdown    — `macroCompletion: true` (desktop) suggests the `@IF` macros,
+ *                            user `@MACRO` names and enum aliases; branches that cannot
+ *                            run for the current macro values are dimmed
  *                            (TXT2IMG / HIRES_FIX / IMG2IMG / INPAINT / POSE_INPAINT /
  *                            POSE_INPAINT_PART) inline once the space after the
  *                            directive is typed, and the enum values after
@@ -61,7 +63,7 @@
  */
 
 import { blockIsOff, classify, DEFAULT_WEIGHT, findPickGroups, foldRegions, formatWeight, isBlockMarker, rebuild, splitSegments } from './prompt-parse.js';
-import { analyzeConditionLines, conditionCompletions, isConditionLine } from './prompt-syntax.js';
+import { analyzeConditionLines, analyzeMacroLine, conditionCompletions, inactiveConditionLines, isConditionLine, isMacroLine, macroState, parseMacroDefinitions, parseMacroReferences } from './prompt-syntax.js';
 // Namespace import on purpose: a browser that still runs a CACHED older copy of this
 // module must not break the whole editor just because a recent op was not there yet —
 // the long-standing names are destructured (present in every CM-era copy) and only the
@@ -128,11 +130,15 @@ function el(tag, props = {}, children = []) {
  * @param {boolean} [options.lineGutter]        line-number gutter with hover comment /
  *                                              block toggles (desktop)
  * @param {boolean} [options.foldGutter]        fold column LEFT of the line numbers:
- *                                              `#if … #endif` blocks and `# ---`
+ *                                              `@IF … @ENDIF` blocks, `# ---` sections
  *                                              sections fold to a `⋯ N lines` chip
- * @param {boolean} [options.macroCompletion]   inline dropdown with the `#if` macros
- *                                              (TXT2IMG, HIRES_FIX, …) and the
- *                                              POSE_INPAINT_PART values
+ * @param {boolean} [options.macroCompletion]   inline dropdown with the `@IF` macros
+ *                                              (TXT2IMG, HIRES_FIX, custom @MACRO
+ *                                              names and enum aliases, …)
+ * @param {function} [options.getMacroValues]   custom macro state (`{name: value}`)
+ * @param {function} [options.getMacros]        complete macro values (system + custom)
+ * @param {function} [options.getMacroContext]  definitions / references of the whole prompt
+ * @param {string} [options.macroStage]         stage used to dim inactive branches
  * @param {'inline'|'full'} [options.variant]   structural styling variant
  * @param {boolean} [options.gestures]          press/drag/tap + context-menu grammar
  *                                              (default true); false = plain native
@@ -142,6 +148,7 @@ function el(tag, props = {}, children = []) {
 export async function createPromptCM({
   host, text = '', placeholder = '', getSuggestions, onChange, notify, onAccept,
   weightStep, desktopKeys = false, lineGutter = false, foldGutter = false, macroCompletion = false,
+  getMacroValues, getMacros, getMacroContext, macroStage = 'txt2img',
   variant = 'inline', gestures = true,
 } = {}) {
   const {
@@ -258,8 +265,8 @@ export async function createPromptCM({
       return new PromptGutterMarker(line.number, state ? 'block' : 'plain', state ? state.off : false);
     }
     if (text.trim()) {
-      // a #if line is a directive, not a comment: the gutter must offer to comment it
-      const commented = !isConditionLine(text) && /^\s*#(?!\()/.test(text);
+      // an @IF / @MACRO line is a directive, not a comment: the gutter must offer to comment it
+      const commented = !isConditionLine(text) && !isMacroLine(text) && /^\s*#(?!\()/.test(text);
       return new PromptGutterMarker(line.number, 'line', commented);
     }
     return new PromptGutterMarker(line.number, 'plain', false);
@@ -288,7 +295,7 @@ export async function createPromptCM({
 
   /**
    * Fold column (desktop `foldGutter: true`), rendered LEFT of the line numbers:
-   *   - ▾ / ▸ on a `#if … #endif` block (the `#endif` folds into the start line),
+   *   - ▾ / ▸ on an `@IF … @ENDIF` block (the `@ENDIF` folds into the start line),
    *   - ▾ / ▸ on a `# ---` section starter (the section folds up to the line before
    *     the next marker, so that next marker keeps its own line and stays usable),
    *   - nothing on the other lines.
@@ -297,7 +304,7 @@ export async function createPromptCM({
    *
    * Folds are kept as the document position of their start line, so an edit above the
    * block keeps it folded (the position is mapped through the change) and a block whose
-   * `#endif` / next marker disappeared simply stops being foldable.
+   * `@ENDIF` / next marker disappeared simply stops being foldable.
    */
   const canFold = foldGutter && canUseGutter
     && typeof Decoration.replace === 'function'
@@ -492,19 +499,44 @@ export async function createPromptCM({
     const marks = [];
     const text = state.doc.toString();
     const pickGroups = new Map(findPickGroups(text).map((group) => [group.start, group]));
-    // one pass for the whole prompt, so a missing #endif marks the #if that opened it
+    // one pass for the whole prompt, so a missing @ENDIF marks the @IF that opened it
     const conditions = analyzeConditionLines(text);
+    const macroValues = typeof getMacroValues === 'function' ? (getMacroValues() || {}) : {};
+    const externalMacros = typeof getMacros === 'function' ? getMacros() : null;
+    const macros = Object.assign(macroState(text, macroStage, macroValues).macros, externalMacros || {});
+    const inactive = inactiveConditionLines(text, macros);
     for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
       const line = state.doc.line(lineNumber);
       const lineText = line.text;
       const condition = conditions[lineNumber - 1] || null;
-      // a standalone #if / #elseif / #else / #endif line is a directive, not a comment
+      const macro = analyzeMacroLine(lineText);
+      if (inactive.has(lineNumber - 1)) {
+        marks.push(Decoration.line({ class: 'pedit-cm-inactive' }).range(line.from));
+      }
+      if (macro) {
+        marks.push(Decoration.line({ class: 'pedit-cm-macroline' }).range(line.from));
+        const name = /^[ \t]*@MACRO\b/i.exec(lineText);
+        if (name) {
+          const at = lineText.indexOf('@');
+          const end = lineText.indexOf(')', at);
+          marks.push(Decoration.mark({ class: 'pedit-cm-macro-name' }).range(line.from + at, line.from + (end < 0 ? lineText.trimEnd().length : end + 1)));
+        }
+        if (!macro.ok) {
+          const from = line.from + (lineText.length - lineText.trimStart().length);
+          const to = line.from + lineText.trimEnd().length;
+          marks.push(Decoration.mark({ class: 'pedit-cm-tok-syntax-error' }).range(from, Math.max(from, to)));
+        }
+      }
+      // a standalone @IF / @ELSEIF / @ELSE / @ENDIF line is a directive, not a comment
+      if (macro) {
+        continue;
+      }
       if (condition) {
         marks.push(Decoration.line({ class: 'pedit-cm-condline' }).range(line.from));
-        const directive = /^[ \t]*#(\w+)/.exec(lineText);
+        const directive = /^[ \t]*@(\w+)/.exec(lineText);
         if (directive) {
-          const hash = lineText.indexOf('#');
-          marks.push(Decoration.mark({ class: 'pedit-cm-cond-hash' }).range(line.from + hash, line.from + hash + 1 + directive[1].length));
+          const at = lineText.indexOf('@');
+          marks.push(Decoration.mark({ class: 'pedit-cm-cond-at' }).range(line.from + at, line.from + at + 1 + directive[1].length));
         }
         if (!condition.ok) {
           const from = line.from + (lineText.length - lineText.trimStart().length);
@@ -542,10 +574,12 @@ export async function createPromptCM({
     return Decoration.set(marks, true);
   }
 
+  const macroEffect = StateEffect.define();
+
   const decorationField = StateField.define({
     create: (state) => buildDecorations(state),
     update(value, tr) {
-      if (tr.docChanged) return buildDecorations(tr.state);
+      if (tr.docChanged || tr.effects.some((effect) => effect.is(macroEffect))) return buildDecorations(tr.state);
       return value.map(tr.changes);
     },
     provide: (field) => EditorView.decorations.from(field),
@@ -557,14 +591,28 @@ export async function createPromptCM({
     const line = context.state.doc.lineAt(context.pos);
     const before = line.text.slice(0, context.pos - line.from);
 
-    // a '#if' / '#elseif' condition gets the macro dropdown instead of the keyword pool
+    // an '@IF' / '@ELSEIF' condition gets the macro dropdown instead of the keyword pool
     if (macroCompletion) {
-      const condition = conditionCompletions(before);
+      const documentText = context.state.doc.toString();
+      const externalContext = typeof getMacroContext === 'function' ? getMacroContext() : null;
+      const localDefinitions = parseMacroDefinitions(documentText);
+      const localReferences = parseMacroReferences(documentText);
+      const macroContext = externalContext
+        ? {
+          definitions: Object.assign(localDefinitions, externalContext.definitions || {}),
+          references: new Set([...localReferences, ...(externalContext.references || [])]),
+        }
+        : { definitions: localDefinitions, references: localReferences };
+      const condition = conditionCompletions(
+        before,
+        macroContext.definitions || {},
+        macroContext.references || new Set(),
+      );
       if (condition) {
         if (!condition.options.length) return null;
         return {
           from: line.from + condition.from,
-          // the space after '#if' keeps the list open, then filters as the name is typed
+          // the space after '@IF' keeps the list open, then filters as the name is typed
           validFor: /^[\sA-Za-z0-9_]*$/,
           // no `type` on purpose: a macro is not a keyword, and CM would draw its icon
           options: condition.options.map((option) => ({
@@ -1318,6 +1366,7 @@ export async function createPromptCM({
     },
     focus: () => view.focus(),
     requestMeasure: () => view.requestMeasure(),
+    refreshMacros: () => view.dispatch({ effects: macroEffect.of(true) }),
     closePopups: () => closePopup(),
     destroy() {
       destroyed = true;

@@ -140,7 +140,7 @@ def process_images_via_anima(p, model: model_registry.DitModel):
     model_prompts = prompt_parser.without_condition_directives(p.all_prompts)
     model_negative_prompts = prompt_parser.without_condition_directives(p.all_negative_prompts)
 
-    # the source prompts (comments and #if blocks intact) are what the PNG infotext and
+    # the source prompts (comments and @IF blocks intact) are what the PNG infotext and
     # the gallery keep next to the compiled ones - same split as the SD pipeline
     source_prompts = getattr(p, "all_prompts_with_comments", None) or p.all_prompts
     source_negative_prompts = getattr(p, "all_negative_prompts_with_comments", None) or p.all_negative_prompts

@@ -235,9 +235,38 @@ def endorse_current(js_data, images, index):
 
 
 @dataclasses.dataclass
+class MacroPanel:
+    html = None
+    values = None
+
+
+def create_macro_panel(tabname):
+    """Scrollable prompt-macro editor left of the result panel.
+
+    The rows are rendered by javascript/promptMacros.js from the prompt text;
+    `values` is the hidden JSON field handed to the processing job.
+    """
+    panel = MacroPanel()
+    with gr.Column(elem_id=f"{tabname}_macro_panel", elem_classes=["prompt-macro-panel-host"], scale=0, min_width=216):
+        panel.html = gr.HTML(
+            f'<div class="prompt-macro-panel" data-tab="{tabname}"'
+            f' data-prompt="{tabname}_prompt" data-negative="{tabname}_neg_prompt"'
+            f' data-values="{tabname}_macro_values">'
+            '<div class="prompt-macro-head"><span>Macros</span><span class="prompt-macro-count"></span></div>'
+            '<div class="prompt-macro-body"><div class="prompt-macro-empty">No macros yet</div></div>'
+            '</div>'
+        )
+        panel.values = gr.Textbox(
+            value="{}", show_label=False, elem_id=f"{tabname}_macro_values",
+            elem_classes=["prompt-macro-values"],
+        )
+    return panel
+
+
 class OutputPanel:
     gallery = None
     generation_info = None
+    macro_values = None
     infotext = None
     html_log = None
     button_upscale = None
@@ -284,156 +313,161 @@ def create_output_panel(tabname, outdir, toprow=None):
             # the floating capsule has room for short labels; the plain rows do not
             return f'{icon} {text}' if compact_actions else icon
 
-        with gr.Column(variant='panel', elem_id=f"{tabname}_results_panel", elem_classes="floating-actions-host" if compact_actions else None):
-            with gr.Group(elem_id=f"{tabname}_gallery_container"):
-                res.gallery = gr.Gallery(label='Output', show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None)
+        results_row = gr.Row(elem_id=f"{tabname}_results_row") if tabname in ("txt2img", "img2img") else nullcontext()
+        with results_row:
+            if tabname in ("txt2img", "img2img"):
+                macro_panel = create_macro_panel(tabname)
+                res.macro_values = macro_panel.values
+            with gr.Column(variant='panel', elem_id=f"{tabname}_results_panel", elem_classes="floating-actions-host" if compact_actions else None):
+                with gr.Group(elem_id=f"{tabname}_gallery_container"):
+                    res.gallery = gr.Gallery(label='Output', show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None)
 
-            with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons floating-actions" if compact_actions else "image-buttons"):
-                open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not compact_actions and not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
-                compare_button = ToolButton('🔀', elem_id=f'{tabname}_compare', visible=not compact_actions, tooltip="Compare two images with a sliding overlay.")
+                with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons floating-actions" if compact_actions else "image-buttons"):
+                    open_folder_button = ToolButton(folder_symbol, elem_id=f'{tabname}_open_folder', visible=not compact_actions and not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
+                    compare_button = ToolButton('🔀', elem_id=f'{tabname}_compare', visible=not compact_actions, tooltip="Compare two images with a sliding overlay.")
+
+                    if tabname != "extras":
+                        save = ToolButton('💾', elem_id=f'save_{tabname}', visible=not compact_actions, tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
+                        save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', visible=not compact_actions, tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
+                        endorse_btn = ToolButton(send_label('\u2b50', 'Endorse'), elem_id=f'endorse_{tabname}', tooltip="Endorse this image – save a copy and record it in the starred gallery.")
+                        res.button_stage = ToolButton(send_label('➕', 'Stage'), elem_id=f'{tabname}_stage', tooltip="Capture the current settings into an img2img stage.")
+
+                    buttons = {
+                        'img2img': ToolButton(send_label('🖼️', 'To img2img'), elem_id=f'{tabname}_send_to_img2img', tooltip="Send the selected result to img2img – right-click to choose what is sent."),
+                        'inpaint': ToolButton(send_label('🎨️', 'To inpaint'), elem_id=f'{tabname}_send_to_inpaint', tooltip="Send the selected result to inpaint – right-click to choose what is sent."),
+                        'extras': ToolButton('📐', elem_id=f'{tabname}_send_to_extras', visible=not compact_actions, tooltip="Send image and generation parameters to extras tab.")
+                    }
+
+                    res.button_composer = ToolButton(send_label('🧩', 'Composer'), elem_id=f'{tabname}_send_to_composer', tooltip="Send the image to the Composer tab.")
+
+                    if tabname == 'txt2img':
+                        res.button_upscale = ToolButton('✨', elem_id=f'{tabname}_upscale', visible=not compact_actions, tooltip="Create an upscaled version of the current image using hires fix settings.")
+
+                open_folder_button.click(
+                    fn=lambda images, index: open_folder(shared.opts.outdir_samples or outdir, images, index),
+                    _js="(y, w) => [y, selected_gallery_index()]",
+                    inputs=[
+                        res.gallery,
+                        open_folder_button,  # placeholder for index
+                    ],
+                    outputs=[],
+                )
+
+                compare_button.click(
+                    fn=lambda: None,
+                    _js=f"(x) => [window.launchImageCompare(x, selected_gallery_index()), null]",
+                    inputs=[res.gallery],
+                    outputs=[],
+                    show_progress=False,
+                )
 
                 if tabname != "extras":
-                    save = ToolButton('💾', elem_id=f'save_{tabname}', visible=not compact_actions, tooltip=f"Save the image to a dedicated directory ({shared.opts.outdir_save}).")
-                    save_zip = ToolButton('🗃️', elem_id=f'save_zip_{tabname}', visible=not compact_actions, tooltip=f"Save zip archive with images to a dedicated directory ({shared.opts.outdir_save})")
-                    endorse_btn = ToolButton(send_label('\u2b50', 'Endorse'), elem_id=f'endorse_{tabname}', tooltip="Endorse this image – save a copy and record it in the starred gallery.")
-                    res.button_stage = ToolButton(send_label('➕', 'Stage'), elem_id=f'{tabname}_stage', tooltip="Capture the current settings into an img2img stage.")
+                    download_files = gr.File(None, file_count="multiple", interactive=False, show_label=False, visible=False, elem_id=f'download_files_{tabname}')
 
-                buttons = {
-                    'img2img': ToolButton(send_label('🖼️', 'To img2img'), elem_id=f'{tabname}_send_to_img2img', tooltip="Send the selected result to img2img – right-click to choose what is sent."),
-                    'inpaint': ToolButton(send_label('🎨️', 'To inpaint'), elem_id=f'{tabname}_send_to_inpaint', tooltip="Send the selected result to inpaint – right-click to choose what is sent."),
-                    'extras': ToolButton('📐', elem_id=f'{tabname}_send_to_extras', visible=not compact_actions, tooltip="Send image and generation parameters to extras tab.")
-                }
+                    # stage capture bridge wired to Img2imgStageManager.capture in
+                    # modules/ui.py; the compact result panel no longer drives it, but
+                    # the ➕ button and these fields stay available to extensions
+                    res.stage_payload = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_stage_quick_payload')
+                    res.stage_capture = gr.Button(visible=False, elem_id=f'{tabname}_stage_quick_capture')
 
-                res.button_composer = ToolButton(send_label('🧩', 'Composer'), elem_id=f'{tabname}_send_to_composer', tooltip="Send the image to the Composer tab.")
-
-                if tabname == 'txt2img':
-                    res.button_upscale = ToolButton('✨', elem_id=f'{tabname}_upscale', visible=not compact_actions, tooltip="Create an upscaled version of the current image using hires fix settings.")
-
-            open_folder_button.click(
-                fn=lambda images, index: open_folder(shared.opts.outdir_samples or outdir, images, index),
-                _js="(y, w) => [y, selected_gallery_index()]",
-                inputs=[
-                    res.gallery,
-                    open_folder_button,  # placeholder for index
-                ],
-                outputs=[],
-            )
-
-            compare_button.click(
-                fn=lambda: None,
-                _js=f"(x) => [window.launchImageCompare(x, selected_gallery_index()), null]",
-                inputs=[res.gallery],
-                outputs=[],
-                show_progress=False,
-            )
-
-            if tabname != "extras":
-                download_files = gr.File(None, file_count="multiple", interactive=False, show_label=False, visible=False, elem_id=f'download_files_{tabname}')
-
-                # stage capture bridge wired to Img2imgStageManager.capture in
-                # modules/ui.py; the compact result panel no longer drives it, but
-                # the ➕ button and these fields stay available to extensions
-                res.stage_payload = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_stage_quick_payload')
-                res.stage_capture = gr.Button(visible=False, elem_id=f'{tabname}_stage_quick_capture')
-
-                if compact_actions:
-                    # hidden bridges for the floating send buttons: full infotext
-                    # (prompt + settings) and image-only payloads
-                    res.send_infotext = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_infotext_apply')
-                    res.send_apply = gr.Button(visible=False, elem_id=f'{tabname}_apply_infotext')
-                    parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
-                        paste_button=res.send_apply,
-                        tabname='img2img',
-                        source_text_component=res.send_infotext,
-                    ))
-
-                    res.send_image = {}
-                    for send_target in ('img2img', 'inpaint'):
-                        res.send_image[send_target] = gr.Button(visible=False, elem_id=f'{tabname}_send_image_{send_target}')
+                    if compact_actions:
+                        # hidden bridges for the floating send buttons: full infotext
+                        # (prompt + settings) and image-only payloads
+                        res.send_infotext = gr.Textbox(value="", visible=False, elem_id=f'{tabname}_infotext_apply')
+                        res.send_apply = gr.Button(visible=False, elem_id=f'{tabname}_apply_infotext')
                         parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
-                            paste_button=res.send_image[send_target],
-                            tabname=send_target,
-                            source_image_component=res.gallery,
+                            paste_button=res.send_apply,
+                            tabname='img2img',
+                            source_text_component=res.send_infotext,
                         ))
 
-                with gr.Group():
-                    res.infotext = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext")
-                    res.html_log = gr.HTML(elem_id=f'html_log_{tabname}', elem_classes="html-log")
+                        res.send_image = {}
+                        for send_target in ('img2img', 'inpaint'):
+                            res.send_image[send_target] = gr.Button(visible=False, elem_id=f'{tabname}_send_image_{send_target}')
+                            parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
+                                paste_button=res.send_image[send_target],
+                                tabname=send_target,
+                                source_image_component=res.gallery,
+                            ))
 
-                    res.generation_info = gr.Textbox(visible=False, elem_id=f'generation_info_{tabname}')
-                    if tabname == 'txt2img' or tabname == 'img2img':
-                        generation_info_button = gr.Button(visible=False, elem_id=f"{tabname}_generation_info_button")
-                        generation_info_button.click(
-                            fn=update_generation_info,
-                            _js="function(x, y, z){ return [x, y, selected_gallery_index()] }",
-                            inputs=[res.generation_info, res.infotext, res.infotext],
-                            outputs=[res.infotext, res.infotext],
+                    with gr.Group():
+                        res.infotext = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext")
+                        res.html_log = gr.HTML(elem_id=f'html_log_{tabname}', elem_classes="html-log")
+
+                        res.generation_info = gr.Textbox(visible=False, elem_id=f'generation_info_{tabname}')
+                        if tabname == 'txt2img' or tabname == 'img2img':
+                            generation_info_button = gr.Button(visible=False, elem_id=f"{tabname}_generation_info_button")
+                            generation_info_button.click(
+                                fn=update_generation_info,
+                                _js="function(x, y, z){ return [x, y, selected_gallery_index()] }",
+                                inputs=[res.generation_info, res.infotext, res.infotext],
+                                outputs=[res.infotext, res.infotext],
+                                show_progress=False,
+                            )
+
+                        save.click(
+                            fn=call_queue.wrap_gradio_call_no_job(save_files),
+                            _js="(x, y, z, w) => [x, y, false, selected_gallery_index()]",
+                            inputs=[
+                                res.generation_info,
+                                res.gallery,
+                                res.infotext,
+                                res.infotext,
+                            ],
+                            outputs=[
+                                download_files,
+                                res.html_log,
+                            ],
                             show_progress=False,
                         )
 
-                    save.click(
-                        fn=call_queue.wrap_gradio_call_no_job(save_files),
-                        _js="(x, y, z, w) => [x, y, false, selected_gallery_index()]",
-                        inputs=[
-                            res.generation_info,
-                            res.gallery,
-                            res.infotext,
-                            res.infotext,
-                        ],
-                        outputs=[
-                            download_files,
-                            res.html_log,
-                        ],
-                        show_progress=False,
-                    )
+                        def endorse_current_output(*args):
+                            # wrap_gradio_call_no_job() turns a plain string into a list of characters
+                            return [endorse_current(*args)]
 
-                    def endorse_current_output(*args):
-                        # wrap_gradio_call_no_job() turns a plain string into a list of characters
-                        return [endorse_current(*args)]
+                        endorse_btn.click(
+                            fn=call_queue.wrap_gradio_call_no_job(endorse_current_output),
+                            _js="(x, y, z) => [x, y, selected_gallery_index()]",
+                            inputs=[
+                                res.generation_info,
+                                res.gallery,
+                                res.infotext,
+                            ],
+                            outputs=[res.html_log],
+                            show_progress=False,
+                        )
 
-                    endorse_btn.click(
-                        fn=call_queue.wrap_gradio_call_no_job(endorse_current_output),
-                        _js="(x, y, z) => [x, y, selected_gallery_index()]",
-                        inputs=[
-                            res.generation_info,
-                            res.gallery,
-                            res.infotext,
-                        ],
-                        outputs=[res.html_log],
-                        show_progress=False,
-                    )
+                        save_zip.click(
+                            fn=call_queue.wrap_gradio_call_no_job(save_files),
+                            _js="(x, y, z, w) => [x, y, true, selected_gallery_index()]",
+                            inputs=[
+                                res.generation_info,
+                                res.gallery,
+                                res.infotext,
+                                res.infotext,
+                            ],
+                            outputs=[
+                                download_files,
+                                res.html_log,
+                            ]
+                        )
 
-                    save_zip.click(
-                        fn=call_queue.wrap_gradio_call_no_job(save_files),
-                        _js="(x, y, z, w) => [x, y, true, selected_gallery_index()]",
-                        inputs=[
-                            res.generation_info,
-                            res.gallery,
-                            res.infotext,
-                            res.infotext,
-                        ],
-                        outputs=[
-                            download_files,
-                            res.html_log,
-                        ]
-                    )
+                else:
+                    res.generation_info = gr.HTML(elem_id=f'html_info_x_{tabname}')
+                    res.infotext = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext")
+                    res.html_log = gr.HTML(elem_id=f'html_log_{tabname}')
 
-            else:
-                res.generation_info = gr.HTML(elem_id=f'html_info_x_{tabname}')
-                res.infotext = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext")
-                res.html_log = gr.HTML(elem_id=f'html_log_{tabname}')
+                paste_field_names = []
+                if tabname == "txt2img":
+                    paste_field_names = modules.scripts.scripts_txt2img.paste_field_names
+                elif tabname == "img2img":
+                    paste_field_names = modules.scripts.scripts_img2img.paste_field_names
 
-            paste_field_names = []
-            if tabname == "txt2img":
-                paste_field_names = modules.scripts.scripts_txt2img.paste_field_names
-            elif tabname == "img2img":
-                paste_field_names = modules.scripts.scripts_img2img.paste_field_names
-
-            for paste_tabname, paste_button in buttons.items():
-                parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
-                    paste_button=paste_button, tabname=paste_tabname, source_tabname="txt2img" if tabname == "txt2img" else None, source_image_component=res.gallery,
-                    paste_field_names=paste_field_names
-                ))
+                for paste_tabname, paste_button in buttons.items():
+                    parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
+                        paste_button=paste_button, tabname=paste_tabname, source_tabname="txt2img" if tabname == "txt2img" else None, source_image_component=res.gallery,
+                        paste_field_names=paste_field_names
+                    ))
 
     return res
 

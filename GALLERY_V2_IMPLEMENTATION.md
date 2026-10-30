@@ -193,8 +193,8 @@ plus the `endorsements` / `dislikes` copies):
 - **source** — what was typed, with `#` comments and `@PICK` groups intact; this is what
   the PNG infotext carries (and what older rows have).
 - **compiled** — the source prompt with the `@PICK` groups drawn (styles applied), and
-  nothing else changed: comments, disabled groups and every `#if` / `#elseif` / `#else` /
-  `#endif` line with all its branches stay, so the gallery shows the prompt as it was
+  nothing else changed: comments, disabled groups, `@MACRO` definitions and every `@IF` /
+  `@ELSEIF` / `@ELSE` / `@ENDIF` line with all its branches stay, so the gallery shows the prompt as it was
   written plus the keywords that were actually drawn. Produced by
   `StableDiffusionProcessing.compiled_prompts_for_image()` at save time and
   handed to the `image_saved` callbacks through `ImageSaveParams.compiled_prompt`;

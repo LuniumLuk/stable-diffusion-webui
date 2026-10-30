@@ -150,7 +150,7 @@ def on_index_image(path, file_mtime, prompt, negative_prompt, seed, steps, sampl
     """Mirror a saved image into gallery.db.
 
     `compiled_prompt` is the prompt as it was written with the @PICK groups drawn
-    (comments, disabled groups and every #if branch stay). None means "unknown" -
+    (comments, disabled groups and every @IF branch stay). None means "unknown" -
     the column is left as it was, so a re-index of an old file cannot wipe a
     recorded compiled prompt.
 

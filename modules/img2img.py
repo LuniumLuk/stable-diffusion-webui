@@ -248,8 +248,18 @@ def process_inpaint_batch(p, masks, args):
     return Processed(p, images_list=[current_image], seed=last.seed, info=last_infotext, subseed=last.subseed, infotexts=[last_infotext])
 
 
-def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, img2img_batch_mask_payload: str, *args):
+def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, img2img_batch_mask_payload: str, macro_values_json: str = "{}", *args):
     override_settings = create_override_settings_dict(override_settings_texts)
+    macro_values = {}
+    try:
+        parsed_macros = json.loads(macro_values_json or "{}")
+    except (TypeError, ValueError):
+        parsed_macros = None
+    if isinstance(parsed_macros, dict):
+        macro_values = parsed_macros
+    else:
+        # an older queued job has the first script arg in this position
+        args = (macro_values_json,) + args
 
     is_batch = mode == 5
 
@@ -312,6 +322,7 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
         inpainting_mask_invert=inpainting_mask_invert,
         override_settings=override_settings,
         resize_by_scale=scale_by if selected_scale_tab == 1 else None,
+        macro_values=macro_values,
     )
 
     p.scripts = modules.scripts.scripts_img2img

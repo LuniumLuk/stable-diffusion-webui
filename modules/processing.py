@@ -150,6 +150,7 @@ class StableDiffusionProcessing:
     prompt: str = ""
     prompt_for_display: str = None
     negative_prompt: str = ""
+    macro_values: dict = None
     styles: list[str] = None
     seed: int = -1
     subseed: int = -1
@@ -431,12 +432,21 @@ class StableDiffusionProcessing:
         return self.token_merging_ratio or opts.token_merging_ratio
 
     def prompt_condition_macros(self):
-        """Macro values of the #if blocks for this job (see prompt_parser.stage_macros)."""
-        return prompt_parser.stage_macros("img2img", inpaint=getattr(self, "image_mask", None) is not None)
+        """Macro values of the @IF blocks for this job (see prompt_parser.macros_for_prompts)."""
+        return prompt_parser.macros_for_prompts(
+            "img2img",
+            [self.prompt, self.negative_prompt],
+            self.macro_values,
+            inpaint=getattr(self, "image_mask", None) is not None,
+        )
 
     def hr_prompt_condition_macros(self):
         """Macros for the Hires. fix pass; only the txt2img job has one."""
-        return prompt_parser.stage_macros("hires_fix")
+        return prompt_parser.macros_for_prompts(
+            "hires_fix",
+            [self.prompt, self.negative_prompt, getattr(self, "hr_prompt", ""), getattr(self, "hr_negative_prompt", "")],
+            self.macro_values,
+        )
 
     def setup_prompts(self):
         if isinstance(self.prompt,list):
@@ -457,8 +467,8 @@ class StableDiffusionProcessing:
         self.all_prompts = [shared.prompt_styles.apply_styles_to_prompt(x, self.styles) for x in self.all_prompts]
         self.all_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_negative_prompts]
 
-        # Preserve the originals (with comment lines and #if blocks) for PNG metadata
-        # and gallery restore, then resolve the #if blocks for this stage and strip
+        # Preserve the originals (with comment lines and @IF blocks) for PNG metadata
+        # and gallery restore, then resolve the @IF blocks for this stage and strip
         # comments so scripts.process() and the model are clean.
         self.all_prompts_with_comments = list(self.all_prompts)
         self.all_negative_prompts_with_comments = list(self.all_negative_prompts)
@@ -477,9 +487,9 @@ class StableDiffusionProcessing:
 
         Two lists come out of it.  `all_prompts_compiled` /
         `all_negative_prompts_compiled` are the source prompts with the picks drawn
-        and nothing else touched: comments, the directive lines and every `#if` /
-        `#else` branch stay, so the gallery can show and round-trip the prompt as it
-        was written.  `all_prompts` / `all_negative_prompts` are that same text
+        and nothing else touched: comments, `@MACRO` definitions, the directive lines
+        and every `@IF` / `@ELSE` branch stay, so the gallery can show and round-trip
+        the prompt as it was written.  `all_prompts` / `all_negative_prompts` are that same text
         resolved for the running stage and comment-stripped (a script that rewrote
         the prompts keeps its own text), i.e. what scripts and the model work with.
         Drawing before resolving keeps the keywords identical in both lists, even
@@ -546,9 +556,9 @@ class StableDiffusionProcessing:
 
         `all_prompts_compiled` / `all_negative_prompts_compiled` hold the compiled
         prompts: the source prompt (styles applied) with the @PICK groups drawn and
-        nothing else changed - comments and every `#if` / `#elseif` / `#else` /
-        `#endif` line with all its branches stay, so the gallery shows the prompt as
-        the user wrote it plus the keywords that were drawn.  The per-batch `prompts`
+        nothing else changed - comments, `@MACRO` definitions and every `@IF` /
+        `@ELSEIF` / `@ELSE` / `@ENDIF` line with all its branches stay, so the gallery
+        shows the prompt as the user wrote it plus the keywords that were drawn.  The per-batch `prompts`
         list keeps the untouched source and `all_prompts` the text scripts and the
         conditioner work with (resolved for the stage, comment-stripped).  Returns
         (None, None) when the lists do not line up, so the gallery simply records
@@ -620,13 +630,13 @@ class StableDiffusionProcessing:
         return cache[1]
 
     def setup_conds(self):
-        # scripts.process_batch may inject prompt text: resolve the #if blocks here as
+        # scripts.process_batch may inject prompt text: resolve the @IF blocks here as
         # well, so a conditional that a script added follows the running stage too
         macros = self.prompt_condition_macros()
         self.prompts = prompt_parser.apply_prompt_conditions(self.prompts, macros)
         self.negative_prompts = prompt_parser.apply_prompt_conditions(self.negative_prompts, macros)
 
-        # the compiled prompts keep the #if directives (gallery, "send to" round trip):
+        # the compiled prompts keep the @IF directives (gallery, "send to" round trip):
         # the model is conditioned on the text with the framing lines dropped
         prompts = prompt_parser.SdConditioning(prompt_parser.without_condition_directives(self.prompts), width=self.width, height=self.height)
         negative_prompts = prompt_parser.SdConditioning(prompt_parser.without_condition_directives(self.negative_prompts), width=self.width, height=self.height, is_negative_prompt=True)
@@ -1960,7 +1970,11 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
     def prompt_condition_macros(self):
         if self.is_hr_pass:
             return self.hr_prompt_condition_macros()
-        return prompt_parser.stage_macros("txt2img")
+        return prompt_parser.macros_for_prompts(
+            "txt2img",
+            [self.prompt, self.negative_prompt, getattr(self, "hr_prompt", ""), getattr(self, "hr_negative_prompt", "")],
+            self.macro_values,
+        )
 
     def setup_prompts(self):
         super().setup_prompts()
@@ -1988,7 +2002,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         self.all_hr_negative_prompts = [shared.prompt_styles.apply_negative_styles_to_prompt(x, self.styles) for x in self.all_hr_negative_prompts]
 
         # Same comment-preservation pattern as the base class setup_prompts(): the
-        # sources keep comments and #if blocks, the compiled list is resolved for
+        # sources keep comments and @IF blocks, the compiled list is resolved for
         # the hires pass (HIRES_FIX is an img2img pass, so IMG2IMG is 1 as well).
         self.all_hr_prompts_with_comments = list(self.all_hr_prompts)
         self.all_hr_negative_prompts_with_comments = list(self.all_hr_negative_prompts)
@@ -2001,7 +2015,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             return
 
         # a script may have injected prompt text into the hires prompts: resolve the
-        # #if blocks for the hires stage right before the conditioning is built
+        # @IF blocks for the hires stage right before the conditioning is built
         macros = self.hr_prompt_condition_macros()
         self.hr_prompts = prompt_parser.apply_prompt_conditions(self.hr_prompts, macros)
         self.hr_negative_prompts = prompt_parser.apply_prompt_conditions(self.hr_negative_prompts, macros)

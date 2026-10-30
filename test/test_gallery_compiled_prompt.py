@@ -222,6 +222,74 @@ def test_old_images_without_the_columns_stay_readable():
         assert stored["compiled_negative_prompt"] == ""
 
 
+def test_new_writes_upgrade_legacy_directives():
+    with temp_dbs():
+        item_id = gallery_db.upsert_item(
+            uid="legacy:new", source="txt2img", prompt="#if TXT2IMG\nfresh\n#endif"
+        )
+        assert gallery_db.get_item(item_id)["prompt"] == "@IF TXT2IMG\nfresh\n@ENDIF"
+
+        endorsement_db.index_image(
+            path="fresh.png", file_mtime=0.0, prompt="#if TXT2IMG\nfresh\n#endif",
+            negative_prompt="", seed="1", steps=1, sampler="Euler", cfg_scale=1.0,
+            width=8, height=8, model_name="", model_hash="", infotext="#if TXT2IMG\nmeta\n#endif",
+        )
+        with endorsement_db._get_conn() as conn:
+            row = conn.execute(
+                "SELECT prompt, infotext FROM generated_images WHERE path='fresh.png'"
+            ).fetchone()
+        assert row["prompt"] == "@IF TXT2IMG\nfresh\n@ENDIF"
+        assert row["infotext"] == "@IF TXT2IMG\nmeta\n@ENDIF"
+
+
+def test_legacy_hash_directives_are_migrated_in_both_stores():
+    with temp_dbs():
+        with gallery_db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO items(uid, source, prompt, negative_prompt, compiled_prompt, "
+                "compiled_negative_prompt, infotext) VALUES (?,?,?,?,?,?,?)",
+                (
+                    "legacy:one", "txt2img",
+                    "#if TXT2IMG\na\n#else\nb\n#endif", "#else\nlow",
+                    "#if TXT2IMG\ncompiled a\n#endif", "", "#if TXT2IMG\ninfotext a\n#endif",
+                ),
+            )
+            conn.commit()
+            gallery_db._migrate_prompt_directives(conn)
+            conn.commit()
+            row = conn.execute(
+                "SELECT prompt, negative_prompt, compiled_prompt, compiled_negative_prompt, infotext "
+                "FROM items WHERE uid='legacy:one'"
+            ).fetchone()
+            assert row["prompt"] == "@IF TXT2IMG\na\n@ELSE\nb\n@ENDIF"
+            assert row["negative_prompt"] == "@ELSE\nlow"
+            assert row["compiled_prompt"] == "@IF TXT2IMG\ncompiled a\n@ENDIF"
+            assert row["infotext"] == "@IF TXT2IMG\ninfotext a\n@ENDIF"
+            assert conn.execute("SELECT rowid FROM items_fts WHERE items_fts MATCH 'TXT2IMG'").fetchall()
+
+        with endorsement_db._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO generated_images(path, indexed_at, prompt, negative_prompt, "
+                "compiled_prompt, compiled_negative_prompt, infotext) VALUES (?,?,?,?,?,?,?)",
+                (
+                    "legacy.png", "2026-01-01T00:00:00",
+                    "#if TXT2IMG\na\n#else\nb\n#endif", "#if INPAINT\nlow\n#endif",
+                    "#if TXT2IMG\ncompiled a\n#endif", "", "#if TXT2IMG\ninfotext a\n#endif",
+                ),
+            )
+            conn.commit()
+            endorsement_db._migrate_prompt_directives(conn)
+            conn.commit()
+            row = conn.execute(
+                "SELECT prompt, negative_prompt, compiled_prompt, compiled_negative_prompt, infotext "
+                "FROM generated_images WHERE path='legacy.png'"
+            ).fetchone()
+            assert row["prompt"] == "@IF TXT2IMG\na\n@ELSE\nb\n@ENDIF"
+            assert row["negative_prompt"] == "@IF INPAINT\nlow\n@ENDIF"
+            assert row["compiled_prompt"] == "@IF TXT2IMG\ncompiled a\n@ENDIF"
+            assert row["infotext"] == "@IF TXT2IMG\ninfotext a\n@ENDIF"
+
+
 if __name__ == "__main__":
     import sys
 

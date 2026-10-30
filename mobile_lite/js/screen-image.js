@@ -7,7 +7,7 @@ import { openParamsSheet } from './params.js';
 import { poseInpaintArgs, poseInpaintSummary, poseMaskRequest } from './pose.js';
 import { createPromptEditor } from './prompt.js';
 import { planInputResize } from './resize-plan.js';
-import { on, persist, imageParams, resolveOutputSize, setParam, state } from './state.js';
+import { on, persist, emit, imageParams, resolveOutputSize, setParam, state } from './state.js';
 import { busy, clamp, el, fileToImageSource, pickFile, toast } from './ui.js';
 import { metaFromItem, openResultViewer } from './send.js';
 
@@ -1218,6 +1218,7 @@ export function init(container) {
         modeButtons.inpaint.classList.toggle('on', mode === 'inpaint');
         updateMaskVisibility();
         updateSummary();
+        emit('image-mode');
       },
     });
     modeButtons[mode] = button;

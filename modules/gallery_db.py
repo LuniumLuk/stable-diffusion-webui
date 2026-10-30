@@ -22,6 +22,8 @@ import time
 import zlib
 from datetime import datetime, timezone
 
+from modules.prompt_syntax import upgrade_legacy_directives
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DB_PATH = os.environ.get("GALLERY_DB_PATH") or os.path.join(_ROOT, "gallery.db")
@@ -225,7 +227,7 @@ def init_db() -> None:
         if "album_id" not in item_cols:
             conn.execute("ALTER TABLE items ADD COLUMN album_id INTEGER")
         # compiled prompt = the prompt as written with the @PICK groups drawn
-        # (comments, disabled groups and every #if branch stay); the prompt column
+        # (comments, disabled groups and every @IF branch stay); the prompt column
         # keeps the untouched source. Empty for images indexed before this column
         # existed.
         for column in ("compiled_prompt", "compiled_negative_prompt"):
@@ -247,6 +249,7 @@ def init_db() -> None:
         )
         _backfill_engine_keys(conn)
         _seed(conn)
+        _migrate_prompt_directives(conn)
         conn.commit()
     global _ready
     _ready = True
@@ -304,6 +307,31 @@ def _backfill_engine_keys(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO gallery_meta(key, value) VALUES ('engine_keys_backfilled', '1')"
     )
+
+
+_PROMPT_COLUMNS = ("prompt", "negative_prompt", "compiled_prompt", "compiled_negative_prompt", "infotext")
+
+
+def _migrate_prompt_directives(conn: sqlite3.Connection) -> None:
+    """Rewrite legacy '#if' directives in stored prompts to '@IF'.
+
+    Runs at startup and only writes rows that actually change, so a prompt
+    imported by an older process is healed on the next start as well.
+    """
+    columns = ", ".join(_PROMPT_COLUMNS)
+    where = " OR ".join(f"{column} LIKE '%#%'" for column in _PROMPT_COLUMNS)
+    rows = conn.execute(f"SELECT id, {columns} FROM items WHERE {where}").fetchall()
+    for row in rows:
+        updates = {}
+        for column, value in zip(_PROMPT_COLUMNS, row[1:]):
+            upgraded = upgrade_legacy_directives(value)
+            if upgraded != value:
+                updates[column] = upgraded
+        if not updates:
+            continue
+        sets = ", ".join(f"{column}=?" for column in updates)
+        conn.execute(f"UPDATE items SET {sets} WHERE id=?", (*updates.values(), int(row[0])))
+        _refresh_fts(conn, int(row[0]))
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -398,6 +426,9 @@ def upsert_item(uid=None, source="txt2img", rel_path=None, path=None, **fields) 
             if k in _LINEAGE_FIELDS and fields[k] is None:
                 continue
             values[k] = fields[k]
+    for column in _PROMPT_COLUMNS:
+        if column in values:
+            values[column] = upgrade_legacy_directives(values[column])
     values["source"] = source
     meta = fields.get("meta")
     if meta is not None:

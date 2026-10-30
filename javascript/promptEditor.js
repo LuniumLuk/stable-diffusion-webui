@@ -12,9 +12,10 @@
  *                            pipeline strips '#' comment lines)
  *   - ⛔ on a chip        -> wraps the keyword as  #(keyword)  - a *disabled*
  *                            inline group the backend strips just like a comment
- *   - `#if MACRO` lines   -> stage conditions (TXT2IMG / HIRES_FIX / IMG2IMG /
- *                            INPAINT / POSE_INPAINT / POSE_INPAINT_PART) whose
- *                            text reaches the model only while that stage runs
+ *   - `@IF MACRO` lines   -> stage conditions (TXT2IMG / HIRES_FIX / IMG2IMG /
+ *                            INPAINT / POSE_INPAINT / POSE_INPAINT_PART, custom
+ *                            @MACRO names) whose text reaches the model only while
+ *                            the condition holds; inactive branches are dimmed
  *   - ＋ keyword          -> inline input with suggestions from the endorsed
  *                            keyword pool and the installed extra networks
  *   - [⌨ Text] button     -> switches back to the classic textarea (the
@@ -265,10 +266,58 @@
         return syntax ? [syntax.headline].concat(syntax.details).filter(Boolean).join('\n') : '';
     }
 
-    /* ------------------------------------------------------------- '#if' blocks
+    /* ------------------------------------------------------- '@MACRO' definitions
+     * Mirror of the custom-macro grammar in mobile_lite/js/prompt-syntax.js.
+     */
+
+    const MACRO_HEAD_RE = /^[ \t]*@macro(?![A-Za-z0-9_])/i;
+    const MACRO_DEFINITION_RE = /^[ \t]*@macro[ \t]*\([ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\)[ \t]*(\{[^\n]*\})?[ \t]*$/i;
+
+    /** True for any @MACRO line, valid or not. */
+    function isMacroLine(text) {
+        return MACRO_HEAD_RE.test(String(text == null ? '' : text));
+    }
+
+    /** Grammar-checks one @MACRO line; null for an ordinary line. */
+    function analyzeMacroLine(line) {
+        const raw = String(line == null ? '' : line);
+        if (!MACRO_HEAD_RE.test(raw)) return null;
+        const match = MACRO_DEFINITION_RE.exec(raw);
+        if (!match) {
+            return {
+                ok: false, kind: 'macro', tag: '@MACRO', name: '', key: '', macroType: 'bool',
+                values: [], defaultValue: 0, raw: raw.trim(),
+                headline: 'Malformed custom macro definition.',
+                details: ['Write @MACRO(name) for a boolean macro or @MACRO(name){a, b, c} for an enum.'],
+            };
+        }
+        const name = match[1];
+        const rawValues = match[2];
+        const values = rawValues ? Array.from(new Set(splitSyntaxItems(rawValues.slice(1, -1)))) : [];
+        if (rawValues && !values.length) {
+            return {
+                ok: false, kind: 'macro', tag: '@MACRO', name: name, key: name.toUpperCase(),
+                macroType: 'enum', values: [], defaultValue: 0, raw: raw.trim(),
+                headline: 'The custom macro has no enum values.',
+                details: ['Write at least one value: @MACRO(name){a, b, c}.'],
+            };
+        }
+        const macroType = rawValues ? 'enum' : 'bool';
+        const defaultValue = macroType === 'enum' ? values[0] : 0;
+        return {
+            ok: true, kind: 'macro', tag: '@MACRO', name: name, key: name.toUpperCase(),
+            macroType: macroType, values: values, defaultValue: defaultValue, raw: raw.trim(),
+            headline: macroType === 'enum'
+                ? 'Defines the enum macro ' + name + ' (' + values.join(', ') + '); the first value is selected by default.'
+                : 'Defines the boolean macro ' + name + ' (off by default).',
+            details: ['Use it in conditions: @IF ' + name + (macroType === 'enum' ? ' == ' + values[0] : '') + '.'],
+        };
+    }
+
+    /* ------------------------------------------------------------- '@IF' blocks
      * Mirror of the condition grammar in mobile_lite/js/prompt-syntax.js: a line of
-     * its own starting with #if / #elseif / #else / #endif (all optional whitespace
-     * before the '#').
+     * its own starting with @IF / @ELSEIF / @ELSE / @ENDIF (all optional whitespace
+     * before the '@').
      */
 
     const CONDITION_MACROS = {
@@ -280,17 +329,22 @@
         POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET or HANDS',
     };
     const CONDITION_MACRO_NAMES = Object.keys(CONDITION_MACROS);
-    const CONDITION_EXAMPLE = '#if TXT2IMG … #endif';
-    const CONDITION_RE = /^[ \t]*#(if|elif|elseif|else|endif)(?![A-Za-z0-9_])(.*)$/i;
+    const CONDITION_EXAMPLE = '@IF TXT2IMG … @ENDIF';
+    const CONDITION_RE = /^[ \t]*@(if|elif|elseif|else|endif)(?![A-Za-z0-9_])(.*)$/i;
     // one token per call; the "y" flag keeps the scan position explicit
     const CONDITION_TOKEN_RE = /[ \t]*(?:(!=|==|&&|\|\||[!()])|([A-Za-z_][A-Za-z0-9_]*)|(-?\d+(?:\.\d+)?)|(\S))/y;
 
-    /** True when the line is a standalone #if / #elseif / #else / #endif directive. */
+    /** True when the line is a standalone @IF / @ELSEIF / @ELSE / @ENDIF directive. */
     function isConditionLine(text) {
         return CONDITION_RE.test(String(text == null ? '' : text));
     }
 
-    /** True for a comment line; a '#if' block directive is not a comment. */
+    /** '@IF' / '@ELSEIF' / '@ELSE' / '@ENDIF' for an internal keyword ('if', ...). */
+    function directiveLabel(keyword) {
+        return '@' + String(keyword || '').toUpperCase();
+    }
+
+    /** True for a comment line; an '@IF' block directive is not a comment. */
     function isCommentedLine(text) {
         return !isConditionLine(text) && /^\s*#(?!\()/.test(String(text == null ? '' : text));
     }
@@ -349,7 +403,6 @@
             if (!token) fail('The condition is incomplete.');
             if (token.type !== 'word') fail('Unexpected “' + token.value + '” in the condition.');
             const name = token.value.toUpperCase();
-            if (!Object.prototype.hasOwnProperty.call(CONDITION_MACROS, name)) fail('Unknown macro ' + token.value + '.');
             if (macros.indexOf(name) < 0) macros.push(name);
             index++;
             if (atOperator('==', '!=')) {
@@ -387,50 +440,70 @@
         return Object.assign({}, info, {ok: false, headline: message, details: [hint].concat(info.details).filter(Boolean)});
     }
 
-    /** Grammar-checks one line; null when it is not a #if block directive. */
-    function analyzeConditionLine(line) {
+    /** Valid custom macro definitions, keyed by upper-case name. */
+    function parseMacroDefinitions(text) {
+        const definitions = {};
+        for (const line of String(text == null ? '' : text).split('\n')) {
+            const info = analyzeMacroLine(line);
+            if (info && info.ok) definitions[info.key] = info;
+        }
+        return definitions;
+    }
+
+    function macroDetail(name, definitions) {
+        if (Object.prototype.hasOwnProperty.call(CONDITION_MACROS, name)) return name + ' is ' + CONDITION_MACROS[name];
+        const definition = definitions[name];
+        if (definition && definition.macroType === 'enum') return name + ' is a custom enum macro (' + definition.values.join(', ') + ')';
+        if (definition) return name + ' is a custom boolean macro (off by default)';
+        return name + ' is an undeclared boolean macro (off by default; add @MACRO(' + name + ') to declare it)';
+    }
+
+    /** Grammar-checks one line; null when it is not an @IF block directive. */
+    function analyzeConditionLine(line, definitions) {
         const raw = String(line == null ? '' : line);
         const match = CONDITION_RE.exec(raw);
         if (!match) return null;
 
         const typed = match[1].toLowerCase();
         const keyword = typed === 'elif' ? 'elseif' : typed;
+        const label = directiveLabel(keyword);
         const expression = match[2].trim();
         const info = {
-            ok: true, kind: 'condition', tag: '#' + keyword, keyword: keyword, raw: raw.trim(),
+            ok: true, kind: 'condition', tag: label, keyword: keyword, raw: raw.trim(),
             expression: expression, macros: [], headline: '', details: [],
         };
 
         if (keyword === 'else' || keyword === 'endif') {
-            if (expression) return conditionError(info, 'Unexpected text after #' + keyword + '.', 'Write #' + keyword + ' on its own line.');
+            if (expression) return conditionError(info, 'Unexpected text after ' + label + '.', 'Write ' + label + ' on its own line.');
             info.headline = keyword === 'else' ?
-                'Otherwise branch — used when no earlier branch of the #if block matched.' :
-                'Ends the #if block.';
+                'Otherwise branch — used when no earlier branch of the @IF block matched.' :
+                'Ends the @IF block.';
             info.details = [CONDITION_EXAMPLE];
             return info;
         }
 
-        if (!expression) return conditionError(info, 'Missing the condition after #' + keyword + '.', 'Example: ' + CONDITION_EXAMPLE);
+        if (!expression) return conditionError(info, 'Missing the condition after ' + label + '.', 'Example: ' + CONDITION_EXAMPLE);
 
         const parsed = parseCondition(expression);
         info.macros = parsed.macros;
         if (!parsed.ok) return conditionError(info, parsed.error, 'Known macros: ' + CONDITION_MACRO_NAMES.join(', '));
 
         info.headline = 'Conditional block — the text below is used only while ' + expression + ' is true.';
-        info.details = parsed.macros.map((name) => name + ' is ' + CONDITION_MACROS[name]);
+        info.details = parsed.macros.map((name) => macroDetail(name, definitions || {}));
         return info;
     }
 
-    /** Validates every #if block; null for ordinary lines, an error on the culprit. */
+    /** Validates every @IF block; null for ordinary lines, an error on the culprit. */
     function analyzeConditionLines(text) {
+        const definitions = parseMacroDefinitions(text);
         const lines = String(text == null ? '' : text).split('\n');
-        const results = lines.map((line) => analyzeConditionLine(line));
+        const results = lines.map((line) => analyzeConditionLine(line, definitions));
         const stack = [];
 
         results.forEach((info, index) => {
             if (!info) return;
             // the nesting is tracked even for a broken line, so one bad condition does not
-            // cascade into "dangling #endif" reports on every line after it
+            // cascade into "dangling @ENDIF" reports on every line after it
             if (info.keyword === 'if') {
                 stack.push({index: index, seenElse: false});
                 return;
@@ -440,18 +513,18 @@
                 if (info.ok) results[index] = conditionError(info, message, hint);
             };
             if (info.keyword === 'elseif') {
-                if (!frame) report('#elseif without an #if.', 'Add a #if above it.');
-                else if (frame.seenElse) report('This #if already has an #else branch.', 'Move this #elseif above the #else.');
+                if (!frame) report('@ELSEIF without an @IF.', 'Add an @IF above it.');
+                else if (frame.seenElse) report('This @IF already has an @ELSE branch.', 'Move this @ELSEIF above the @ELSE.');
                 return;
             }
             if (info.keyword === 'else') {
-                if (!frame) report('#else without an #if.', 'Add a #if above it.');
-                else if (frame.seenElse) report('This #if already has an #else branch.', 'Only one #else is allowed per #if.');
+                if (!frame) report('@ELSE without an @IF.', 'Add an @IF above it.');
+                else if (frame.seenElse) report('This @IF already has an @ELSE branch.', 'Only one @ELSE is allowed per @IF.');
                 else frame.seenElse = true;
                 return;
             }
             if (info.keyword === 'endif') {
-                if (!frame) report('#endif without an #if.', 'Remove it, or add the matching #if.');
+                if (!frame) report('@ENDIF without an @IF.', 'Remove it, or add the matching @IF.');
                 else stack.pop();
             }
         });
@@ -459,7 +532,7 @@
         stack.forEach((frame) => {
             // a broken condition on that line is the better message - do not hide it
             if (results[frame.index].ok) {
-                results[frame.index] = conditionError(results[frame.index], 'Missing #endif — this #if is never closed.', 'Example: ' + CONDITION_EXAMPLE);
+                results[frame.index] = conditionError(results[frame.index], 'Missing @ENDIF — this @IF is never closed.', 'Example: ' + CONDITION_EXAMPLE);
             }
         });
         return results;
@@ -560,9 +633,11 @@
 
         if (t === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
 
-        // a standalone #if line is a directive, not a comment (allowCondition is false
-        // for the body of a commented line and for disabled '#(...)' groups)
-        if (allowCondition !== false && isConditionLine(t)) {
+        // a standalone @MACRO / @IF line is a directive, not a comment (allowCondition
+        // is false for the body of a commented line and for disabled '#(...)' groups)
+        if (isMacroLine(t) || isConditionLine(t)) {
+            if (allowCondition === false) return {kind: 'plain', text: t, weight: DEFAULT_WEIGHT, disabled: false};
+            if (isMacroLine(t)) return {kind: 'macro', text: t, weight: DEFAULT_WEIGHT, disabled: false, syntax: analyzeMacroLine(t)};
             return {kind: 'cond', text: t, weight: DEFAULT_WEIGHT, disabled: false, syntax: analyzeConditionLine(t)};
         }
 
@@ -633,8 +708,8 @@
      */
     function rebuild(token, weight, disabled) {
         // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
-        // and a broken '@' directive (and a #if line) must keep its text as typed
-        if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond') return token.text;
+        // and a broken '@' directive (and an @IF / @MACRO line) must keep its text as typed
+        if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond' || token.kind === 'macro') return token.text;
 
         const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
         let inner;
@@ -655,6 +730,7 @@
         const textarea = host.querySelector('textarea');
         if (!textarea) return;
         host.dataset.peditReady = '1';
+        const macroTab = host.id.startsWith('img2img') ? 'img2img' : 'txt2img';
 
         host.classList.add('pedit-host');
 
@@ -717,7 +793,7 @@
             const group = pickGroupAt(findPickGroups(state.text), line, column);
             const info = classify(segs[seg].body, group ? group.syntax : null, !isCommentedLine(lines[line]));
             if (info.kind === 'cond') {
-                // the whole-prompt pass knows about a missing #endif / a stray #else
+                // the whole-prompt pass knows about a missing @ENDIF / a stray @ELSE
                 const condition = analyzeConditionLines(state.text)[line];
                 if (condition) info.syntax = condition;
             }
@@ -731,19 +807,22 @@
             const cls = ['pedit-chip'];
             const syntax = token.syntax || null;
             const condition = token.kind === 'cond';
+            const macro = token.kind === 'macro';
             if (token.disabled) cls.push('is-disabled');
             if (selected) cls.push('is-selected');
             if (!token.text) cls.push('is-empty');
             if (condition) cls.push('is-cond');
+            if (macro) cls.push('is-macro');
             if (syntax) cls.push(syntax.ok ? 'is-syntax' : 'is-syntax-error');
 
             const children = [];
             if (condition) children.push(`<span class="pedit-chip-kind" title="${syntax && syntax.ok ? 'stage condition' : 'stage condition error'}">${syntax && syntax.ok ? '⑂' : '⚠️'}</span>`);
+            else if (macro) children.push(`<span class="pedit-chip-kind" title="${syntax && syntax.ok ? 'custom macro' : 'custom macro error'}">${syntax && syntax.ok ? '🎛' : '⚠️'}</span>`);
             else if (token.kind === 'angle') children.push('<span class="pedit-chip-kind" title="extra network tag">◈</span>');
             else if (syntax) children.push(`<span class="pedit-chip-kind" title="${syntax.ok ? 'prompt syntax' : 'prompt syntax error'}">${syntax.ok ? '🎲' : '⚠️'}</span>`);
             children.push(`<span class="pedit-chip-text">${escapeHtml(token.text || '…')}</span>`);
             if (syntax) {
-                if (!condition && syntax.ok && syntax.items.length > 1) {
+                if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
                     children.push(`<span class="pedit-chip-w pedit-chip-pick" title="keywords drawn per image / keywords in the group">${syntax.count}/${syntax.items.length}</span>`);
                 }
             } else if (Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9) {
@@ -757,10 +836,11 @@
                 + '</span>';
         }
 
-        function lineHtml(line, index, lines, groups, conditions) {
-            // a standalone #if / #elseif / #else / #endif line is a directive, not a comment
+        function lineHtml(line, index, lines, groups, conditions, inactive) {
+            // a standalone @IF / @MACRO line is a directive, not a comment
             const condition = isConditionLine(line);
-            const commented = !condition && /^\s*#(?!\()/.test(line);
+            const macro = isMacroLine(line);
+            const commented = !condition && !macro && /^\s*#(?!\()/.test(line);
             const conditionSyntax = condition && conditions ? conditions[index] : null;
             // a commented line shows its keywords without the leading '# ' - the
             // gutter button carries the state and the raw text stays untouched
@@ -786,7 +866,7 @@
                 + `data-line="${index}" title="${commented ? 'Uncomment this line' : 'Comment this line'}">${commented ? '⏸' : '💬'}</button>`;
             // '# ---' markers open a block up to the next marker: one tap toggles the whole block
             let blockBtn = '';
-            const bounds = condition ? null : (lines ? blockBounds(lines, index) : null);
+            const bounds = condition || macro ? null : (lines ? blockBounds(lines, index) : null);
             if (bounds) {
                 const off = blockIsOff(lines, bounds.from, bounds.to);
                 const count = bounds.to - bounds.from;
@@ -796,8 +876,9 @@
                 blockBtn = `<button type="button" class="pedit-gutter pedit-block-toggle ${off ? 'is-off' : ''}" `
                     + `data-line="${index}" title="${title}">${off ? '⏸' : '▶'}</button>`;
             }
-            const addBtn = condition ? '' : `<button type="button" class="pedit-add" data-line="${index}" title="Add a keyword to this line">＋</button>`;
-            return `<div class="pedit-line ${commented ? 'is-comment' : ''} ${condition ? 'is-condition' : ''}" data-line="${index}">`
+            const addBtn = condition || macro ? '' : `<button type="button" class="pedit-add" data-line="${index}" title="Add a keyword to this line">＋</button>`;
+            const inactiveCls = inactive && inactive.has(index) ? ' is-inactive' : '';
+            return `<div class="pedit-line ${commented ? 'is-comment' : ''} ${condition ? 'is-condition' : ''} ${macro ? 'is-macro' : ''}${inactiveCls}" data-line="${index}">`
                 + commentBtn
                 + blockBtn
                 + `<div class="pedit-chips">${chips}${addBtn}</div>`
@@ -855,7 +936,15 @@
             const lines = state.text.split('\n');
             const groups = findPickGroups(state.text);
             const conditions = analyzeConditionLines(state.text);
-            const body = lines.map((l, i) => lineHtml(l, i, lines, groups, conditions) + inputHtml(i)).join('');
+            const macros = window.promptMacros
+                ? (window.promptMacros.macrosForText
+                    ? window.promptMacros.macrosForText(state.text, macroTab)
+                    : window.promptMacros.macrosFor(macroTab))
+                : null;
+            const inactive = window.promptMacros && macros
+                ? window.promptMacros.inactiveLines(state.text, macros)
+                : new Set();
+            const body = lines.map((l, i) => lineHtml(l, i, lines, groups, conditions, inactive) + inputHtml(i)).join('');
             const disabledCount = countDisabled();
             const syntaxErrors = countSyntaxErrors();
             const previous = root.querySelector('.pedit-body');
@@ -866,7 +955,7 @@
                 + `<button type="button" class="pedit-head-btn" data-act="add-line" title="Add a line">＋ line</button>`
                 + `<button type="button" class="pedit-head-btn" data-act="uncomment-all" title="Uncomment every line">▶ all</button>`
                 + (disabledCount ? `<span class="pedit-badge" title="keywords disabled with #( ) are stripped when generating">${disabledCount} off</span>` : '')
-                + (syntaxErrors ? `<span class="pedit-badge is-error" title="keywords starting with @ and #if blocks must follow the prompt syntax - right-click a red keyword to see what is wrong">⚠ ${syntaxErrors} syntax</span>` : '')
+                + (syntaxErrors ? `<span class="pedit-badge is-error" title="keywords starting with @ and @IF blocks must follow the prompt syntax - right-click a red keyword to see what is wrong">⚠ ${syntaxErrors} syntax</span>` : '')
                 + '</div>'
                 + `<div class="pedit-body">${body}</div>`
                 + actionBarHtml();
@@ -887,7 +976,7 @@
             return n;
         }
 
-        /** Broken '@' directives and #if blocks (drives the ⚠ badge in the header). */
+        /** Broken '@' directives and @IF blocks (drives the ⚠ badge in the header). */
         function countSyntaxErrors() {
             const groups = findPickGroups(state.text);
             let n = 0;
@@ -900,7 +989,7 @@
                     cursor = bodyStart + s.body.length + s.tail.length;
                     const group = pickGroupAt(groups, lineIndex, coreStart);
                     const token = classify(s.body, group ? group.syntax : null, !commented);
-                    // #if lines are counted with their whole block (missing #endif, stray #else)
+                    // @IF lines are counted with their whole block (missing @ENDIF, stray @ELSE)
                     if (token.kind !== 'cond' && token.syntax && !token.syntax.ok) n++;
                 });
             });
@@ -1066,9 +1155,9 @@
             mapLine(lineIndex, (line) => {
                 const trimmed = line.replace(/^\s+/, '');
                 const indent = line.slice(0, line.length - trimmed.length);
-                // a '#if' line is a directive: commenting it out adds the marker instead of
-                // stripping it ('# #if …' is the comment form, '#(…)' is a disabled keyword)
-                if (/^#(?!\()/.test(trimmed) && !isConditionLine(trimmed)) {
+                // an '@IF' / '@MACRO' line is a directive: commenting it out adds the
+                // marker instead of stripping it ('# @IF …' is the comment form)
+                if (/^#(?!\()/.test(trimmed) && !isConditionLine(trimmed) && !isMacroLine(trimmed)) {
                     const body = trimmed.slice(1).replace(/^ /, '');
                     return indent + body;
                 }
@@ -1102,7 +1191,7 @@
         }
 
         function startsWithLineHash(line) {
-            if (isConditionLine(line)) return false; // '#if' is a directive, not a comment
+            if (isConditionLine(line) || isMacroLine(line)) return false; // a directive, not a comment
             const trimmed = line.replace(/^\s+/, '');
             if (trimmed.charAt(0) !== '#') return false;
             return '([<'.indexOf(trimmed.charAt(1)) < 0;
@@ -1397,6 +1486,11 @@
 
         textarea.addEventListener('input', () => { if (mode() === 'text') return; syncFromTextarea(false); });
 
+        window.addEventListener('pedit-macros-changed', (event) => {
+            if (mode() !== 'chips') return;
+            if (!event.detail || !event.detail.tab || event.detail.tab === macroTab) render();
+        });
+
         setInterval(() => {
             if (mode() !== 'chips') return;
             syncFromTextarea(false);
@@ -1487,6 +1581,8 @@
         findPickGroups: findPickGroups,
         syntaxHint: syntaxHint,
         isConditionLine: isConditionLine,
+        isMacroLine: isMacroLine,
+        analyzeMacroLine: analyzeMacroLine,
         parseCondition: parseCondition,
         analyzeConditionLine: analyzeConditionLine,
         analyzeConditionLines: analyzeConditionLines,

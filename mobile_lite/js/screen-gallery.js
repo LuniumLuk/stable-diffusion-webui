@@ -57,7 +57,7 @@ function lineageHtml(item) {
 export function metaFromItem(item) {
   // the remembered gallery toggle decides which prompt "Use as image / inpaint" carries:
   // source = exactly as typed (@PICK undrawn); compiled = the same text with the @PICK
-  // groups drawn (comments and every #if branch kept)
+  // groups drawn (comments and every @IF branch kept)
   const useCompiled = state.ui.galleryPromptVariant === 'compiled' && !!(item && item.compiled_prompt);
   return {
     prompt: useCompiled ? item.compiled_prompt : item.prompt,

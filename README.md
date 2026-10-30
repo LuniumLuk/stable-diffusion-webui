@@ -66,16 +66,21 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - keywords starting with `@` are checked and highlighted; right-click a directive (tap it in the mobile UI) for a hint with the N-of-M preview, broken syntax is marked in red with the reason
      - the gallery keeps both the source prompt and the compiled prompt (as written, with the picks drawn); its info panel switches between them (remembered) and the send actions follow the choice
 - Conditional prompt blocks, a way to keep per-stage text in one prompt
-     - `#if TXT2IMG`, `#elseif HIRES_FIX`, `#else`, `#endif`, each on a line of its own; blocks may be nested
+     - `@IF TXT2IMG`, `@ELSEIF HIRES_FIX`, `@ELSE`, `@ENDIF`, each on a line of its own; blocks may be nested
+     - directives start with `@` so `#` stays reserved for comments and `#(...)` disabled groups; the old `#if` form is rewritten to `@IF` in the gallery/endorsement databases at startup and when an image is restored or stored
+     - custom macros: `@MACRO(FLAG)` declares a boolean macro (off by default), `@MACRO(MOOD){happy, sad}` declares an enum macro (first alias by default); use them like system macros, e.g. `@IF FLAG`, `@IF MOOD == happy`, `@IF !FLAG`
+     - a name used in a condition without `@MACRO` is an ordinary boolean macro that is off
+     - the macro panel left of the txt2img / img2img result panel lists the fixed system macros (disabled) and the macros in the current prompt; booleans get a toggle, enums a dropdown, and the selection is used for the generation
+     - the editors suggest declared macro names and enum aliases while typing; branches that cannot run for the current macro values are dimmed
      - the macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`, `POSE_INPAINT` (1 while that stage runs, 0 otherwise) and `POSE_INPAINT_PART` (0 outside a pose pass, `FACE`, `FEET` or `HANDS` inside one)
      - `HIRES_FIX` is an img2img pass and `POSE_INPAINT` an inpaint pass, so `IMG2IMG` (and `INPAINT`) are 1 there as well
-     - conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses, e.g. `#if IMG2IMG && POSE_INPAINT_PART == HANDS`
+     - conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses, e.g. `@IF IMG2IMG && POSE_INPAINT_PART == HANDS`
      - the branch is chosen when the stage runs, so the same prompt serves the txt2img pass, Hires. fix, img2img, inpaint and every pose inpaint part
-     - the prompt editors highlight the directives and flag unknown macros, a missing `#endif` and a stray `#else`; a block that is not closed is left in the prompt untouched
-     - in the PC editor (text mode) a fold column left of the line numbers folds a `#if … #endif` block or a `# ---` section into a `⋯ N lines` chip (click the chip to unfold); a section folds up to the line before the next `# ---` marker, so that marker keeps its own line
-     - the macro dropdown opens once the space after `#if` / `#elseif` is typed, and after `POSE_INPAINT_PART == ` (space) it lists the `FACE` / `FEET` / `HANDS` / `0` values
-     - the source prompt (PNG metadata, gallery restore) is kept exactly as typed; the compiled prompt (gallery, "send to") is that same text with the `@PICK` groups drawn — comments, disabled groups and every `#if` / `#elseif` / `#else` / `#endif` line with all its branches stay, so nothing but the picks changes
-     - just before the model is conditioned the blocks are resolved for the running stage (only the branch that runs survives), the comments are removed and the directive lines dropped, so the model never sees a `#` line
+     - the prompt editors highlight the directives and flag malformed conditions, a missing `@ENDIF` and a stray `@ELSE`; an undeclared macro is a normal off boolean, and a block that is not closed is left in the prompt untouched
+     - in the PC editor (text mode) a fold column left of the line numbers folds a `@IF … @ENDIF` block or a `# ---` section into a `⋯ N lines` chip (click the chip to unfold); a section folds up to the line before the next `# ---` marker, so that marker keeps its own line
+     - the macro dropdown opens once the space after `@IF` / `@ELSEIF` is typed; after `POSE_INPAINT_PART == ` (space) it lists the `FACE` / `FEET` / `HANDS` / `0` values, and after a custom enum macro `== ` it lists that macro's aliases
+     - the source prompt (PNG metadata, gallery restore) is kept exactly as typed; the compiled prompt (gallery, "send to") is that same text with the `@PICK` groups drawn — comments, disabled groups, `@MACRO` definitions and every `@IF` / `@ELSEIF` / `@ELSE` / `@ENDIF` line with all its branches stay, so nothing but the picks changes
+     - just before the model is conditioned the blocks are resolved for the running stage (only the branch that runs survives), the comments are removed and the directive lines dropped, so the model never sees a directive line
 - Batch Processing, process a group of files using img2img
 - Img2img Alternative, reverse Euler method of cross attention control
 - Highres Fix, a convenience option to produce high resolution pictures in one click without usual distortions

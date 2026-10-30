@@ -2380,7 +2380,7 @@
       tab('source', 'Source', 'The prompt as typed, with comments and @PICK groups intact') +
       tab('compiled', 'Compiled',
         compiled
-          ? 'The prompt as written with the @PICK groups drawn (comments and every #if branch kept)'
+          ? 'The prompt as written with the @PICK groups drawn (comments and every @IF branch kept)'
           : 'No compiled prompt recorded for this image - it was generated before this was stored') +
       '</span>';
   }
@@ -2390,7 +2390,7 @@
     if (!hasCompiledPrompt(item)) {
       return '<div class="gv2-row-hint">No compiled prompt recorded for this image - showing the source prompt.</div>';
     }
-    return '<div class="gv2-row-hint">Compiled prompt: as written with the @PICK groups drawn — comments, disabled groups and every #if branch kept.</div>';
+    return '<div class="gv2-row-hint">Compiled prompt: as written with the @PICK groups drawn — comments, disabled groups and every @IF branch kept.</div>';
   }
 
   /**

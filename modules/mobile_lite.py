@@ -540,9 +540,11 @@ def _common_args(payload: dict, tab: str) -> dict:
     scheduler = str(payload.get("scheduler") or defaults["scheduler"] or "")
     sampler_name, scheduler_label = sd_samplers.get_sampler_and_scheduler(sampler, scheduler)
 
+    macro_values = payload.get("macro_values")
     return {
         "prompt": str(payload.get("prompt") or ""),
         "negative_prompt": str(payload.get("negative_prompt") or ""),
+        "macro_values": macro_values if isinstance(macro_values, dict) else None,
         "steps": _payload_number(payload, "steps", 1, 150, defaults["steps"]),
         "cfg_scale": _payload_number(payload, "cfg", 1.0, 30.0, defaults["cfg"], cast=float),
         "width": _clamp_resolution(payload.get("width"), defaults["width"]),
@@ -1257,12 +1259,17 @@ def _run_qwen_job(payload: dict) -> dict:
     task_id = _normalize_task_id(payload.get("task_id"))
     from modules import prompt_parser
 
-    # same contract as the txt2img/img2img prompt editors: the #if blocks are resolved
+    # same contract as the txt2img/img2img prompt editors: the @IF blocks are resolved
     # for this single stage, then '#' comment lines, #(...) disabled keyword groups and
     # the directive lines themselves are stripped before the prompt reaches the model
-    macros = prompt_parser.stage_macros("txt2img")
-    prompt = prompt_parser.compile_prompt(str(payload.get("prompt") or ""), macros).strip()
-    negative = prompt_parser.compile_prompt(str(payload.get("negative_prompt") or ""), macros).strip()
+    raw_prompt = str(payload.get("prompt") or "")
+    raw_negative = str(payload.get("negative_prompt") or "")
+    macro_values = payload.get("macro_values")
+    macros = prompt_parser.macros_for_prompts(
+        "txt2img", [raw_prompt, raw_negative], macro_values if isinstance(macro_values, dict) else None
+    )
+    prompt = prompt_parser.compile_prompt(raw_prompt, macros).strip()
+    negative = prompt_parser.compile_prompt(raw_negative, macros).strip()
     refs = [
         str(item)
         for item in (payload.get("refs") or [])
@@ -1752,12 +1759,17 @@ def _run_krea2_job(payload: dict) -> dict:
     task_id = _normalize_task_id(payload.get("task_id"))
     from modules import prompt_parser
 
-    # same contract as the txt2img/img2img prompt editors: the #if blocks are resolved
+    # same contract as the txt2img/img2img prompt editors: the @IF blocks are resolved
     # for this single stage, then '#' comment lines, #(...) disabled keyword groups and
     # the directive lines themselves are stripped before the prompt reaches the model
-    macros = prompt_parser.stage_macros("txt2img")
-    prompt = prompt_parser.compile_prompt(str(payload.get("prompt") or ""), macros).strip()
-    negative = prompt_parser.compile_prompt(str(payload.get("negative_prompt") or ""), macros).strip()
+    raw_prompt = str(payload.get("prompt") or "")
+    raw_negative = str(payload.get("negative_prompt") or "")
+    macro_values = payload.get("macro_values")
+    macros = prompt_parser.macros_for_prompts(
+        "txt2img", [raw_prompt, raw_negative], macro_values if isinstance(macro_values, dict) else None
+    )
+    prompt = prompt_parser.compile_prompt(raw_prompt, macros).strip()
+    negative = prompt_parser.compile_prompt(raw_negative, macros).strip()
     # Krea 2 edit works best with a single reference; allow a few for composition.
     refs = [
         str(item)

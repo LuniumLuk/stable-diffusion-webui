@@ -1001,7 +1001,7 @@ body.mask-editing { overflow: hidden; }
   text-underline-offset: 3px;
 }
 .pedit-chip-pick { font-variant-numeric: tabular-nums; }
-/* '#if' stage conditions: a directive line, not a comment */
+/* '@IF' stage conditions: a directive line, not a comment */
 .pedit-line.is-condition { background: rgba(139, 92, 246, 0.12); border-left: 2px solid #8b5cf6; }
 .pedit-chip.is-cond { border-color: #8b5cf6; background: rgba(139, 92, 246, 0.16); }
 .pedit-chip.is-cond.is-syntax-error { border-color: #ef4444; background: rgba(239, 68, 68, 0.16); }
@@ -1254,9 +1254,9 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .pedit-cm-comment-hash { opacity: 0.8; }
 .pedit-cm .pedit-cm-tok-off { opacity: 0.55; text-decoration: line-through; }
 .pedit-cm .pedit-cm-tok-active { background: var(--accent-soft); border-radius: 4px; }
-/* '#if' stage conditions: a directive line, not a comment */
+/* '@IF' stage conditions: a directive line, not a comment */
 .pedit-cm .pedit-cm-condline { background: rgba(139, 92, 246, 0.12); box-shadow: inset 2px 0 0 #8b5cf6; }
-.pedit-cm .pedit-cm-cond-hash { color: #c4b5fd; font-weight: 600; }
+.pedit-cm .pedit-cm-cond-at { color: #c4b5fd; font-weight: 600; }
 
 /* '@' prompt syntax: a highlight on every directive, a red wavy underline on errors */
 .pedit-cm .pedit-cm-tok-syntax {
@@ -1592,3 +1592,11 @@ body.text-editing { overflow: hidden; }
   z-index: 5;
 }
 .viewer-loading .spinner { width: 30px; height: 30px; border-width: 3px; }
+
+/* ==== Prompt macros: editor highlighting + inactive branches ==== */
+.pedit-chip.is-macro { border-color: #fbbf24; background: rgba(251, 191, 36, 0.14); }
+.pedit-cm .pedit-cm-macroline { background: rgba(251, 191, 36, 0.08); box-shadow: inset 2px 0 0 rgba(251, 191, 36, 0.55); }
+.pedit-cm .pedit-cm-macro-name { color: #fcd34d; font-weight: 600; }
+.pedit-cm .pedit-cm-inactive { opacity: 0.42; }
+.pedit-line.is-inactive { opacity: 0.42; }
+.pedit-line.is-macro { background: rgba(251, 191, 36, 0.08); border-left: 2px solid #fbbf24; }

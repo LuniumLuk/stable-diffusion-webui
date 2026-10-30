@@ -31,7 +31,7 @@ class ImageSaveParams:
 
         self.compiled_prompt = compiled_prompt
         """the prompt as it was written with the @PICK groups drawn (comments and
-        every #if branch stay), or None when the caller does not know it - e.g.
+        every @IF branch stay), or None when the caller does not know it - e.g.
         Extras/upscale saves"""
 
         self.compiled_negative_prompt = compiled_negative_prompt

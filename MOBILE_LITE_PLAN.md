@@ -446,37 +446,50 @@ broken one as `at`; `rebuild()` never wraps either in `(…)` or `#(…)`. The d
 the token parser. Multi-line keyword lists are supported: `findPickGroups()` scans the whole
 prompt so the opening line is validated against the complete group instead of a missing `}`.
 
-Stage conditions (`#if TXT2IMG … #elseif HIRES_FIX … #else … #endif`, one directive per line,
+Stage conditions (`@IF TXT2IMG … @ELSEIF HIRES_FIX … @ELSE … @ENDIF`, one directive per line,
 nestable) use the same module: `analyzeConditionLine()` checks one directive and
-`analyzeConditionLines()` the whole prompt, so a missing `#endif` is reported on the `#if` that
-opened it and a stray `#else` on itself. Macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`,
+`analyzeConditionLines()` the whole prompt, so a missing `@ENDIF` is reported on the `@IF` that
+opened it and a stray `@ELSE` on itself. Macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`,
 `POSE_INPAINT` (1 while that stage runs) and `POSE_INPAINT_PART` (`0` / `FACE` / `FEET` /
 `HANDS`); conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses.
-`prompt-parse.js` classifies a directive line as a `cond` token, `rebuild()` keeps its text, and
-the editors show it on a purple line with a `⑂` chip (chips) or `pedit-cm-condline` / `-hash`
-decorations (CodeMirror) instead of the comment styling. The backend resolves the blocks per
+Custom macros are declared in the prompt as `@MACRO(FLAG)` (boolean, off by default) or
+`@MACRO(MOOD){happy, sad}` (enum, first alias by default). A name used in a condition without a
+declaration behaves as an off boolean. `prompt-syntax.js` parses the declarations, suggests the
+names and enum aliases in condition completion, and `inactiveConditionLines()` dims the branches
+that cannot run for the current macro values. The desktop txt2img / img2img pages render the
+`@MACRO` values as a scrollable panel left of the result panel (`javascript/promptMacros.js`);
+system macros are shown disabled, custom booleans as toggles and enums as dropdowns. The panel's
+JSON is passed to `StableDiffusionProcessing.macro_values` and merged by
+`prompt_parser.macros_for_prompts()`.
+
+`prompt-parse.js` classifies a condition line as a `cond` token and a declaration as a `macro`
+token, `rebuild()` keeps their text, and the editors show them on a purple (condition) or amber
+(macro) line with a `⑂` / `🎛` chip (chips) or `pedit-cm-condline` / `-at`, `pedit-cm-macroline` /
+`-name` decorations (CodeMirror) instead of the comment styling. Inactive branches are dimmed. The backend resolves the blocks per
 stage (`prompt_parser.expand_prompt_conditions`), so the same prompt serves the txt2img pass,
-Hires. fix, img2img, inpaint and every pose inpaint part; a `#if` line commented out with the 💬
-gutter becomes `# #if …` instead of losing its `#`. The gallery's compiled prompt is the prompt
-as written with the `@PICK` groups drawn and nothing else touched (comments, disabled groups
-and every branch stay), so the "send to" round trip keeps the macros; the branch is chosen only
-when the conditioning is built (`setup_conds` / `calculate_hr_conds`), where
-`prompt_parser.strip_condition_directives()` drops the directive lines and the comments are
-stripped too — same for the Qwen / Krea 2 sidecar calls, so the model never sees them.
+Hires. fix, img2img, inpaint and every pose inpaint part; a `@IF` line commented out with the 💬
+gutter becomes `# @IF …` instead of losing its `#`. The gallery's compiled prompt is the prompt
+as written with the `@PICK` groups drawn and nothing else touched (comments, disabled groups,
+`@MACRO` definitions and every branch stay), so the "send to" round trip keeps the macros; the
+branch is chosen only when the conditioning is built (`setup_conds` / `calculate_hr_conds`), where
+`prompt_parser.strip_condition_directives()` drops the directive and `@MACRO` definition lines
+and the comments are stripped too — same for the Qwen / Krea 2 sidecar calls, so the model never
+sees them.
 
 Two desktop-only CodeMirror options build on that (Mobile Lite keeps the plain editor):
 `foldGutter: true` adds a fold column **left of the line numbers** — `foldRegions()` in
-`prompt-parse.js` maps each `#if … #endif` block (nesting aware) and each `# ---` section to the
+`prompt-parse.js` maps each `@IF … @ENDIF` block (nesting aware) and each `# ---` section to the
 lines it covers, ▾/▸ toggles the fold and the hidden lines become a `⋯ N lines` chip that
 unfolds on click; folds are stored by start-line position so they survive edits above them and
-drop out when the `#endif` / next marker disappears. A fold always stops at the **end of its last
+drop out when the `@ENDIF` / next marker disappears. A fold always stops at the **end of its last
 covered line**, so the line after it — the next `# ---` marker in particular — keeps its own line
 and stays usable while the previous section is folded. `macroCompletion: true` makes the
-autocomplete source return the `#if` macros (with the "1 during …" detail) instead of the keyword
+autocomplete source return the `@IF` macros (with the "1 during …" detail) instead of the keyword
 pool (`conditionCompletions()` in `prompt-syntax.js`). It stays quiet while the directive is
-still just `#if` and opens on the space after `#if` / `#elseif`; right after `==` / `!=` / `&&`
+still just `@IF` and opens on the space after `@IF` / `@ELSEIF`; right after `==` / `!=` / `&&`
 it waits for that operator's space too, and then `POSE_INPAINT_PART == ` lists the enum values
-(`FACE` / `FEET` / `HANDS` / `0` / `NONE`) while a boolean macro lists `1` / `0`.
+(`FACE` / `FEET` / `HANDS` / `0` / `NONE`), a custom enum lists its aliases, and a boolean macro
+lists `1` / `0`.
 
 ### 13.3 Gallery card quick actions
 
@@ -495,7 +508,7 @@ button becomes "Remove endorsement".
 
 | # | Test | Command | Result |
 | --- | --- | --- | --- |
-| 1 | Parser unit test (round-trip, classification, rebuild, end-to-end edit, `#if` conditions, fold regions, macro dropdown) | `node tmp\lite_pedit_test.mjs` | ✅ 150/150 |
+| 1 | Parser unit test (round-trip, classification, rebuild, end-to-end edit, `@IF` conditions, fold regions, macro dropdown) | `node tmp\lite_pedit_test.mjs` | ✅ 150/150 |
 | 2 | API suite (all routes, redirect matrix, real jobs, action cycle) | `.venv\Scripts\python.exe tmp\mlite_api_test.py` | ✅ **48/48** |
 | 3 | iPhone E2E probe (WebKit, real taps) incl. folds, chips editing, quick actions | `node tmp\iosprobe\mlite.js` | ✅ **30/30**, no page errors |
 | 4 | Chromium: chips editing + mode persistence, quick actions, endorse flag round-trip | browser tools | ✅ |

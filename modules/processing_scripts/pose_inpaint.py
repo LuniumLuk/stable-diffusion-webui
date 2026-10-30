@@ -402,7 +402,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         """``([PosePass], point count, radius px)`` - one pass per part, or one combined.
 
         Each pass carries the POSE_INPAINT_PART of its body part, so the prompt can
-        switch text per pass (``#if POSE_INPAINT_PART == HANDS``).  A combined pass
+        switch text per pass (``@IF POSE_INPAINT_PART == HANDS``).  A combined pass
         reports the part when every selected region belongs to the same one.
         """
         padding = 32
@@ -492,8 +492,11 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 pass
 
             def prompt_condition_macros(self):
-                # a pose pass, even when a script injected #if blocks into its prompt
-                return prompt_parser.stage_macros("pose_inpaint", pose_part=getattr(self, "pose_inpaint_part", None))
+                # a pose pass, even when a script injected @IF blocks into its prompt
+                return prompt_parser.macros_for_prompts(
+                    "pose_inpaint", [self.prompt, self.negative_prompt], self.macro_values,
+                    pose_part=getattr(self, "pose_inpaint_part", None),
+                )
 
         override_settings = {
             "img2img_color_correction": False,
@@ -523,7 +526,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 state.job = f"Pose inpaint {batch_index + 1}/{p.batch_size} - {pose_pass.label} ({position + 1}/{len(passes)})"
                 state.job_no = position
 
-                # the prompt may spell out per-part text (#if POSE_INPAINT_PART == FACE)
+                # the prompt may spell out per-part text (@IF POSE_INPAINT_PART == FACE)
                 pass_prompt, pass_negative_prompt = inpaint_pose.choose_inpaint_prompt(p, global_index, part=pose_pass.part)
 
                 inner = self._inner_job(
@@ -594,6 +597,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             override_settings=override_settings,
             do_not_save_samples=True,
             do_not_save_grid=True,
+            macro_values=getattr(p, "macro_values", None),
         )
         inner.scripts = None
         inner.script_args = None

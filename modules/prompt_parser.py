@@ -5,6 +5,8 @@ import re
 from collections import namedtuple
 import lark
 
+from modules.prompt_syntax import CONDITION_DIRECTIVE_RE
+
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][: in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
 # [25, 'fantasy landscape with a mountain and an oak in foreground shoddy']
@@ -180,7 +182,7 @@ def expand_prompt_picks(prompt: str, rng=None) -> str:
 #
 # * whole-line comments - a line whose first non-whitespace character is '#'
 #   (a line starting with '#' followed by '(', '[' or '<' is NOT a comment, it
-#   starts with a disabled keyword group; a '#if' / '#elseif' / '#else' / '#endif'
+#   starts with a disabled keyword group; an '@IF' / '@ELSEIF' / '@ELSE' / '@ENDIF'
 #   line is a stage directive, not a comment either);
 # * inline disabled groups - #(keyword), #[keyword], #<lora:x:1> anywhere in a
 #   line; the group is dropped, the rest of the line is kept.
@@ -194,21 +196,22 @@ def strip_prompt_comments(text: str) -> str:
     originals (with comments) are preserved in all_prompts_with_comments /
     all_negative_prompts_with_comments for PNG metadata and gallery restore, and
     the source with the @PICK groups drawn is what the gallery stores as the
-    compiled prompt.  The '#if' block directives are kept here
-    (strip_condition_directives removes them just before conditioning).
+    compiled prompt.  The '@IF' block directives and '@MACRO' definitions are
+    kept here (strip_condition_directives removes them just before conditioning).
 
     >>> strip_prompt_comments("a, b\\n# comment\\n#(off), c")
     'a, b\\nc'
-    >>> strip_prompt_comments("#if TXT2IMG")
-    '#if TXT2IMG'
+    >>> strip_prompt_comments("@IF TXT2IMG")
+    '@IF TXT2IMG'
     """
     if not text:
         return text
 
-    # whole-line comments (keep disabled keyword groups and stage directives)
+    # whole-line comments (keep disabled keyword groups; stage directives do not
+    # start with '#', so they are never mistaken for a comment)
     lines = [
         line for line in text.split('\n')
-        if not re.match(r'^\s*#(?![\[(<])', line) or re_condition_directive.match(line) is not None
+        if not re.match(r'^\s*#(?![\[(<])', line)
     ]
     out = '\n'.join(lines)
 
@@ -230,15 +233,24 @@ def strip_prompt_comments(text: str) -> str:
     return out
 
 
+# ── custom macros ────────────────────────────────────────────────────────────
+#
+# @MACRO(FLAG)                 boolean macro, off by default
+# @MACRO(MOOD){happy, sad}     enum macro, first alias by default
+#
+# A name used in a condition without a definition is an ordinary boolean macro
+# that is off.  Macro values come from the UI (or defaults); definitions are
+# stripped from the model-facing prompt together with the @IF lines.
+
 # ── conditional blocks ───────────────────────────────────────────────────────
 #
-# #if TXT2IMG
+# @IF TXT2IMG
 #   sharp focus, 8k
-# #elseif HIRES_FIX
+# @ELSEIF HIRES_FIX
 #   detailed texture
-# #else
+# @ELSE
 #   soft focus
-# #endif
+# @ENDIF
 #
 # A block is resolved for the stage that is currently running, so one prompt can
 # carry per-stage text: the first pass sees the TXT2IMG branch, the hires pass
@@ -249,12 +261,18 @@ def strip_prompt_comments(text: str) -> str:
 #
 # Conditions are a small boolean expression: macro names, 0/1 values, the enum
 # names, ==, !=, !, && (and), || (or) and parentheses.  A block that is not
-# closed, or an #elseif/#else/#endif without its #if, is left as typed so the
-# prompt editor can flag it in place.  A condition that cannot be evaluated
-# (unknown macro, broken expression) counts as false.
+# closed, or an @ELSEIF/@ELSE/@ENDIF without its @IF, is left as typed so the
+# prompt editor can flag it in place.  An undeclared name is an off boolean; a
+# condition that cannot be evaluated (broken expression) counts as false.
 
-re_condition_directive = re.compile(r"^[ \t]*#(?P<keyword>if|elif|elseif|else|endif)(?![A-Za-z0-9_])(?P<expression>[^\n]*)$", re.IGNORECASE)
+re_condition_directive = CONDITION_DIRECTIVE_RE
 re_condition_token = re.compile(r"[ \t]*(?:(?P<operator>!=|==|&&|\|\||[!()])|(?P<word>[A-Za-z_][A-Za-z0-9_]*)|(?P<number>-?\d+(?:\.\d+)?)|(?P<other>\S))")
+re_macro_definition = re.compile(
+    r"^[ \t]*@MACRO[ \t]*\([ \t]*(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*\)"
+    r"[ \t]*(?P<values>\{[^\n]*\})?[ \t]*$",
+    re.IGNORECASE,
+)
+re_macro_directive = re.compile(r"^[ \t]*@MACRO(?![A-Za-z0-9_])", re.IGNORECASE)
 
 PROMPT_MACROS = ("TXT2IMG", "HIRES_FIX", "IMG2IMG", "INPAINT", "POSE_INPAINT", "POSE_INPAINT_PART")
 POSE_INPAINT_PARTS = ("NONE", "FACE", "FEET", "HANDS")
@@ -297,6 +315,106 @@ def stage_macros(stage=None, inpaint=None, pose_part=None) -> dict:
         macros[macro] = 1
 
     macros["POSE_INPAINT_PART"] = pose_inpaint_part(pose_part)
+    return macros
+
+
+def parse_macro_definition(line: str):
+    """Parses one `@MACRO(name)` / `@MACRO(name){a, b, c}` line.
+
+    Returns `{key, name, type, values, default}` or None when the line is not a
+    valid definition.  A definition without braces is a boolean macro defaulting
+    to 0; one with braces is an enum whose first value is the default.
+
+    >>> parse_macro_definition("@MACRO(FLAG)")
+    {'key': 'FLAG', 'name': 'FLAG', 'type': 'bool', 'values': [], 'default': 0}
+    >>> parse_macro_definition("@MACRO(mood){happy, sad}")['default']
+    'happy'
+    >>> parse_macro_definition("@MACRO()")
+    """
+    match = re_macro_definition.match(str(line or ""))
+    if match is None:
+        return None
+
+    name = match.group("name")
+    raw_values = match.group("values")
+    values = []
+    if raw_values is not None:
+        values = split_pick_items(raw_values[1:-1])
+        if not values:
+            return None
+
+    return {
+        "key": name.upper(),
+        "name": name,
+        "type": "enum" if raw_values is not None else "bool",
+        "values": values,
+        "default": values[0] if values else 0,
+    }
+
+
+def parse_macro_definitions(text) -> dict:
+    """The custom macro definitions of one prompt, keyed by upper-case name."""
+    definitions = {}
+    if not isinstance(text, str) or "@" not in text:
+        return definitions
+    for line in text.split("\n"):
+        definition = parse_macro_definition(line)
+        if definition is not None:
+            definitions[definition["key"]] = definition
+    return definitions
+
+
+def _macro_bool(value) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return 1 if value else 0
+    return 1 if str(value or "").strip().lower() in ("1", "true", "on", "yes") else 0
+
+
+def custom_macro_values(prompts, selected=None) -> dict:
+    """Current values of the custom macros defined in `prompts`.
+
+    `selected` is the UI state (`{name: value}`); a missing or invalid value falls
+    back to the definition default (0 for a bool, the first alias for an enum).
+    System macros are never overridden.
+
+    >>> values = custom_macro_values("@MACRO(FLAG)\\n@MACRO(MOOD){happy, sad}", {"FLAG": True, "MOOD": "sad"})
+    >>> values["FLAG"], values["MOOD"]
+    (1, 'sad')
+    >>> custom_macro_values("@MACRO(MOOD){happy, sad}", {"MOOD": "angry"})["MOOD"]
+    'happy'
+    """
+    texts = prompts if isinstance(prompts, (list, tuple)) else [prompts]
+    definitions = {}
+    for text in texts:
+        definitions.update(parse_macro_definitions(text))
+
+    selected = selected if isinstance(selected, dict) else {}
+    selected = {str(key).upper(): value for key, value in selected.items()}
+
+    values = {}
+    for key, definition in definitions.items():
+        if key in PROMPT_MACROS:
+            continue
+        chosen = selected.get(key, definition["default"])
+        if definition["type"] == "enum":
+            allowed = {value.upper() for value in definition["values"]}
+            values[key] = chosen if isinstance(chosen, str) and chosen.strip().upper() in allowed else definition["default"]
+        else:
+            values[key] = _macro_bool(chosen)
+
+    # Undeclared names are boolean macros too; the editor sends their toggles.
+    for key, chosen in selected.items():
+        if key not in PROMPT_MACROS and key not in values:
+            values[key] = _macro_bool(chosen)
+    return values
+
+
+def macros_for_prompts(stage=None, prompts=None, selected=None, **kwargs) -> dict:
+    """stage_macros() plus the custom macros defined in `prompts` and `selected`."""
+    macros = stage_macros(stage, **kwargs)
+    macros.update(custom_macro_values(prompts, selected))
     return macros
 
 
@@ -394,9 +512,8 @@ def _condition_primary(tokens, index, macros):
 
     if kind == "word":
         name = value.upper()
-        if name not in macros:
-            raise ValueError(f"unknown macro {value}")
-        left = macros[name]
+        # an undefined name is an ordinary boolean macro that is off
+        left = macros.get(name, 0)
         index += 1
         if index < len(tokens) and tokens[index][0] == "op" and tokens[index][1] in ("==", "!="):
             operator = tokens[index][1]
@@ -435,7 +552,7 @@ def _condition_or(tokens, index, macros):
 
 
 def evaluate_condition(expression: str, macros=None) -> bool:
-    """Evaluates one '#if' / '#elseif' expression; a broken one is false.
+    """Evaluates one '@IF' / '@ELSEIF' expression; a broken one is false.
 
     >>> evaluate_condition("TXT2IMG", stage_macros("txt2img"))
     True
@@ -462,42 +579,42 @@ def evaluate_condition(expression: str, macros=None) -> bool:
 
 def condition_blocks(prompt: str) -> list:
     """Line numbers (0-based) of the conditional directives in `prompt`."""
-    if not prompt or "#" not in prompt:
+    if not prompt or "@" not in prompt:
         return []
     return [index for index, line in enumerate(prompt.split("\n")) if re_condition_directive.match(line)]
 
 
 def expand_prompt_conditions(prompt: str, macros=None) -> str:
-    """Resolves every #if / #elseif / #else / #endif block of `prompt` for `macros`.
+    """Resolves every @IF / @ELSEIF / @ELSE / @ENDIF block of `prompt` for `macros`.
 
     Only the text of the branch that runs survives, but *every* directive line of an
-    emitted block stays: the `#if` line, each `#elseif` / `#else` line (with an empty
-    body when that branch did not run) and the `#endif` line.  The model-facing prompt
+    emitted block stays: the `@IF` line, each `@ELSEIF` / `@ELSE` line (with an empty
+    body when that branch did not run) and the `@ENDIF` line.  The model-facing prompt
     list therefore keeps the whole macro skeleton - scripts and the editors still see
     which alternatives existed and a second resolution is stable - while the model
     never sees the directives: strip_condition_directives() removes them right before
     the conditioning is built.  The gallery's compiled prompt does not go through
     this function at all (it keeps the prompt as written with the picks drawn).
 
-    Blocks may be nested.  A block that is not closed (or whose #elseif / #else /
-    #endif has no #if) leaves the whole prompt as typed, so nothing is silently
+    Blocks may be nested.  A block that is not closed (or whose @ELSEIF / @ELSE /
+    @ENDIF has no @IF) leaves the whole prompt as typed, so nothing is silently
     dropped while the editor flags the mistake.  A block inside a branch that did not
     run is dropped together with its own directives.  An expression that cannot be
     evaluated counts as false.
 
-    >>> prompt = "#if TXT2IMG\\na\\n#elseif HIRES_FIX\\nb\\n#else\\nc\\n#endif"
+    >>> prompt = "@IF TXT2IMG\\na\\n@ELSEIF HIRES_FIX\\nb\\n@ELSE\\nc\\n@ENDIF"
     >>> expand_prompt_conditions(prompt, stage_macros("txt2img"))
-    '#if TXT2IMG\\na\\n#elseif HIRES_FIX\\n#else\\n#endif'
+    '@IF TXT2IMG\\na\\n@ELSEIF HIRES_FIX\\n@ELSE\\n@ENDIF'
     >>> expand_prompt_conditions(prompt, stage_macros("hires_fix"))
-    '#if TXT2IMG\\n#elseif HIRES_FIX\\nb\\n#else\\n#endif'
+    '@IF TXT2IMG\\n@ELSEIF HIRES_FIX\\nb\\n@ELSE\\n@ENDIF'
     >>> expand_prompt_conditions(prompt, stage_macros("img2img"))
-    '#if TXT2IMG\\n#elseif HIRES_FIX\\n#else\\nc\\n#endif'
-    >>> expand_prompt_conditions("#if TXT2IMG\\na", stage_macros("txt2img"))
-    '#if TXT2IMG\\na'
+    '@IF TXT2IMG\\n@ELSEIF HIRES_FIX\\n@ELSE\\nc\\n@ENDIF'
+    >>> expand_prompt_conditions("@IF TXT2IMG\\na", stage_macros("txt2img"))
+    '@IF TXT2IMG\\na'
     >>> expand_prompt_conditions("no blocks, here (x:1.2)", stage_macros("txt2img"))
     'no blocks, here (x:1.2)'
     """
-    if not prompt or "#" not in prompt:
+    if not prompt or "@" not in prompt:
         return prompt
 
     macros = dict(macros or {})
@@ -568,8 +685,8 @@ def expand_prompt_conditions(prompt: str, macros=None) -> str:
 def apply_prompt_conditions(prompts, macros) -> list[str]:
     """expand_prompt_conditions() over a prompt list; non-strings pass through.
 
-    >>> apply_prompt_conditions(["#if TXT2IMG\\na\\n#endif", None], stage_macros("txt2img"))
-    ['#if TXT2IMG\\na\\n#endif', None]
+    >>> apply_prompt_conditions(["@IF TXT2IMG\\na\\n@ENDIF", None], stage_macros("txt2img"))
+    ['@IF TXT2IMG\\na\\n@ENDIF', None]
     """
     if not prompts:
         return prompts
@@ -577,27 +694,34 @@ def apply_prompt_conditions(prompts, macros) -> list[str]:
 
 
 def strip_condition_directives(text: str) -> str:
-    """Removes the #if / #elseif / #else / #endif lines from a compiled prompt.
+    """Removes prompt directives (`@IF` blocks and `@MACRO` definitions).
 
     This is the text the diffusion model is conditioned on: the blocks are already
-    resolved, so only the framing lines are left to drop.
+    resolved, so only the framing and definition lines are left to drop.
 
-    >>> strip_condition_directives("#if TXT2IMG\\na\\n#endif")
+    >>> strip_condition_directives("@IF TXT2IMG\\na\\n@ENDIF")
+    'a'
+    >>> strip_condition_directives("@MACRO(FLAG)\\n@IF FLAG\\na\\n@ENDIF")
     'a'
     >>> strip_condition_directives("no blocks, here")
     'no blocks, here'
     """
-    if not text or "#" not in text:
+    if not text or "@" not in text:
         return text
 
-    lines = [line for line in text.split("\n") if re_condition_directive.match(line) is None]
+    lines = [
+        line for line in text.split("\n")
+        if re_condition_directive.match(line) is None and re_macro_directive.match(line) is None
+    ]
     return "\n".join(lines)
 
 
 def without_condition_directives(prompts) -> list[str]:
     """strip_condition_directives() over a prompt list; non-strings pass through.
 
-    >>> without_condition_directives(["#if TXT2IMG\\na\\n#endif", None])
+    Despite the historical name this also drops @MACRO definitions.
+
+    >>> without_condition_directives(["@IF TXT2IMG\\na\\n@ENDIF", None])
     ['a', None]
     """
     if not prompts:
@@ -608,16 +732,25 @@ def without_condition_directives(prompts) -> list[str]:
 def compile_prompt(text: str, macros=None) -> str:
     """The text a model is conditioned on: resolved blocks, no comments, no directives.
 
+    `@MACRO` definitions and `@IF` framing are removed; custom values are taken
+    from `macros` (build it with macros_for_prompts() when the prompt declares
+    its own macros).
+
     The *compiled prompt* the gallery stores is something else: it is the prompt as
     written with the @PICK groups drawn (see StableDiffusionProcessing.
     compiled_prompts_for_image).  This function is the last step before the
     conditioning is built.
 
-    >>> compile_prompt("#if TXT2IMG\\n# note\\na\\n#endif", stage_macros("txt2img"))
+    >>> compile_prompt("@IF TXT2IMG\\n# note\\na\\n@ENDIF", stage_macros("txt2img"))
     'a'
-    >>> compile_prompt("#if TXT2IMG\\na\\n#else\\nb\\n#endif", stage_macros("img2img"))
+    >>> compile_prompt("@IF TXT2IMG\\na\\n@ELSE\\nb\\n@ENDIF", stage_macros("img2img"))
     'b'
+    >>> compile_prompt("@MACRO(MOOD){happy, sad}\\n@IF MOOD == happy\\na\\n@ENDIF")
+    'a'
     """
+    macros = dict(macros or {})
+    for key, value in custom_macro_values([text]).items():
+        macros.setdefault(key, value)
     return strip_condition_directives(strip_prompt_comments(expand_prompt_conditions(text, macros)))
 
 

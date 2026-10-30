@@ -17,6 +17,8 @@
  *                          typing, `#` comment styling, tap-a-keyword quick actions
  *                          (weight / ⛔ / 💬 / move / delete) and drag-to-rearrange;
  *                          ⤢ opens a fullscreen copy of the same editor
+ *   - `@MACRO(name)` / `@MACRO(name){a, b, c}` declarations are parsed for condition
+ *     suggestions; branches that cannot run are dimmed using the default macro values
  *
  * The MRU + endorsed keyword suggestions live in a fold that is COLLAPSED by default
  * (state.ui.suggestionsOpen persists the user's choice).
@@ -27,7 +29,7 @@ import { el, toast } from './ui.js';
 import { on, persist, state } from './state.js';
 import { createPromptCM } from './prompt-cm.js';
 import { DEFAULT_WEIGHT, applyLineWeight, blockBounds, blockIsOff, blockMarker, classify, findPickGroups, formatWeight, joinSegments, parseLineWeight, rebuild, splitSegments, toggleBlockLines } from './prompt-parse.js';
-import { analyzeConditionLines, isConditionLine, syntaxHint } from './prompt-syntax.js';
+import { analyzeConditionLines, inactiveConditionLines, isConditionLine, isMacroLine, macroState, parseMacroDefinitions, parseMacroReferences, syntaxHint } from './prompt-syntax.js';
 
 const WEIGHT_STEP = 0.05;
 const MAX_SUGGEST = 8;
@@ -51,7 +53,20 @@ function loadSuggestions() {
 
 /* ------------------------------------------------------------------ chips field */
 
-function createChipsField(key, placeholder, title) {
+function createMacroContext(keys, stage) {
+  const text = () => keys.map((key) => state.prompt[key] || '').join('\n');
+  return {
+    text,
+    stage,
+    macros: () => macroState(text(), stage()).macros,
+    context: () => ({
+      definitions: parseMacroDefinitions(text()),
+      references: parseMacroReferences(text()),
+    }),
+  };
+}
+
+function createChipsField(key, placeholder, title, macroContext) {
   const textarea = el('textarea', {
     class: 'pedit-textarea prompt-input',
     placeholder,
@@ -65,6 +80,8 @@ function createChipsField(key, placeholder, title) {
     state.prompt[key] = textarea.value;
     persist();
     fitTextarea();
+    if (cm && cm.refreshMacros) cm.refreshMacros();
+    if (cmFull && cmFull.refreshMacros) cmFull.refreshMacros();
   });
 
   const modeButton = el('button', { class: 'btn tiny', type: 'button' });
@@ -158,6 +175,10 @@ function createChipsField(key, placeholder, title) {
       text: value(),
       placeholder,
       variant: 'inline',
+      macroCompletion: true,
+      macroStage: macroContext.stage(),
+      getMacros: macroContext.macros,
+      getMacroContext: macroContext.context,
       getSuggestions: suggestionItems,
       onChange: onCmInput,
     }).then((instance) => {
@@ -177,6 +198,10 @@ function createChipsField(key, placeholder, title) {
       text: value(),
       placeholder,
       variant: 'full',
+      macroCompletion: true,
+      macroStage: macroContext.stage(),
+      getMacros: macroContext.macros,
+      getMacroContext: macroContext.context,
       getSuggestions: suggestionItems,
       onChange: onCmInput,
     }).then((instance) => {
@@ -194,8 +219,8 @@ function createChipsField(key, placeholder, title) {
     });
   }
 
-  // a standalone #if / #elseif / #else / #endif line is a directive, not a comment
-  const isCommentedLine = (text) => !isConditionLine(text) && /^\s*#(?!\()/.test(text);
+  // a standalone @IF / @MACRO line is a directive, not a comment
+  const isCommentedLine = (text) => !isConditionLine(text) && !isMacroLine(text) && /^\s*#(?!\()/.test(text);
   const stripLineComment = (text) => text.replace(/^(\s*)#\s?/, '$1');
 
   /** Line text as the chips view sees it: comment stripped, line weight unwrapped. */
@@ -210,7 +235,7 @@ function createChipsField(key, placeholder, title) {
     const text = String(rawLine == null ? '' : rawLine);
     const indent = text.slice(0, text.length - text.trimStart().length);
     const rest = text.slice(indent.length);
-    if (/^#(?!\()/.test(rest) && !isConditionLine(rest)) {
+    if (/^#(?!\()/.test(rest) && !isConditionLine(rest) && !isMacroLine(rest)) {
       const marker = rest.startsWith('# ') ? '# ' : '#';
       return { prefix: indent + marker, content: rest.slice(marker.length) };
     }
@@ -309,7 +334,7 @@ function createChipsField(key, placeholder, title) {
     const group = pickGroupAt(findPickGroups(value()), line, column);
     const token = classify(segments[seg].body, group ? group.syntax : null, !isCommentedLine(lines[line]));
     if (token.kind === 'cond') {
-      // the whole-prompt pass knows about a missing #endif / a stray #else
+      // the whole-prompt pass knows about a missing @ENDIF / a stray @ELSE
       const condition = analyzeConditionLines(value())[line];
       if (condition) token.syntax = condition;
     }
@@ -328,7 +353,7 @@ function createChipsField(key, placeholder, title) {
     return count;
   }
 
-  /** Broken '@' directives and #if blocks (drives the ⚠ badge in the header). */
+  /** Broken '@' directives and @IF blocks (drives the ⚠ badge in the header). */
   function countSyntaxErrors() {
     const groups = findPickGroups(value());
     let count = 0;
@@ -340,7 +365,7 @@ function createChipsField(key, placeholder, title) {
         cursor = bodyStart + segment.body.length + segment.tail.length;
         const group = pickGroupAt(groups, lineIndex, coreStart);
         const token = classify(segment.body, group ? group.syntax : null);
-        // #if lines are counted with their whole block (missing #endif, stray #else)
+        // @IF lines are counted with their whole block (missing @ENDIF, stray @ELSE)
         if (token.kind !== 'cond' && token.syntax && !token.syntax.ok) count += 1;
       });
     });
@@ -353,19 +378,22 @@ function createChipsField(key, placeholder, title) {
     const classes = ['pedit-chip'];
     const syntax = token.syntax || null;
     const condition = token.kind === 'cond';
+    const macro = token.kind === 'macro';
     if (token.disabled) classes.push('is-disabled');
     if (selection.line === line && selection.seg === seg) classes.push('is-selected');
     if (!token.text) classes.push('is-empty');
     if (condition) classes.push('is-cond');
+    if (macro) classes.push('is-macro');
     if (syntax) classes.push(syntax.ok ? 'is-syntax' : 'is-syntax-error');
 
     const children = [];
     if (condition) children.push(el('span', { class: 'pedit-chip-kind', text: '\u2442' }));
+    else if (macro) children.push(el('span', { class: 'pedit-chip-kind', text: syntax && syntax.ok ? '\uD83C\uDF9B' : '\u26A0\uFE0F' }));
     else if (token.kind === 'angle') children.push(el('span', { class: 'pedit-chip-kind', text: '\u25C8' }));
     else if (syntax) children.push(el('span', { class: 'pedit-chip-kind', text: syntax.ok ? '\uD83C\uDFB2' : '\u26A0\uFE0F' }));
     children.push(el('span', { class: 'pedit-chip-text', text: token.text || '\u2026' }));
     if (syntax) {
-      if (!condition && syntax.ok && syntax.items.length > 1) {
+      if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
         children.push(el('span', {
           class: 'pedit-chip-w pedit-chip-pick',
           text: `${syntax.count}/${syntax.items.length}`,
@@ -570,14 +598,15 @@ function createChipsField(key, placeholder, title) {
     commit(lines.join('\n'));
   }
 
-  function lineNode(lineText, index, lines, groups, conditions) {
+  function lineNode(lineText, index, lines, groups, conditions, inactive) {
     const condition = isConditionLine(lineText);
+    const macro = isMacroLine(lineText);
     const commented = isCommentedLine(lineText);
     const conditionSyntax = condition && conditions ? conditions[index] : null;
     // a commented line shows its keywords without the leading '# ' - the gutter carries state;
     // displayContent also unwraps a line-weight group so per-keyword chips stay editable
     const content = displayContent(lineText);
-    const lineWeight = commented || condition ? null : parseLineWeight(lineText);
+    const lineWeight = commented || condition || macro ? null : parseLineWeight(lineText);
     const segments = splitSegments(content);
 
     const row = el('div', { class: 'pedit-row' });
@@ -614,7 +643,7 @@ function createChipsField(key, placeholder, title) {
     });
     row.append(chips);
     row.append(el('span', { class: 'pedit-fold-slot' }));
-    if (!condition) {
+    if (!condition && !macro) {
       row.append(el('button', {
         class: 'pedit-add',
         type: 'button',
@@ -623,7 +652,7 @@ function createChipsField(key, placeholder, title) {
         dataset: { act: 'add', line: String(index) },
       }));
     }
-    if (!commented && !condition && content.trim()) {
+    if (!commented && !condition && !macro && content.trim()) {
       row.append(el('button', {
         class: 'pedit-line-weight' + (lineWeight ? ' is-on' : ''),
         type: 'button',
@@ -640,7 +669,7 @@ function createChipsField(key, placeholder, title) {
     else if (selection.editing && selection.editing.line === index) main.append(inputRowNode(index, 'edit', selection.editing.value));
     else if (selection.lineWeight && selection.lineWeight.line === index) main.append(lineWeightRowNode(index));
 
-    return el('div', { class: 'pedit-line' + (commented ? ' is-comment' : '') + (condition ? ' is-condition' : '') }, [
+    return el('div', { class: 'pedit-line' + (commented ? ' is-comment' : '') + (condition ? ' is-condition' : '') + (inactive.has(index) ? ' is-inactive' : '') }, [
       el('button', {
         class: 'pedit-gutter' + (commented ? ' is-comment' : ''),
         type: 'button',
@@ -837,7 +866,7 @@ function createChipsField(key, placeholder, title) {
     const syntaxErrors = countSyntaxErrors();
     errorBadge.hidden = !syntaxErrors;
     errorBadge.textContent = syntaxErrors ? `\u26A0 ${syntaxErrors} syntax` : '';
-    errorBadge.title = 'keywords starting with @ and #if blocks must follow the prompt syntax - tap a red keyword to see what is wrong';
+    errorBadge.title = 'keywords starting with @, @IF blocks and @MACRO definitions must follow the prompt syntax - tap a red keyword to see what is wrong';
 
     if (mode() === 'text') {
       ensureCM();
@@ -854,8 +883,9 @@ function createChipsField(key, placeholder, title) {
     const lines = value().split('\n');
     const groups = findPickGroups(value());
     const conditions = analyzeConditionLines(value());
+    const inactive = inactiveConditionLines(value(), macroContext.macros());
     const anchor = captureScrollAnchor();
-    body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines, groups, conditions)));
+    body.replaceChildren(...lines.map((line, index) => lineNode(line, index, lines, groups, conditions, inactive)));
     queueMicrotask(() => { applyFolds(); restoreScrollAnchor(anchor); });
     if (!value().trim()) {
       body.append(el('div', {
@@ -959,9 +989,9 @@ function createChipsField(key, placeholder, title) {
     const line = lines[lineIndex];
     const trimmed = line.replace(/^\s+/, '');
     const indent = line.slice(0, line.length - trimmed.length);
-    // a '#if' line is a directive: commenting it out adds the marker instead of
-    // stripping it ('# #if …' is the comment form)
-    if (/^#(?!\()/.test(trimmed) && !isConditionLine(trimmed)) {
+    // an '@IF' / '@MACRO' line is a directive: commenting it out adds the marker
+    // instead of stripping it ('# @IF …' is the comment form)
+    if (/^#(?!\()/.test(trimmed) && !isConditionLine(trimmed) && !isMacroLine(trimmed)) {
       lines[lineIndex] = indent + trimmed.slice(1).replace(/^ /, '');
     } else if (trimmed !== '') {
       lines[lineIndex] = indent + '# ' + trimmed;
@@ -1077,6 +1107,11 @@ function createChipsField(key, placeholder, title) {
     relayout() {
       applyFolds();
     },
+    refreshMacros() {
+      if (cm) cm.refreshMacros();
+      if (cmFull) cmFull.refreshMacros();
+      render();
+    },
     appendKeyword(keyword) {
       const current = value().replace(/\s+$/, '');
       const lowered = keyword.toLowerCase();
@@ -1176,9 +1211,20 @@ function createLoraFold(field) {
 export function createPromptEditor(kind) {
   const positiveKey = ['text', 'qwen', 'krea2'].includes(kind) ? kind : 'image';
   const negativeKey = `${positiveKey}Negative`;
+  const stage = () => (
+    kind === 'image'
+      ? (state.image.mode === 'inpaint' ? 'inpaint' : 'img2img')
+      : 'txt2img'
+  );
+  const macroContext = createMacroContext([positiveKey, negativeKey], stage);
 
-  const positiveField = createChipsField(positiveKey, 'Prompt', 'Prompt');
-  const negativeField = createChipsField(negativeKey, 'Negative prompt', 'Negative prompt');
+  const positiveField = createChipsField(positiveKey, 'Prompt', 'Prompt', macroContext);
+  const negativeField = createChipsField(negativeKey, 'Negative prompt', 'Negative prompt', macroContext);
+  on('image-mode', () => {
+    if (kind !== 'image') return;
+    positiveField.refreshMacros();
+    negativeField.refreshMacros();
+  });
   const suggestionsFold = createSuggestionsFold(positiveField);
   // the Anima backend applies its LoRAs from prompt tags; Qwen / Krea 2 have their own pipeline
   const loraFold = ['text', 'image'].includes(kind) ? createLoraFold(positiveField) : null;

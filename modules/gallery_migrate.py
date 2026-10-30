@@ -24,6 +24,7 @@ import time
 from datetime import datetime
 
 from modules import gallery_blobs, gallery_db, gallery_sources
+from modules.prompt_syntax import upgrade_legacy_directives
 
 ROOT = gallery_db._ROOT
 OLD_DB_PATH = os.path.join(ROOT, "endorsements.db")
@@ -484,6 +485,9 @@ def _merge_sidecar_text(item_id: int, text: str) -> None:
     meta = {}
     if text:
         prompt, negative, params = gallery_sources.split_infotext(text)
+        text = upgrade_legacy_directives(text)
+        prompt = upgrade_legacy_directives(prompt)
+        negative = upgrade_legacy_directives(negative)
         meta = {"prompt": prompt, "negative": negative, "infotext": text,
                 "meta": gallery_sources._meta_from_params(gallery_sources.parse_params_line(params))}
     merged = gallery_db.get_item_meta(item_id)

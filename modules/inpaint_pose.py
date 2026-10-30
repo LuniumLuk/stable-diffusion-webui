@@ -964,7 +964,7 @@ def choose_inpaint_prompt(p, index: int, part=None) -> tuple[str, str]:
     """Compiled prompt for one pose inpaint pass of one image.
 
     Uses the hires prompt when hires fix ran.  The source prompt (comments and
-    ``#if`` blocks intact) is used when available, so the POSE_INPAINT and
+    ``@IF`` blocks intact) is used when available, so the POSE_INPAINT and
     POSE_INPAINT_PART branches are resolved for this pass; ``@PICK`` groups are
     then drawn with the same seed/index the parent generation used and the
     comments are stripped, the same compilation the parent prompts went through.
@@ -994,13 +994,15 @@ def choose_inpaint_prompt(p, index: int, part=None) -> tuple[str, str]:
     source = source or at(getattr(p, "all_prompts_with_comments", None))
     source_negative = source_negative or at(getattr(p, "all_negative_prompts_with_comments", None))
 
-    # the source keeps the #if blocks, the compiled list has them resolved already
+    # the source keeps the @IF blocks, the compiled list has them resolved already
     prompt = source or prompt or at(getattr(p, "all_prompts", None)) or getattr(p, "prompt", "") or ""
     negative = source_negative or negative or at(getattr(p, "all_negative_prompts", None)) or getattr(p, "negative_prompt", "") or ""
 
     from modules import prompt_parser
 
-    macros = prompt_parser.stage_macros("pose_inpaint", pose_part=part)
+    macros = prompt_parser.macros_for_prompts(
+        "pose_inpaint", [prompt, negative], getattr(p, "macro_values", None), pose_part=part
+    )
     prompt = prompt_parser.expand_prompt_conditions(prompt, macros)
     negative = prompt_parser.expand_prompt_conditions(negative, macros)
 

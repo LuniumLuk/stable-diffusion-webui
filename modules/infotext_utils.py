@@ -9,6 +9,7 @@ import sys
 import gradio as gr
 from modules.paths import data_path
 from modules import shared, ui_tempdir, script_callbacks, processing, infotext_versions, images, prompt_parser, errors
+from modules.prompt_syntax import upgrade_legacy_directives
 from PIL import Image
 
 sys.modules['modules.generation_parameters_copypaste'] = sys.modules[__name__]  # alias for old name
@@ -281,13 +282,19 @@ Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 965400086, Size: 512x512, Model
         except Exception:
             print(f"Error parsing \"{k}: {v}\"")
 
+    # Old images carry '#if' directives in their infotext; the prompt editors and
+    # the pipeline only know the '@IF' form.
+    prompt = upgrade_legacy_directives(prompt)
+    negative_prompt = upgrade_legacy_directives(negative_prompt)
+
     # Extract styles from prompt
     if shared.opts.infotext_styles != "Ignore":
         found_styles, prompt_no_styles, negative_prompt_no_styles = shared.prompt_styles.extract_styles_from_prompt(prompt, negative_prompt)
 
         same_hr_styles = True
         if ("Hires prompt" in res or "Hires negative prompt" in res) and (infotext_ver > infotext_versions.v180_hr_styles if (infotext_ver := infotext_versions.parse_version(res.get("Version"))) else True):
-            hr_prompt, hr_negative_prompt = res.get("Hires prompt", prompt), res.get("Hires negative prompt", negative_prompt)
+            hr_prompt = upgrade_legacy_directives(res.get("Hires prompt", prompt))
+            hr_negative_prompt = upgrade_legacy_directives(res.get("Hires negative prompt", negative_prompt))
             hr_found_styles, hr_prompt_no_styles, hr_negative_prompt_no_styles = shared.prompt_styles.extract_styles_from_prompt(hr_prompt, hr_negative_prompt)
             if same_hr_styles := found_styles == hr_found_styles:
                 res["Hires prompt"] = '' if hr_prompt_no_styles == prompt_no_styles else hr_prompt_no_styles
@@ -300,6 +307,10 @@ Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 965400086, Size: 512x512, Model
 
     res["Prompt"] = prompt
     res["Negative prompt"] = negative_prompt
+    if "Hires prompt" in res:
+        res["Hires prompt"] = upgrade_legacy_directives(res["Hires prompt"])
+    if "Hires negative prompt" in res:
+        res["Hires negative prompt"] = upgrade_legacy_directives(res["Hires negative prompt"])
 
     # Missing CLIP skip means it was set to 1 (the default)
     if "Clip skip" not in res:

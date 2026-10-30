@@ -10,13 +10,14 @@
  * token back with a new weight / disabled flag - every user edit goes through it.
  * A keyword that starts with '@' is checked by `prompt-syntax.js`: a well formed
  * directive is a `pick` token, a broken one an `at` token that carries the error.
- * A standalone `#if` / `#elseif` / `#else` / `#endif` line is a `cond` token and
- * keeps its text as typed.
+ * A standalone `@IF` / `@ELSEIF` / `@ELSE` / `@ENDIF` line is a `cond` token and
+ * a `@MACRO(name)` / `@MACRO(name){...}` line a `macro` token; both keep their
+ * text as typed.
  *
  * The same test expectations as `tmp/pedit_test.js` apply (see `tmp/lite_pedit_test.mjs`).
  */
 
-import { analyzeAtSyntax, analyzeConditionLine, isConditionLine } from './prompt-syntax.js';
+import { analyzeAtSyntax, analyzeConditionLine, analyzeMacroLine, isConditionLine, isMacroLine } from './prompt-syntax.js';
 
 export const DEFAULT_WEIGHT = 1.0;
 
@@ -190,7 +191,7 @@ function wrapperLevels(text, open, close) {
 /**
  * Classify a segment body -> { kind, text, weight, disabled }.
  *
- * `allowCondition` is false for the body of a commented line: `# #if TXT2IMG` is a
+ * `allowCondition` is false for the body of a commented line: `# @IF TXT2IMG` is a
  * commented-out directive, not a directive.
  */
 export function classify(body, syntaxOverride = null, allowCondition = true) {
@@ -198,9 +199,22 @@ export function classify(body, syntaxOverride = null, allowCondition = true) {
   if (!text) return { kind: 'plain', text: '', weight: DEFAULT_WEIGHT, disabled: false };
   if (text === ',') return { kind: 'plain', text: ',', weight: DEFAULT_WEIGHT, disabled: false };
 
-  // a standalone #if / #elseif / #else / #endif line: a `cond` token that carries its
-  // own grammar check, so the chips and the CodeMirror decorations style it distinctly
-  if (allowCondition && isConditionLine(text)) {
+  // a standalone @MACRO definition or @IF / @ELSEIF / @ELSE / @ENDIF line: a
+  // directive token that carries its own grammar check, so the chips and the
+  // CodeMirror decorations style it distinctly.  Inside a commented line it stays
+  // plain text, not a broken '@' keyword.
+  const directive = isMacroLine(text) || isConditionLine(text);
+  if (directive) {
+    if (!allowCondition) return { kind: 'plain', text, weight: DEFAULT_WEIGHT, disabled: false };
+    if (isMacroLine(text)) {
+      return {
+        kind: 'macro',
+        text,
+        weight: DEFAULT_WEIGHT,
+        disabled: false,
+        syntax: analyzeMacroLine(text),
+      };
+    }
     return {
       kind: 'cond',
       text,
@@ -284,8 +298,8 @@ export function classify(body, syntaxOverride = null, allowCondition = true) {
 /** Build the body text for a token with the given weight / disabled flag. */
 export function rebuild(token, weight, disabled) {
   // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
-  // and a broken '@' directive (and a #if line) must keep its text as typed
-  if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond') return token.text;
+  // and a broken '@' directive (and an @IF / @MACRO line) must keep its text as typed
+  if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond' || token.kind === 'macro') return token.text;
 
   const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
   let inner;
@@ -370,13 +384,13 @@ export function blockMarker(name) {
  * lines are `start + 1 .. end - 1` (`end` may be `lines.length` for a section that
  * runs to the end of the prompt):
  *
- *   - `#if … #endif` blocks (nesting aware; the `#endif` line is part of the fold),
+ *   - `@IF … @ENDIF` blocks (nesting aware; the `@ENDIF` line is part of the fold),
  *   - `# ---` comment sections (the next marker stays visible, the section folds).
  *
- * A start line without anything to hide is not listed, and an unclosed `#if` is not
+ * A start line without anything to hide is not listed, and an unclosed `@IF` is not
  * foldable (there is no end to fold to). Example:
  *
- *   foldRegions(['#if TXT2IMG', 'a', 'b', '#endif'])  ->  Map { 0 => 4 }
+ *   foldRegions(['@IF TXT2IMG', 'a', 'b', '@ENDIF'])  ->  Map { 0 => 4 }
  */
 export function foldRegions(lines) {
   const list = Array.isArray(lines) ? lines : [];
@@ -414,11 +428,11 @@ export function blockBounds(lines, index) {
 }
 
 /**
- * True when the line starts with '#' but is not a disabled keyword group ('#(' ...)
- * and not a '#if' block directive (only '# #if …' is the commented form).
+ * True when the line starts with '#' but is not a disabled keyword group ('#(' ...).
+ * (An `@IF` / `@MACRO` directive does not start with '#', so it is never a comment.)
  */
 function startsWithLineHash(line) {
-  if (isConditionLine(line)) return false;
+  if (isConditionLine(line) || isMacroLine(line)) return false;
   const trimmed = line.trimStart();
   if (trimmed.charAt(0) !== '#') return false;
   return '([<'.indexOf(trimmed.charAt(1)) < 0;

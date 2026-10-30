@@ -7,6 +7,8 @@ import shutil
 import sqlite3
 from datetime import datetime
 
+from modules.prompt_syntax import upgrade_legacy_directives
+
 try:
     from modules import gallery_bridge
 except Exception:  # partial/stubbed module trees (test harnesses): degrade to legacy-only
@@ -103,7 +105,7 @@ def _ensure_endorsement_origin_column(conn):
 
 def _ensure_compiled_prompt_columns(conn):
     """Compiled prompt = the prompt as written with the @PICK groups drawn
-    (comments, disabled groups and every #if branch stay).
+    (comments, disabled groups and every @IF branch stay).
 
     Added after the fact so existing DBs keep working: rows indexed before the
     column existed simply carry no compiled prompt.
@@ -139,7 +141,7 @@ def _compiled_prompts_for_item(conn, item_key: str | None, image_path: str | Non
     if source_prompt is not None and str(row[0] or "") != str(source_prompt or ""):
         # different image reusing the same path: its compiled prompt is not ours
         return None
-    return str(row[1] or ""), str(row[2] or "")
+    return upgrade_legacy_directives(str(row[1] or "")), upgrade_legacy_directives(str(row[2] or ""))
 
 
 def _backfill_item_keys(conn):
@@ -257,8 +259,35 @@ def init_db():
         _ensure_archived_table(conn)
         _ensure_staged_table(conn)
         _ensure_trash_table(conn)
+        _migrate_prompt_directives(conn)
         conn.commit()
     gallery_bridge.init()
+
+
+_PROMPT_TABLES = {
+    "generated_images": ("prompt", "negative_prompt", "compiled_prompt", "compiled_negative_prompt", "infotext"),
+    "endorsements": ("prompt", "negative_prompt", "compiled_prompt", "compiled_negative_prompt", "infotext"),
+    "dislikes": ("prompt", "negative_prompt", "compiled_prompt", "compiled_negative_prompt", "infotext"),
+    "trash": ("prompt", "negative_prompt", "infotext"),
+}
+
+
+def _migrate_prompt_directives(conn):
+    """Rewrite legacy '#if' directives in stored prompts to '@IF'."""
+    for table, columns in _PROMPT_TABLES.items():
+        names = ", ".join(columns)
+        where = " OR ".join(f"{column} LIKE '%#%'" for column in columns)
+        rows = conn.execute(f"SELECT id, {names} FROM {table} WHERE {where}").fetchall()
+        for row in rows:
+            updates = {}
+            for column, value in zip(columns, row[1:]):
+                upgraded = upgrade_legacy_directives(value)
+                if upgraded != value:
+                    updates[column] = upgraded
+            if not updates:
+                continue
+            sets = ", ".join(f"{column}=?" for column in updates)
+            conn.execute(f"UPDATE {table} SET {sets} WHERE id=?", (*updates.values(), int(row[0])))
 
 
 def _ensure_archived_table(conn):
@@ -826,6 +855,9 @@ def endorse(image_path, prompt, negative_prompt, seed, steps, sampler,
             cfg_scale, width, height, model_name, model_hash, infotext, item_key=None):
     item_key = str(item_key or "") or _item_key_from_path(image_path)
     endorsed_at = datetime.now()
+    prompt = upgrade_legacy_directives(prompt)
+    negative_prompt = upgrade_legacy_directives(negative_prompt)
+    infotext = upgrade_legacy_directives(infotext)
 
     # Endorsing cancels staged status
     unstage_item(item_key)
@@ -962,6 +994,9 @@ def get_endorsed_id_by_path(path: str):
 def dislike(image_path, prompt, negative_prompt, seed, steps, sampler,
             cfg_scale, width, height, model_name, model_hash, infotext, item_key=None):
     item_key = str(item_key or "") or _item_key_from_path(image_path)
+    prompt = upgrade_legacy_directives(prompt)
+    negative_prompt = upgrade_legacy_directives(negative_prompt)
+    infotext = upgrade_legacy_directives(infotext)
 
     # Disliking cancels staged status
     unstage_item(item_key)
@@ -1417,7 +1452,7 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
     """Index a saved image.
 
     `compiled_prompt` is the prompt as it was written with the @PICK groups drawn
-    (comments, disabled groups and every #if branch stay); `prompt` stays the
+    (comments, disabled groups and every @IF branch stay); `prompt` stays the
     untouched source. Pass None to keep whatever was recorded before (re-indexing
     a file cannot re-derive the draw), "" to record "none".
 
@@ -1426,6 +1461,14 @@ def index_image(path: str, file_mtime: float, prompt: str, negative_prompt: str,
     """
     if is_removebg_attachment_path(path):
         return
+
+    prompt = upgrade_legacy_directives(prompt)
+    negative_prompt = upgrade_legacy_directives(negative_prompt)
+    infotext = upgrade_legacy_directives(infotext)
+    if compiled_prompt is not None:
+        compiled_prompt = upgrade_legacy_directives(compiled_prompt)
+    if compiled_negative_prompt is not None:
+        compiled_negative_prompt = upgrade_legacy_directives(compiled_negative_prompt)
 
     item_key = _item_key_from_path(path)
     with _get_conn() as conn:
@@ -1718,8 +1761,10 @@ def _parse_sidecar_infotext(text: str) -> dict:
             return 0.0
 
     size = re.search(r"Size:\s*(\d+)\s*x\s*(\d+)", metrics)
+    prompt = upgrade_legacy_directives(prompt)
+    negative = upgrade_legacy_directives(negative)
     return {
-        "infotext": text,
+        "infotext": upgrade_legacy_directives(text),
         "prompt": prompt,
         "negative_prompt": negative,
         "steps": pick_int(r"Steps:\s*(\d+)"),

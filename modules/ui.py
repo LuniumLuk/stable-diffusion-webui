@@ -448,6 +448,7 @@ def create_ui():
                 hr_prompt,
                 hr_negative_prompt,
                 override_settings,
+                output_panel.macro_values,
             ] + custom_inputs
 
             txt2img_outputs = [
@@ -862,6 +863,7 @@ def create_ui():
                     img2img_batch_source_type,
                     img2img_batch_upload,
                     img2img_batch_mask_payload,
+                    output_panel.macro_values,
                 ] + custom_inputs,
                 outputs=[
                     output_panel.gallery,
