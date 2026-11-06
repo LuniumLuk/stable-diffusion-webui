@@ -1,6 +1,6 @@
 /* Compose screen: touch layer compositor (add/transform/reorder/save/send). */
 
-import { api_, fetchImageData } from './api.js';
+import { api_, fetchImageData, forgetImageSource } from './api.js';
 import {
   busy, clamp, el, fileToImageSource, openSheet, closeSheet, pickFile, switchTab, toast,
 } from './ui.js';
@@ -23,6 +23,7 @@ const compose = {
   active: null,
   gesture: null,
   paintLayer: null, // full-canvas brush/eraser overlay, kept on top and skipped by move hit-tests
+  originPath: '', // gallery image loaded into the session; target of "Override Origin"
 };
 
 let canvas;
@@ -30,6 +31,21 @@ let ctx;
 let stage;
 let layerCountLabel;
 let activeNameLabel;
+let overrideButton;
+
+function syncOverrideButton() {
+  if (!overrideButton) return;
+  const path = String(compose.originPath || '');
+  overrideButton.disabled = !path;
+  overrideButton.title = path
+    ? `Replace "${path.split(/[\\/]/).pop()}" with this composition (a backup is kept)`
+    : 'Load an image from the gallery to set an origin image';
+}
+
+function setOrigin(path) {
+  compose.originPath = String(path || '');
+  syncOverrideButton();
+}
 
 /* ------------------------------------------------------------------ rendering */
 
@@ -355,6 +371,7 @@ async function addFromGallery() {
     const loaded = await fetchImageData({ path: picked.path, url: picked.url, px: 1600 });
     const img = await loadImageElement(loaded.dataUrl);
     addLayerFromImage(img, picked.path ? picked.path.split(/[\\/]/).pop() : 'gallery', loaded.dataUrl, picked.path || '');
+    setOrigin(picked.path || '');
     maybeAutoSize();
   } catch (error) {
     toast(`could not load: ${error.message}`, 'err');
@@ -374,6 +391,7 @@ export async function addImageToCompose({ path, url, name } = {}) {
     const loaded = await fetchImageData({ path, url, px: 1600 });
     const img = await loadImageElement(loaded.dataUrl);
     addLayerFromImage(img, name || (path ? path.split(/[\\/]/).pop() : 'gallery'), loaded.dataUrl, path || '');
+    setOrigin(path || '');
     maybeAutoSize();
     toast('added to compose', 'ok', 1600);
   } catch (error) {
@@ -476,6 +494,36 @@ async function saveComposite() {
     import('./state.js').then(({ emit }) => emit('gallery-refresh'));
   } catch (error) {
     toast(`save failed: ${error.message}`, 'err');
+  } finally {
+    overlay.close();
+  }
+}
+
+async function overrideOrigin() {
+  if (!compose.layers.length) {
+    toast('add at least one layer', 'warn');
+    return;
+  }
+  const origin = String(compose.originPath || '');
+  if (!origin) {
+    toast('open an image from the gallery first', 'warn');
+    return;
+  }
+  const name = origin.split(/[\\/]/).pop();
+  if (!window.confirm(
+    `Replace the origin image "${name}" with the current composition?\n\n` +
+    'The original file is backed up to outputs/composition/origin-backups.'
+  )) return;
+
+  const overlay = busy('overriding origin…');
+  try {
+    const dataUrl = flatten().toDataURL('image/png');
+    await api_.overrideOrigin({ path: origin, image: dataUrl, state: exportState() });
+    forgetImageSource(origin);
+    toast(`origin overridden: ${name}`, 'ok', 3200);
+    import('./state.js').then(({ emit }) => emit('gallery-refresh'));
+  } catch (error) {
+    toast(`override failed: ${error.message}`, 'err', 4200);
   } finally {
     overlay.close();
   }
@@ -739,6 +787,7 @@ export function init(container) {
   }
 
   const saveButton = el('button', { class: 'btn tiny', type: 'button', text: '\u{1F4BE} Save', onClick: saveComposite });
+  overrideButton = el('button', { class: 'btn tiny', type: 'button', text: '\u{1F504} Override Origin', onClick: overrideOrigin });
   const toImageButton = el('button', { class: 'btn tiny', type: 'button', text: '\u2192 Image', onClick: () => sendComposite('img2img') });
   const toInpaintButton = el('button', { class: 'btn tiny', type: 'button', text: '\u2192 Inpaint', onClick: () => sendComposite('inpaint') });
 
@@ -753,14 +802,15 @@ export function init(container) {
       ]),
       el('div', { class: 'card' }, [
         el('div', { class: 'card-head' }, [el('span', { text: 'Output' })]),
-        el('div', { class: 'image-tools' }, [saveButton, toImageButton, toInpaintButton]),
-        el('div', { class: 'small muted', style: { marginTop: '6px' }, text: 'Move: drag a layer, pinch to scale/rotate. Brush/eraser draw on the top Paint layer. Save writes into outputs/composition.' }),
+        el('div', { class: 'image-tools' }, [saveButton, overrideButton, toImageButton, toInpaintButton]),
+        el('div', { class: 'small muted', style: { marginTop: '6px' }, text: 'Move: drag a layer, pinch to scale/rotate. Brush/eraser draw on the top Paint layer. Save writes into outputs/composition; Override Origin replaces the gallery image the session was opened from.' }),
       ]),
     ]),
   );
 
   applyCanvasSize();
   updateActiveLabel();
+  syncOverrideButton();
   setTool(paintTool());
 }
 

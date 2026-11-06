@@ -7,10 +7,15 @@
  *     the selected candidate (0/1/2) is dilated by the "expand" radius and unioned into the mask.
  *     Both the candidate toggle and expand radius apply to the NEXT pick only.
  *   - "Erase" mode: erases mask with a destination-out brush that shares the gradio brush radius.
- *   - Paint mode is fully custom: strokes are drawn by this panel at the exact pointer position
+ *   - Mask mode is fully custom: strokes are drawn by this panel at the exact pointer position
  *     (gradio's lazy-brush lag is bypassed), the native cursor stays visible and a brush-size
  *     ring is drawn at the true cursor position. Gradio's Undo button is re-routed to the panel's
  *     snapshot undo (gradio's stroke list no longer holds the real strokes).
+ *   - "Brush" mode paints colors on a transparent paint layer above the picture. The layer is
+ *     merged into the init image by the backend on Generate and is never saved/indexed itself.
+ *     "Picker" mode samples the color under the cursor from the picture + paint layer.
+ *     Shortcuts: B brush, I temporary picker, M origin masking mode, Ctrl+Z undo.
+ *     ALT + right-mouse drag resizes the brush; plain right-mouse drag still pans.
  *   - Wheel zoom (cursor anchored) + right-mouse drag pan, replacing the builtin
  *     canvas-zoom-and-pan behaviour for this tab (no modifier keys needed, no scrollbars).
  *
@@ -37,15 +42,17 @@
     expand: "inpsam.expand",
     brush: "inpsam.cachedBrushRadius",
     brushColor: "inpsam.brushColor",
+    paintColor: "inpsam.paintColor",
     samColor: "inpsam.samColor",
     outlineColor: "inpsam.outlineColor",
     blink: "inpsam.blink",
   };
   const DEFAULT_EXPAND = 30;
   const OFFSCREEN = 50000; // synthetic sync stroke offset (large enough that lazy-brush stays off-canvas)
+  const PAINT_PAYLOAD_ID = "img2img_inpaint_paint_payload";
 
   const state = {
-    mode: "paint", // paint | sam | erase
+    mode: "paint", // paint (origin mask) | brush (color paint) | picker | sam | erase
     model: "",
     models: [],
     maskIdx: 0,
@@ -59,14 +66,20 @@
     erase: null,
     undo: [],
     imgEl: null,
+    imgSrc: null, // source URL of imgEl, used to discard the paint layer only for a new picture
     samAvailable: null,
     // colors (persisted; RGB is cosmetic only - A1111 uses the mask ALPHA channel)
     brushColor: "#ffffff", // color applied to brush-painted strokes
+    paintColor: "#ff3366", // color of the color-paint layer (merged into the init image)
     samColor: "#0b0f19", // color applied to SAM-picked segments
     outlineColor: "#00e0ff", // color of the silhouette outline
     blink: true, // blink the outline (false = static outline)
     palette: { gradio: "#ffffff", brush: "#ffffff", sam: "#0b0f19" }, // colors believed present in the mask canvas
-    paint: null, // active custom paint stroke {last, lastMid}
+    paint: null, // active custom stroke {target, last, lastMid}
+    paintDirty: false, // true while the color-paint layer holds pixels
+    pickerPrevMode: null, // mode restored after an I-key pick
+    altResize: null, // ALT + right-drag brush resize {startX, startSize, anchorX, anchorY}
+    pickSampleCanvas: null, // cached image + paint composite for the color picker
     outlineCache: null, // offscreen canvas holding the current silhouette
     blinkRaf: null,
     blinkPhase: null,
@@ -200,9 +213,33 @@
     addGestureListeners();
   }
 
+  function startAltResize(e) {
+    state.altResize = {
+      startX: e.clientX,
+      startSize: brushRadiusNatural(),
+      anchorX: e.clientX,
+      anchorY: e.clientY,
+    };
+    addGestureListeners();
+    drawBrushRing(e.clientX, e.clientY);
+    setStatus(`brush size: ${Math.round(brushRadiusNatural())} px`);
+  }
+
+  function moveAltResize(e) {
+    const st = state.altResize;
+    if (!st) return;
+    const next = clamp(Math.round(st.startSize + (e.clientX - st.startX) * 0.25), 1, 400);
+    if (next !== Math.round(brushRadiusNatural())) setBrushRadius(next, false);
+    drawBrushRing(st.anchorX, st.anchorY);
+    setStatus(`brush size: ${Math.round(brushRadiusNatural())} px`);
+    e.preventDefault();
+  }
+
   function onGestureMove(e) {
     if (e.__inpsamSynthetic) return;
-    if (state.pan) {
+    if (state.altResize) {
+      moveAltResize(e);
+    } else if (state.pan) {
       state.panX = state.pan.panX + (e.clientX - state.pan.x);
       state.panY = state.pan.panY + (e.clientY - state.pan.y);
       clampPan();
@@ -217,7 +254,10 @@
       e.preventDefault();
     } else if (state.paint) {
       const to = naturalPoint(e.clientX, e.clientY);
-      if (to) paintStroke(state.paint, to);
+      if (to) {
+        if (state.paint.target === "paint") colorStroke(state.paint, to);
+        else paintStroke(state.paint, to);
+      }
       e.preventDefault();
     }
   }
@@ -225,6 +265,11 @@
   function onGestureUp(e) {
     if (e && e.__inpsamSynthetic) return;
     let needSync = false;
+    let needPaintSync = false;
+    if (state.altResize) {
+      state.altResize = null;
+      setStatus(`brush size: ${Math.round(brushRadiusNatural())} px`);
+    }
     if (state.pan) state.pan = null;
     if (state.erase) {
       const wasErase = state.erase;
@@ -232,15 +277,24 @@
       if (wasErase.last) needSync = true;
     }
     if (state.paint) {
-      paintFinish(state.paint);
+      if (state.paint.target === "paint") {
+        colorFinish(state.paint);
+        needPaintSync = true;
+      } else {
+        paintFinish(state.paint);
+        needSync = true; // commit the custom paint stroke into the gradio value
+      }
       state.paint = null;
-      needSync = true; // commit the custom paint stroke into the gradio value
     }
     document.removeEventListener("mousemove", onGestureMove, true);
     document.removeEventListener("mouseup", onGestureUp, true);
     if (needSync) {
       syncMaskToGradio();
       rebuildOutline();
+    }
+    if (needPaintSync) {
+      invalidatePickerSample();
+      syncPaintPayload();
     }
   }
 
@@ -280,7 +334,23 @@
     const p = getParts();
     if (!p) return;
     try {
-      state.undo.push(p.maskCanvas.toDataURL("image/png"));
+      state.undo.push({ kind: "mask", data: p.maskCanvas.toDataURL("image/png") });
+      if (state.undo.length > 15) state.undo.shift();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function pushPaintSnapshot() {
+    const p = getParts();
+    const canvas = p ? paintCanvas(p) : null;
+    if (!canvas) return;
+    try {
+      state.undo.push({
+        kind: "paint",
+        data: state.paintDirty ? canvas.toDataURL("image/png") : null,
+        dirty: state.paintDirty,
+      });
       if (state.undo.length > 15) state.undo.shift();
     } catch (e) {
       /* ignore */
@@ -475,6 +545,207 @@
     ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
     ctx.lineWidth = 1.4;
     ctx.stroke();
+  }
+
+  /* ------------------------------- color paint layer ------------------------------ */
+
+  function appRoot() {
+    return typeof gradioApp === "function" ? gradioApp() : document;
+  }
+
+  function byId(id) {
+    const root = appRoot();
+    if (root.getElementById) return root.getElementById(id);
+    return root.querySelector(`#${id}`) || document.getElementById(id);
+  }
+
+  function setTextareaValue(id, value) {
+    const host = byId(id);
+    const textarea = host ? host.querySelector("textarea") : null;
+    if (!textarea || textarea.value === value) return;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    setter.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", {bubbles: true}));
+  }
+
+  // The painted layer is never persisted: it travels to the backend as a hidden
+  // textbox data URL and is composited onto the init image only for this run.
+  function syncPaintPayload() {
+    const p = getParts();
+    const canvas = p ? paintCanvas(p) : null;
+    let value = "";
+    if (canvas && state.paintDirty) {
+      try {
+        value = canvas.toDataURL("image/png");
+      } catch (e) {
+        value = "";
+      }
+    }
+    setTextareaValue(PAINT_PAYLOAD_ID, value);
+  }
+
+  function paintCanvas(p) {
+    return p && p.wrap ? p.wrap.querySelector(".inpsam-paint") : null;
+  }
+
+  function ensurePaintCanvas(p) {
+    if (!p) return null;
+    let canvas = paintCanvas(p);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvas.className = "inpsam-paint";
+      canvas.style.pointerEvents = "none";
+      p.wrap.appendChild(canvas);
+    }
+    const mask = p.maskCanvas;
+    const resized = canvas.width !== mask.width || canvas.height !== mask.height;
+    if (resized) {
+      canvas.width = mask.width;
+      canvas.height = mask.height;
+      // A size change means a different picture: old strokes no longer line up.
+      if (state.paintDirty) {
+        state.paintDirty = false;
+        invalidatePickerSample();
+        syncPaintPayload();
+      }
+    }
+    if (canvas.style.width !== mask.style.width) canvas.style.width = mask.style.width;
+    if (canvas.style.height !== mask.style.height) canvas.style.height = mask.style.height;
+    return canvas;
+  }
+
+  function paintLayerCtx() {
+    const p = getParts();
+    const canvas = p ? paintCanvas(p) : null;
+    return canvas ? canvas.getContext("2d") : null;
+  }
+
+  function invalidatePickerSample() {
+    state.pickSampleCanvas = null;
+  }
+
+  function colorDot(pt) {
+    const ctx = paintLayerCtx();
+    if (!ctx) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = state.paintColor;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, brushRadiusNatural() / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    state.paintDirty = true;
+  }
+
+  function colorStroke(st, to) {
+    const ctx = paintLayerCtx();
+    if (!ctx) return;
+    const mid = { x: (st.last.x + to.x) / 2, y: (st.last.y + to.y) / 2 };
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.lineWidth = brushRadiusNatural();
+    ctx.strokeStyle = state.paintColor;
+    ctx.beginPath();
+    ctx.moveTo(st.lastMid.x, st.lastMid.y);
+    ctx.quadraticCurveTo(st.last.x, st.last.y, mid.x, mid.y);
+    ctx.stroke();
+    ctx.restore();
+    st.lastMid = mid;
+    st.last = to;
+    state.paintDirty = true;
+  }
+
+  function colorFinish(st) {
+    const ctx = paintLayerCtx();
+    if (!ctx || !st) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.lineWidth = brushRadiusNatural();
+    ctx.strokeStyle = state.paintColor;
+    ctx.beginPath();
+    ctx.moveTo(st.lastMid.x, st.lastMid.y);
+    ctx.lineTo(st.last.x, st.last.y);
+    ctx.stroke();
+    ctx.restore();
+    state.paintDirty = true;
+  }
+
+  function clearPaint() {
+    const p = getParts();
+    const canvas = p ? paintCanvas(p) : null;
+    if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    state.paintDirty = false;
+    invalidatePickerSample();
+    syncPaintPayload();
+  }
+
+  // Composite the picture and the paint layer once per picker session so hovering
+  // does not re-render the whole image for every pixel sample.
+  function pickerSampleCanvas() {
+    const p = getParts();
+    const nat = naturalSize();
+    if (!p || !nat || !p.img) return null;
+    const cached = state.pickSampleCanvas;
+    if (cached && cached.width === nat.w && cached.height === nat.h) return cached;
+    const canvas = document.createElement("canvas");
+    canvas.width = nat.w;
+    canvas.height = nat.h;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, nat.w, nat.h);
+    try {
+      ctx.drawImage(p.img, 0, 0, nat.w, nat.h);
+      const paint = paintCanvas(p);
+      if (paint) ctx.drawImage(paint, 0, 0, nat.w, nat.h);
+    } catch (e) {
+      return null;
+    }
+    state.pickSampleCanvas = canvas;
+    return canvas;
+  }
+
+  function sampleCompositeColor(clientX, clientY) {
+    const pt = naturalPoint(clientX, clientY);
+    const canvas = pickerSampleCanvas();
+    if (!pt || !canvas) return null;
+    const x = clamp(Math.round(pt.x), 0, canvas.width - 1);
+    const y = clamp(Math.round(pt.y), 0, canvas.height - 1);
+    try {
+      const d = canvas.getContext("2d").getImageData(x, y, 1, 1).data;
+      return rgbToHex([d[0], d[1], d[2]]);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function applyPickedColor(color) {
+    if (!color) return;
+    state.paintColor = color;
+    writeLS(LS.paintColor, color);
+    const p = getParts();
+    const bar = p && p.host ? p.host.querySelector(".inpsam-bar") : null;
+    const input = bar ? bar.querySelector(".inpsam-c-paint") : null;
+    if (input && input.value !== color) input.value = color;
+    refreshToolbarState();
+  }
+
+  function pickColorAt(clientX, clientY) {
+    const color = sampleCompositeColor(clientX, clientY);
+    if (!color) {
+      setStatus("cannot sample this pixel", true);
+      return;
+    }
+    applyPickedColor(color);
+    setStatus(`picked ${color}`);
+    if (state.pickerPrevMode) {
+      const prev = state.pickerPrevMode;
+      state.pickerPrevMode = null;
+      setMode(prev);
+    }
   }
 
   /* --------------------------- mask colors (brush / SAM) --------------------------- */
@@ -686,7 +957,7 @@
       rebuildOutline();
     },
     resetMask: () => {
-      state.undo = [];
+      state.undo = state.undo.filter((record) => record && record.kind === "paint");
       syncMaskToGradio();
       rebuildOutline();
     },
@@ -762,12 +1033,14 @@
     bar.innerHTML = `
       <div class="inpsam-row">
         <span class="inpsam-modes">
-          <button type="button" class="inpsam-btn" data-mode="paint" title="Gradio mask paint brush">\u270E Paint</button>
+          <button type="button" class="inpsam-btn" data-mode="brush" title="Color brush: paint on the picture (B); ALT + right-drag resizes the brush">\u270E Brush</button>
+          <button type="button" class="inpsam-btn" data-mode="paint" title="Origin masking mode: paint the inpaint mask (M)">\u25C9 Mask</button>
+          <button type="button" class="inpsam-btn" data-mode="picker" title="Color picker: pick a color from the picture (I)">\u25A0 Pick</button>
           <button type="button" class="inpsam-btn" data-mode="sam" title="Click a point: segment it (SAM) and add to mask">\u2702 SAM pick</button>
           <button type="button" class="inpsam-btn" data-mode="erase" title="Erase mask (uses the gradio brush radius)">\u232B Erase</button>
         </span>
         <span class="inpsam-sep"></span>
-        <button type="button" class="inpsam-btn inpsam-icon" data-act="undo" title="Undo last SAM pick / erase (restores mask snapshot; discards strokes painted after it)">\u21B6</button>
+        <button type="button" class="inpsam-btn inpsam-icon" data-act="undo" title="Undo the last mask or paint change (Ctrl+Z)">\u21B6</button>
         <button type="button" class="inpsam-btn inpsam-icon" data-act="fit" title="Reset zoom (fit)">\u27F2</button>
         <span class="inpsam-status"></span>
       </div>
@@ -793,9 +1066,11 @@
           <input type="range" class="inpsam-size" min="1" max="400" step="1" />
           <span class="inpsam-size-val"></span>
         </label>
-        <label title="Color of brush-painted mask strokes">brush <input type="color" class="inpsam-c-brush" /></label>
+        <label title="Color of brush-painted mask strokes">mask <input type="color" class="inpsam-c-brush" /></label>
         <label title="Color of SAM-picked segments">SAM <input type="color" class="inpsam-c-sam" /></label>
         <label title="Color of the silhouette outline around the mask">outline <input type="color" class="inpsam-c-outline" /></label>
+        <label title="Color of the paint layer merged into the image on Generate">paint <input type="color" class="inpsam-c-paint" /></label>
+        <button type="button" class="inpsam-btn inpsam-icon" data-act="clear-paint" title="Discard the color paint layer">\u2327</button>
         <button type="button" class="inpsam-btn inpsam-icon inpsam-blink" title="Toggle blinking outline (off = static outline)">\u25C9</button>
       </div>`;
     p.host.appendChild(bar);
@@ -805,7 +1080,10 @@
 
     // mode buttons
     bar.querySelectorAll("[data-mode]").forEach((btn) => {
-      btn.addEventListener("click", () => setMode(btn.dataset.mode));
+      btn.addEventListener("click", () => {
+        state.pickerPrevMode = null;
+        setMode(btn.dataset.mode);
+      });
     });
     // mask index
     bar.querySelectorAll("[data-idx]").forEach((btn) => {
@@ -868,6 +1146,19 @@
         rebuildOutline();
       }, 80);
     });
+    const cPaint = bar.querySelector(".inpsam-c-paint");
+    cPaint.value = state.paintColor;
+    cPaint.addEventListener("input", () => {
+      const v = normalizeHex(cPaint.value);
+      if (!v) return;
+      state.paintColor = v;
+      writeLS(LS.paintColor, v);
+    });
+    bar.querySelector('[data-act="clear-paint"]').addEventListener("click", () => {
+      if (state.paintDirty) pushPaintSnapshot();
+      clearPaint();
+      setStatus("paint layer cleared");
+    });
     bar.querySelector(".inpsam-blink").addEventListener("click", () => {
       state.blink = !state.blink;
       writeLS(LS.blink, state.blink ? "1" : "0");
@@ -896,6 +1187,8 @@
     if (cS && cS.value !== state.samColor) cS.value = state.samColor;
     const cO = bar.querySelector(".inpsam-c-outline");
     if (cO && cO.value !== state.outlineColor) cO.value = state.outlineColor;
+    const cP = bar.querySelector(".inpsam-c-paint");
+    if (cP && cP.value !== state.paintColor) cP.value = state.paintColor;
     const bl = bar.querySelector(".inpsam-blink");
     if (bl) bl.classList.toggle("inpsam-active", state.blink);
     const sz = bar.querySelector(".inpsam-size");
@@ -934,13 +1227,33 @@
   async function undoLast() {
     const p = getParts();
     if (!p) return;
-    const snap = state.undo.pop();
-    if (!snap) {
+    const record = state.undo.pop();
+    if (!record) {
       setStatus("nothing to undo");
       return;
     }
     try {
-      const im = await loadImage(snap);
+      if (record.kind === "paint") {
+        const canvas = paintCanvas(p);
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (record.data) {
+          const im = await loadImage(record.data);
+          ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
+        }
+        ctx.restore();
+        state.paintDirty = !!record.dirty;
+        invalidatePickerSample();
+        syncPaintPayload();
+        setStatus("undo paint");
+        return;
+      }
+
+      const data = typeof record === "string" ? record : record.data;
+      const im = await loadImage(data);
       const ctx = p.maskCanvas.getContext("2d");
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -959,14 +1272,18 @@
   /* ---------------------------------- mode handling -------------------------------- */
 
   function setMode(mode) {
-    if (["paint", "sam", "erase"].indexOf(mode) === -1) mode = "paint";
+    if (["paint", "brush", "picker", "sam", "erase"].indexOf(mode) === -1) mode = "paint";
+    if (mode !== "picker") state.pickerPrevMode = null;
     state.mode = mode;
     writeLS(LS.mode, mode);
+    invalidatePickerSample();
     applyModeAppearance();
     refreshToolbarState();
     if (mode === "sam") setStatus("click a point to pick a segment");
     else if (mode === "erase") setStatus("drag to erase mask");
-    else setStatus("");
+    else if (mode === "brush") setStatus("color brush: paint on the picture (B)");
+    else if (mode === "picker") setStatus("color picker: click the picture to pick a color (I)");
+    else setStatus("origin masking mode: paint the inpaint mask (M)");
   }
 
   function clearGradioCursor() {
@@ -992,7 +1309,7 @@
 
   function updateCursor(e) {
     const c = cursorEl();
-    if (state.mode !== "erase") {
+    if (state.mode !== "erase" && state.mode !== "picker") {
       c.style.display = "none";
       return;
     }
@@ -1002,10 +1319,23 @@
       c.style.display = "none";
       return;
     }
+    if (state.mode === "picker") {
+      const color = sampleCompositeColor(e.clientX, e.clientY);
+      c.style.width = "18px";
+      c.style.height = "18px";
+      c.style.borderRadius = "4px";
+      c.style.background = color || "transparent";
+      c.style.left = `${e.clientX + 10}px`;
+      c.style.top = `${e.clientY + 10}px`;
+      c.style.display = "block";
+      return;
+    }
     const r = p.iface.getBoundingClientRect();
     const d = brushRadiusNatural() * (r.width / nat.w);
     c.style.width = `${d}px`;
     c.style.height = `${d}px`;
+    c.style.borderRadius = "50%";
+    c.style.background = "transparent";
     c.style.left = `${e.clientX - d / 2}px`;
     c.style.top = `${e.clientY - d / 2}px`;
     c.style.display = "block";
@@ -1017,7 +1347,7 @@
     p.wrap.querySelectorAll("canvas").forEach((cv) => {
       cv.style.cursor = "crosshair"; // keep the native cursor visible in every mode
     });
-    if (state.mode !== "erase") cursorEl().style.display = "none";
+    if (state.mode !== "erase" && state.mode !== "picker") cursorEl().style.display = "none";
     clearGradioCursor();
   }
 
@@ -1071,10 +1401,14 @@
         const q = getParts();
         if (!q || inBar(q, e)) return;
         if (e.button === 2 && overImage(q, e)) {
-          // right mouse: pan in every mode (also stops gradio from painting with RMB)
           e.preventDefault();
           e.stopPropagation();
-          startPan(e);
+          if (e.altKey && (state.mode === "brush" || state.mode === "paint" || state.mode === "erase")) {
+            startAltResize(e);
+          } else {
+            // plain right mouse: pan in every mode (also stops gradio from painting with RMB)
+            startPan(e);
+          }
           return;
         }
         if (!inCanvas(q, e)) return;
@@ -1085,6 +1419,10 @@
           samPick(e.clientX, e.clientY);
           return;
         }
+        if (state.mode === "picker") {
+          pickColorAt(e.clientX, e.clientY);
+          return;
+        }
         const to = naturalPoint(e.clientX, e.clientY);
         if (!to) return;
         if (state.mode === "erase") {
@@ -1092,10 +1430,14 @@
           state.erase = { last: null };
           eraseStroke(null, to);
           state.erase.last = to;
+        } else if (state.mode === "brush") {
+          pushPaintSnapshot();
+          state.paint = { target: "paint", last: to, lastMid: to };
+          colorDot(to);
         } else {
-          // paint: custom full-speed stroke (gradio's lazy-brush painting is bypassed entirely)
+          // mask: custom full-speed stroke (gradio's lazy-brush painting is bypassed entirely)
           pushSnapshot();
-          state.paint = { last: to, lastMid: to };
+          state.paint = { target: "mask", last: to, lastMid: to };
           paintDot(to);
         }
         addGestureListeners();
@@ -1115,8 +1457,10 @@
           return;
         }
         updateCursor(e);
-        if (state.mode === "paint") drawBrushRing(e.clientX, e.clientY);
-        if (inCanvas(q, e) || state.paint || state.erase || state.pan) {
+        if (!state.altResize && (state.mode === "paint" || state.mode === "brush")) {
+          drawBrushRing(e.clientX, e.clientY);
+        }
+        if (inCanvas(q, e) || state.paint || state.erase || state.pan || state.altResize) {
           e.stopPropagation();
           e.preventDefault();
         }
@@ -1184,6 +1528,8 @@
       (e) => {
         if (e.target && e.target.classList && e.target.classList.contains("absolute-img")) {
           state.undo = [];
+          state.imgEl = null; // force ensure() to re-check the picture (and discard stale paint)
+          setTimeout(ensure, 0);
           setTimeout(() => {
             applySafePadding();
             applyModeAppearance();
@@ -1301,6 +1647,53 @@
     if (fitCanvasesToWrap(p)) fitView();
   }
 
+  function editableTarget(target) {
+    if (!target) return false;
+    const tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+  }
+
+  function editorVisible() {
+    const p = getParts();
+    if (!p || !p.img || !p.root.isConnected) return false;
+    const r = p.root.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const style = window.getComputedStyle(p.root);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function bindShortcuts() {
+    if (document.documentElement.dataset.inpsamKeys === "1") return;
+    document.documentElement.dataset.inpsamKeys = "1";
+    document.addEventListener("keydown", (e) => {
+      if (editableTarget(e.target)) return;
+      const key = String(e.key || "").toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === "z") {
+        if (!editorVisible()) return;
+        e.preventDefault();
+        e.stopPropagation();
+        undoLast();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!editorVisible()) return;
+      if (key === "b") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMode("brush");
+      } else if (key === "i") {
+        e.preventDefault();
+        e.stopPropagation();
+        state.pickerPrevMode = state.mode !== "picker" ? state.mode : null;
+        setMode("picker");
+      } else if (key === "m") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMode("paint");
+      }
+    });
+  }
+
   function ensure() {
     const p = getParts();
     if (!p) {
@@ -1308,10 +1701,19 @@
       document.querySelectorAll(".inpsam-bar").forEach((b) => b.remove());
       cursorEl().style.display = "none";
       state.layout = null;
+      if (state.imgEl || state.imgSrc) {
+        // the picture was removed: drop the paint layer and its payload
+        state.imgEl = null;
+        state.imgSrc = null;
+        state.paintDirty = false;
+        invalidatePickerSample();
+        setTextareaValue(PAINT_PAYLOAD_ID, "");
+      }
       return;
     }
     bindRootListeners(p);
     watchBrushRadius();
+    ensurePaintCanvas(p);
 
     // keep the silhouette layer sized to the mask canvas (also after gradio resizes/swaps the image)
     const oc = p.wrap.querySelector(".inpsam-outline");
@@ -1331,13 +1733,18 @@
     refreshToolbarState();
     applySafePadding();
 
-    // image identity changed -> reset state and fit the view
+    // A new picture (or a re-rendered image element) discards the paint layer.
     if (p.img && state.imgEl !== p.img) {
+      const imgSrc = p.img.currentSrc || p.img.src || "";
+      const hadImage = !!state.imgSrc;
+      const newPicture = hadImage && imgSrc !== state.imgSrc;
       state.imgEl = p.img;
+      state.imgSrc = imgSrc;
       state.undo = [];
       state.zoom = 1;
       state.panX = 0;
       state.panY = 0;
+      if (newPicture) clearPaint();
       applyModeAppearance();
       const refit = () => {
         const q = getParts();
@@ -1353,7 +1760,9 @@
 
   function boot() {
     // restore persisted settings
-    state.mode = ["paint", "sam", "erase"].indexOf(readLS(LS.mode, "paint")) !== -1 ? readLS(LS.mode, "paint") : "paint";
+    const modes = ["paint", "brush", "picker", "sam", "erase"];
+    const savedMode = readLS(LS.mode, "paint");
+    state.mode = modes.indexOf(savedMode) !== -1 ? savedMode : "paint";
     state.maskIdx = clamp(parseInt(readLS(LS.maskIdx, "0"), 10) || 0, 0, 2);
     state.expand = clamp(parseInt(readLS(LS.expand, String(DEFAULT_EXPAND)), 10) || 0, 0, 100);
     const cachedBrush = parseFloat(readLS(LS.brush, ""));
@@ -1361,6 +1770,7 @@
 
     // colors + blink (remembered across sessions; defaults mirror the classic white-brush / dark-SAM look)
     state.brushColor = normalizeHex(readLS(LS.brushColor, "")) || gradioBrushColor();
+    state.paintColor = normalizeHex(readLS(LS.paintColor, "")) || "#ff3366";
     state.samColor = normalizeHex(readLS(LS.samColor, "")) || "#0b0f19";
     state.outlineColor = normalizeHex(readLS(LS.outlineColor, "")) || "#00e0ff";
     state.blink = readLS(LS.blink, "1") !== "0";
@@ -1368,6 +1778,7 @@
     state.palette.brush = state.brushColor;
     state.palette.sam = state.samColor;
 
+    bindShortcuts();
     ensure();
     setMode(state.mode);
     updateBlinkLoop();

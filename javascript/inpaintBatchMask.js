@@ -1104,6 +1104,7 @@
             event.preventDefault();
             event.stopPropagation();
             if (press && press.moved) return; // right-drag pans the canvas: not a menu request
+            if (event.altKey) return; // ALT + right-drag resizes the brush: no menu either
             showMenu(event);
         });
 

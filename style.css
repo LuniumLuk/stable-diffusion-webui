@@ -4605,6 +4605,19 @@ body.resizing .resize-handle {
     pointer-events: none;
 }
 
+/* color paint layer: above the picture (drawing/temp z11/z12), below the mask overlay (z13) */
+.inpsam-paint {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    margin: auto;
+    z-index: 12;
+    pointer-events: none;
+}
+
 .inpsam-colorrow label {
     display: inline-flex;
     align-items: center;

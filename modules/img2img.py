@@ -205,6 +205,35 @@ def decode_inpaint_batch_masks(payload: str) -> list:
     return masks
 
 
+def merge_inpaint_paint_layer(image, payload: str):
+    """Composite the mask editor's color paint layer onto the init image.
+
+    The paint layer is a transient editor overlay: it is merged in memory for this
+    generation only, never saved to disk and never indexed into the gallery database.
+    """
+    if image is None or not isinstance(payload, str) or not payload:
+        return image
+
+    raw = payload.strip()
+    if raw.startswith("data:"):
+        _, _, raw = raw.partition(",")
+    try:
+        layer = Image.open(io.BytesIO(base64.b64decode(raw)))
+        layer.load()
+        layer = layer.convert("RGBA")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        print(f"Inpaint paint layer: could not be decoded, ignoring it ({exc}).")
+        return image
+
+    base = image.convert("RGBA")
+    if layer.size != base.size:
+        # a layer from a previous picture must never be stretched onto a new one
+        print(f"Inpaint paint layer: size {layer.size} does not match the image {base.size}, ignoring it.")
+        return image
+    base.alpha_composite(layer)
+    return base.convert("RGB")
+
+
 def process_inpaint_batch(p, masks, args):
     """Inpaint every mask in order, feeding each result into the next mask as its input image.
 
@@ -271,7 +300,7 @@ def process_inpaint_batch(p, masks, args):
     return Processed(p, images_list=[current_image], seed=last.seed, info=last_infotext, subseed=last.subseed, infotexts=[last_infotext])
 
 
-def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, img2img_batch_mask_payload: str, macro_values_json: str = "{}", *args):
+def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_prompt: str, prompt_styles, init_img, sketch, init_img_with_mask, inpaint_color_sketch, inpaint_color_sketch_orig, init_img_inpaint, init_mask_inpaint, mask_blur: int, mask_alpha: float, inpainting_fill: int, n_iter: int, batch_size: int, cfg_scale: float, image_cfg_scale: float, denoising_strength: float, selected_scale_tab: int, height: int, width: int, scale_by: float, resize_mode: int, inpaint_full_res: bool, inpaint_full_res_padding: int, inpainting_mask_invert: int, img2img_batch_input_dir: str, img2img_batch_output_dir: str, img2img_batch_inpaint_mask_dir: str, override_settings_texts, img2img_batch_use_png_info: bool, img2img_batch_png_info_props: list, img2img_batch_png_info_dir: str, img2img_batch_source_type: str, img2img_batch_upload: list, img2img_batch_mask_payload: str, img2img_inpaint_paint_payload: str = "", macro_values_json: str = "{}", *args):
     override_settings = create_override_settings_dict(override_settings_texts)
     macro_values = {}
     try:
@@ -294,6 +323,7 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
         mask = None
     elif mode == 2:  # inpaint
         image, mask = init_img_with_mask["image"], init_img_with_mask["mask"]
+        image = merge_inpaint_paint_layer(image, img2img_inpaint_paint_payload)
         if mask is not None:
             mask = processing.create_binary_mask(mask)
     elif mode == 3:  # inpaint sketch

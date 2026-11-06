@@ -295,6 +295,27 @@ def _decode_image(payload: str) -> Image.Image:
     return image.convert("RGB") if image.mode not in ("RGB", "RGBA", "L") else image
 
 
+def _merge_paint_layer(image, payload) -> Image.Image:
+    """Composite the mask editor's colour layer onto the init image for this run only.
+
+    The layer is never written to disk and is not indexed into the gallery database.
+    """
+    if image is None or not payload:
+        return image
+    try:
+        layer = _decode_image(payload).convert("RGBA")
+    except Exception as exc:  # noqa: BLE001 - a bad overlay must not abort a job
+        print(f"Mobile inpaint paint layer: could not be decoded, ignoring it ({exc}).")
+        return image
+    base = image.convert("RGBA")
+    if layer.size != base.size:
+        # a layer from a previous picture must never be stretched onto a new one
+        print(f"Mobile inpaint paint layer: size {layer.size} does not match the image {base.size}, ignoring it.")
+        return image
+    base.alpha_composite(layer)
+    return base.convert("RGB")
+
+
 def _file_url(path: str) -> str:
     normalized = str(path or "").replace(os.sep, "/")
     return f"/file={quote(normalized, safe='')}" if normalized else ""
@@ -605,6 +626,7 @@ def _run_job(payload: dict, tab: str) -> dict:
     else:
         defaults = _ui_defaults("img2img")
         init_image = _decode_image(payload.get("init_image"))
+        init_image = _merge_paint_layer(init_image, payload.get("paint_layer"))
         mask = None
         if payload.get("mask"):
             mask = _decode_image(payload.get("mask")).convert("L")
@@ -2861,6 +2883,27 @@ def register_routes(app):
                 pass
 
         return {"path": outpath, "url": _file_url(outpath)}
+
+    @app.post("/mlite/api/override-origin")
+    def mlite_override_origin(payload: dict = Body(default={})):
+        """Replace the gallery image the compose session was opened from."""
+        from modules import composer_origin
+
+        if not payload.get("image"):
+            raise HTTPException(status_code=422, detail="image is required")
+        path = str(payload.get("path") or "")
+        if not path:
+            raise HTTPException(status_code=422, detail="path is required")
+
+        image = _decode_image(payload["image"])
+        state = payload.get("state")
+        state_json = json.dumps(state, ensure_ascii=False) if state else ""
+        try:
+            result = composer_origin.override_origin(image, path, state_json)
+        except composer_origin.OriginError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        result["url"] = _file_url(result["path"])
+        return result
 
     # Static files are registered last so the /mlite/api/* routes win.
     @app.get("/mlite/{asset_path:path}")

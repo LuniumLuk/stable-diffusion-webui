@@ -9,6 +9,8 @@ A web interface for Stable Diffusion, implemented using Gradio library.
 - One click install and run script (but you still must install python and git)
 - Outpainting
 - Inpainting
+    - the Inpaint tab's mask editor has a color brush (`B`), a color picker (`I`) and origin masking mode (`M`), `Ctrl+Z` undo, and `ALT` + right-mouse drag to resize the brush; the color paint layer is merged into the image for that run only (it is never saved or indexed) and is discarded when a new image is loaded
+    - the mobile Inpaint mask editor offers the same color brush, picker and paint layer with touch controls
 - Color Sketch
 - Prompt Matrix
 - Stable Diffusion Upscale

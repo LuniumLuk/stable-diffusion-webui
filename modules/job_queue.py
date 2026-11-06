@@ -517,7 +517,7 @@ def _build_job_details(job) -> dict:
         # 27:batch_input_dir, 28:batch_output_dir, 29:batch_inpaint_mask_dir,
         # 30:override_settings, 31:batch_use_png_info, 32:batch_png_info_props,
         # 33:batch_png_info_dir, 34:batch_source_type, 35:batch_upload,
-        # 36:batch_mask_payload, 37+: custom_inputs
+        # 36:batch_mask_payload, 37:inpaint_paint_payload, 38:macro_values, 39+: custom_inputs
         if len(args) > 1:
             details["Prompt"] = _safe_detail_val(args[1])
         if len(args) > 2:
@@ -548,8 +548,8 @@ def _build_job_details(job) -> dict:
         if len(args) > 11:
             details["Mask blur"] = _safe_detail_val(args[11])
 
-        # Try to extract seed, sampler, steps, scheduler from custom_inputs (args[36:])
-        custom = list(args[36:]) if len(args) > 36 else []
+        # Try to extract seed, sampler, steps, scheduler from custom_inputs (args[39:])
+        custom = list(args[39:]) if len(args) > 39 else []
         _extract_custom_params(custom, details)
 
     elif job.job_type == "krea2":

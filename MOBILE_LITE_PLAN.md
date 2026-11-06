@@ -172,7 +172,10 @@ Details:
   (presets + custom, first image adopts its own size once), flip, delete.
 - Output actions: **Save** → `outputs/composition/composition-<ts>.png` (+`.composerstate.json`
   layer sidecar) so it shows up in the Gallery's *Composed* view; **→ Image** / **→ Inpaint**
-  flatten with white background and drop the result into the Image screen as source.
+  flatten with white background and drop the result into the Image screen as source;
+  **🔁 Override Origin** (enabled once a gallery image was loaded into the session) rewrites
+  that origin image in place and refreshes its gallery card — the previous file is copied to
+  `outputs/composition/origin-backups` first.
 
 ### 4.6 Cross-screen flows
 
@@ -212,6 +215,8 @@ POST /mlite/api/gallery/action → endorse/unendorse/dislike/undislike/archive/u
 GET  /mlite/api/suggestions  → endorsed prompt/negative keywords (for chips)
 POST /mlite/api/options      → mobile_lite_mode and sd_model_checkpoint (validated, saved)
 POST /mlite/api/save-image   → dataURL → outputs/composition (+ sidecar), used by Compose
+POST /mlite/api/override-origin → dataURL + gallery path → rewrite the origin image in place
+                               (backup kept), refresh the gallery row + thumbnails
 ```
 
 Key implementation points:

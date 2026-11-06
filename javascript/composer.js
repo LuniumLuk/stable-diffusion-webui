@@ -16,6 +16,8 @@
     _composerLog('makeComposerController() called, root.id=' + (root && root.id));
     const state = {
       layers: [],
+      // gallery image the composer was opened from (target of "Override Origin")
+      originPath: "",
       active: -1,
       lockToSelected: false,
       lockEditBackground: false,
@@ -230,6 +232,28 @@
     function setStatus(text) {
       statusText.textContent = text;
     }
+
+    function originFileName() {
+      const path = String(state.originPath || "");
+      return path.split(/[\\/]/).pop() || path;
+    }
+
+    function syncOverrideOriginButton() {
+      const btn = root.querySelector("#composer_right_override_origin");
+      if (!btn) return;
+      const hasOrigin = !!state.originPath;
+      btn.classList.toggle("is-disabled", !hasOrigin);
+      btn.setAttribute("aria-disabled", hasOrigin ? "false" : "true");
+      btn.title = hasOrigin
+        ? `Replace "${originFileName()}" with the current composition (the original is backed up)`
+        : "Open an image from the Gallery to give the composition an origin image";
+    }
+
+    function setOriginPath(path) {
+      state.originPath = String(path || "");
+      syncOverrideOriginButton();
+    }
+    state.setOriginPath = setOriginPath;
 
     function paintToolName() {
       return state.tool === "line" ? "Line" : state.tool === "eraser" ? "Eraser" : "Brush";
@@ -4520,6 +4544,7 @@
         if (!file) return;
         try {
           const text = await file.text();
+          setOriginPath("");
           await restoreFromConfigJson(text);
         } catch (e) {
           setStatus("Error loading config file: " + e.message);
@@ -4598,6 +4623,59 @@
       });
     });
 
+    // ── Override Origin: confirm, then write the composition over the origin. ─
+    function watchOverrideResult() {
+      const host = document.getElementById("composer_gradio_status");
+      if (!host) return;
+      let tries = 0;
+      const initial = host.textContent.trim();
+      const tick = () => {
+        const text = host.textContent.trim();
+        if (text && text !== initial && /^(Origin overridden|Override failed)/i.test(text)) {
+          setStatus(text);
+          if (/^Origin overridden/i.test(text)) {
+            if (typeof window.galleryV2Refresh === "function") window.galleryV2Refresh();
+            if (window.endorsedGallery && typeof window.endorsedGallery.refreshGallery === "function") {
+              window.endorsedGallery.refreshGallery();
+            }
+          }
+          return;
+        }
+        tries += 1;
+        if (tries < 120) setTimeout(tick, 250);
+      };
+      setTimeout(tick, 250);
+    }
+
+    const overrideOriginBtn = root.querySelector("#composer_right_override_origin");
+    if (overrideOriginBtn) {
+      overrideOriginBtn.addEventListener("click", () => {
+        if (!state.originPath) {
+          setStatus("Override Origin: open an image from the Gallery first.");
+          return;
+        }
+        const name = originFileName();
+        const ok = window.confirm(
+          `Replace the origin image "${name}" with the current composition?\n\n` +
+          "The original file is backed up to outputs/composition/origin-backups."
+        );
+        if (!ok) return;
+        const tgt = document.getElementById("composer_override_origin");
+        if (!tgt) {
+          setStatus("Override Origin bridge is missing (reload the UI).");
+          return;
+        }
+        try {
+          tgt.click();
+          setStatus(`Overriding ${name}…`);
+          watchOverrideResult();
+        } catch (e) {
+          setStatus("Override Origin failed: " + ((e && e.message) || e));
+        }
+      });
+    }
+    syncOverrideOriginButton();
+
     root.__composer_state = state;
     _composerLog('  root.__composer_state set, layers=' + state.layers.length + ' assets=' + state.assets.length);
     fitCanvasToParent();
@@ -4667,6 +4745,8 @@
       height: canvas.height,
       background: null,
       background_color: state.useColorBackground ? state.backgroundColor : null,
+      // gallery image this composition was opened from (Override Origin target)
+      origin_path: state.originPath || "",
       layers: state.layers.map((l) => ({
         name: l.name,
         path: l.path || "",
@@ -4703,6 +4783,9 @@
     const state = root.__composer_state;
     const canvas = root.querySelector("#composer_canvas");
     _composerLog('  state OK, canvas=' + (canvas ? canvas.width + 'x' + canvas.height : 'null'));
+
+    // the gallery item the composer is opened from is the "Override Origin" target
+    if (typeof state.setOriginPath === "function") state.setOriginPath(imagePath);
 
     function toFileUrl(absPath) {
       return `/file=${encodeURIComponent(String(absPath).replace(/\\/g, "/"))}`;
@@ -4757,6 +4840,21 @@
     }
   };
 
+  // Absolute file path behind a Gradio /file= URL, or "" for cache copies / data URLs.
+  function filePathFromUrl(src) {
+    const text = String(src || "");
+    const marker = text.indexOf("/file=");
+    if (marker < 0) return "";
+    let raw = text.slice(marker + 6).split("?")[0].split("#")[0];
+    try {
+      raw = decodeURIComponent(raw);
+    } catch (e) {
+      // keep the undecoded text
+    }
+    raw = raw.replace(/\\/g, "/");
+    return /^[A-Za-z]:\//.test(raw) ? raw : "";
+  }
+
   /**
    * Load a single image into the Composer as a background layer.
    * @param {string} src Any URL the browser can load (gallery /file= URL, data URL).
@@ -4801,11 +4899,17 @@
       // keep the default name when the URL is not decodable
     }
 
+    // this load replaces the canvas, so the previous origin no longer applies
+    const originPath = filePathFromUrl(src);
+    if (typeof root.__composer_state.setOriginPath === "function") {
+      root.__composer_state.setOriginPath(originPath);
+    }
+
     await root.__composer_state.restoreFromConfigJson(JSON.stringify({
       width: width,
       height: height,
       background_color: null,
-      layers: [{ name: name, src: dataUrl, x: width / 2, y: height / 2, scale: 1, rot_deg: 0, mirror: false, opacity: 1, is_background: true }],
+      layers: [{ name: name, path: originPath, src: dataUrl, x: width / 2, y: height / 2, scale: 1, rot_deg: 0, mirror: false, opacity: 1, is_background: true }],
     }));
   };
 

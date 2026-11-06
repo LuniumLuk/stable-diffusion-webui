@@ -492,6 +492,8 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
   color: #7dd3fc;
 }
 #composer_right .cmp-action-btn--primary:hover { background: rgba(56,189,248,.25); }
+#composer_right .cmp-action-btn.is-disabled { opacity: .45; cursor: not-allowed; }
+#composer_right .cmp-action-btn.is-disabled:hover { background: var(--block-background-fill, #1e293b); border-color: var(--block-border-color, #334155); }
 #composer_right .cmp-box-body { gap: 6px; }
 
 /* Hidden original Gradio action row (actions moved to right panel) */
@@ -883,6 +885,8 @@ background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0;
                 title="Render and auto-save the composition">&#127912; Compose to Output</button>
         <button id="composer_right_save" type="button" class="cmp-action-btn"
                 title="Save the latest composite output">&#128190; Save Output</button>
+        <button id="composer_right_override_origin" type="button" class="cmp-action-btn"
+                title="Replace the image this composition was opened from">&#128260; Override Origin</button>
         <button id="composer_right_save_config" type="button" class="cmp-action-btn"
                 title="Save the composer state without composing">&#9881; Save Config</button>
         <button id="composer_right_load_config" type="button" class="cmp-action-btn"
@@ -922,11 +926,8 @@ def _image_from_data_url(value):
                 return img.convert("RGBA")
 
 
-def compose_from_payload(payload_json):
-        if not payload_json:
-                raise gr.Error("No composer payload found. Add images first.")
-
-        payload = json.loads(payload_json)
+def render_composition(payload):
+        """Flatten a composer payload into one RGBA image."""
         width = int(payload.get("width", 1024))
         height = int(payload.get("height", 768))
 
@@ -989,9 +990,38 @@ def compose_from_payload(payload_json):
                 stage.paste(layer_img, (paste_x, paste_y))
                 canvas = Image.alpha_composite(canvas, stage)
 
+        return canvas
+
+
+def compose_from_payload(payload_json):
+        if not payload_json:
+                raise gr.Error("No composer payload found. Add images first.")
+
+        payload = json.loads(payload_json)
+        canvas = render_composition(payload)
         saved_path = _save_composite_png(canvas)
         _save_composer_config_sidecar(saved_path, payload_json)
         return canvas, f"Composited {len(payload.get('layers', []))} layer(s). Auto-saved: {saved_path}"
+
+
+def override_origin_composition(payload_json):
+        """Render the composition and write it over the image it was opened from."""
+        if not payload_json:
+                raise gr.Error("No composer payload found. Add images first.")
+
+        from modules import composer_origin
+
+        payload = json.loads(payload_json)
+        if not payload.get("layers") and not payload.get("background_color"):
+                return gr.update(), "Override failed: the composition is empty."
+
+        canvas = render_composition(payload)
+        origin = str(payload.get("origin_path") or "").strip()
+        try:
+                result = composer_origin.override_origin(canvas, origin, payload_json)
+        except composer_origin.OriginError as exc:
+                return canvas, f"Override failed: {exc}"
+        return canvas, f"Origin overridden: {result['path']} (backup: {result['backup']})"
 
 
 def _composer_output_dir() -> str:
@@ -1282,6 +1312,7 @@ def on_ui_tabs():
                 with gr.Row(elem_classes="composer-hidden-actions"):
                         compose_btn = gr.Button("Compose to Output", variant="primary", elem_id="composer_compose")
                         save_btn = gr.Button("Save Output", elem_id="composer_save")
+                        override_origin_btn = gr.Button("Override Origin", elem_id="composer_override_origin")
                         save_config_btn = gr.Button("Save Config", elem_id="composer_save_config")
                         load_config_btn = gr.Button("Load Config…", elem_id="composer_load_config_btn")
                         caption_btn = gr.Button("Generate Caption", elem_id="composer_caption_btn")
@@ -1290,7 +1321,7 @@ def on_ui_tabs():
                         send_to_extras = gr.Button("Send Output to Extras", elem_id="composer_send_to_extras")
 
                 output_image = gr.Image(label="Composite Output", type="pil", image_mode="RGBA", interactive=False, elem_id="composer_output")
-                status = gr.Markdown("Ready.")
+                status = gr.Markdown("Ready.", elem_id="composer_gradio_status")
                 caption_output = gr.Textbox(
                         label="Composition Caption",
                         lines=12,
@@ -1312,6 +1343,14 @@ def on_ui_tabs():
                         inputs=[output_image],
                         outputs=[status],
                         show_progress=False,
+                )
+
+                override_origin_btn.click(
+                        fn=override_origin_composition,
+                        _js="composer_export_payload",
+                        inputs=[payload_state],
+                        outputs=[output_image, status],
+                        show_progress=True,
                 )
 
                 save_config_btn.click(

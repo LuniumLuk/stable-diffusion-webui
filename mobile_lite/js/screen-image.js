@@ -14,7 +14,7 @@ import { metaFromItem, openResultViewer } from './send.js';
 // ------------------------------------------------------------------ state
 
 const mask = {
-  tool: 'paint', // paint | erase | sam
+  tool: 'paint', // paint (origin mask) | erase | sam | brush (colour layer) | picker
   drawing: false,
   last: null,
   currentOp: null, // stroke op being painted (pinch start removes it again)
@@ -24,6 +24,16 @@ const mask = {
   poseBusy: false,
   lastPick: null, // { point, masks: [dataUrl], applied: opIndex }
 };
+
+/** Colour paint layer merged into the image on Generate (never saved itself). */
+const colorPaint = {
+  drawing: false,
+  last: null,
+  currentOp: null,
+  ops: [], // {brush, color, points:[[x,y]]}
+};
+const undoStack = []; // snapshots of {maskOps, paintOps, lastPick}
+const UNDO_LIMIT = 30;
 
 const SAM_MAX_SIDE = 1024;
 
@@ -36,6 +46,9 @@ let stageCard;
 let stageFrame;
 let stageImg;
 let maskOutline;
+let paintCanvas;
+let paintCtx;
+let paintColorInput;
 let outlineRaf = null;
 let editPill;
 let imageToolsNode;
@@ -43,6 +56,7 @@ let maskEditor;
 let maskColorsRow;
 let editing = false;
 let maskSized = false; // true once the mask canvas has been sized to a source image
+let paintSourceData = null; // dataUrl the paint layer belongs to
 let stageEmpty;
 let maskCanvas;
 let maskCtx;
@@ -90,6 +104,104 @@ function hexToRgb(value) {
     parseInt(hex.slice(2, 4), 16),
     parseInt(hex.slice(4, 6), 16),
   ];
+}
+
+function paintColorValue() {
+  const value = String(state.ui.inpaintPaintColor || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : '#ff3366';
+}
+
+function snapshotUndo() {
+  undoStack.push({
+    maskOps: mask.ops.slice(),
+    paintOps: colorPaint.ops.slice(),
+    lastPick: mask.lastPick ? { ...mask.lastPick } : null,
+  });
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+}
+
+async function undoLastAction() {
+  const snapshot = undoStack.pop();
+  if (!snapshot) {
+    toast('nothing to undo', 'warn', 1600);
+    return;
+  }
+  mask.ops = snapshot.maskOps;
+  colorPaint.ops = snapshot.paintOps;
+  mask.lastPick = snapshot.lastPick;
+  await replayMask();
+  replayPaint();
+}
+
+function drawPaintStroke(op) {
+  if (!paintCtx) return;
+  paintCtx.save();
+  paintCtx.strokeStyle = op.color;
+  paintCtx.fillStyle = op.color;
+  paintCtx.lineWidth = op.brush * 2;
+  paintCtx.lineCap = 'round';
+  paintCtx.lineJoin = 'round';
+  const points = op.points;
+  if (points.length === 1) {
+    paintCtx.beginPath();
+    paintCtx.arc(points[0][0], points[0][1], op.brush, 0, Math.PI * 2);
+    paintCtx.fill();
+  } else {
+    paintCtx.beginPath();
+    paintCtx.moveTo(points[0][0], points[0][1]);
+    for (let index = 1; index < points.length; index += 1) {
+      paintCtx.lineTo(points[index][0], points[index][1]);
+    }
+    paintCtx.stroke();
+  }
+  paintCtx.restore();
+}
+
+function replayPaint() {
+  if (!paintCtx) return;
+  paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+  for (const op of colorPaint.ops) drawPaintStroke(op);
+}
+
+function clearPaintOps(record = true) {
+  if (record && colorPaint.ops.length) snapshotUndo();
+  colorPaint.ops = [];
+  if (paintCtx) paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+}
+
+function paintHasInk() {
+  if (!paintCanvas || !paintCtx) return false;
+  const sample = document.createElement('canvas');
+  sample.width = 64;
+  sample.height = 64;
+  const ctx = sample.getContext('2d');
+  ctx.drawImage(paintCanvas, 0, 0, 64, 64);
+  const data = ctx.getImageData(0, 0, 64, 64).data;
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] > 16) return true;
+  }
+  return false;
+}
+
+function exportPaintDataUrl() {
+  return paintCanvas ? paintCanvas.toDataURL('image/png') : '';
+}
+
+function sampleImageColor(point) {
+  const source = activeSource();
+  if (!source) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(stageImg, 0, 0, canvas.width, canvas.height);
+  if (paintCanvas) ctx.drawImage(paintCanvas, 0, 0, canvas.width, canvas.height);
+  const x = clamp(Math.round(point.x), 0, canvas.width - 1);
+  const y = clamp(Math.round(point.y), 0, canvas.height - 1);
+  const data = ctx.getImageData(x, y, 1, 1).data;
+  return `#${[data[0], data[1], data[2]].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
 /**
@@ -208,7 +320,8 @@ function maskHasInk() {
   return false;
 }
 
-function clearMaskOps() {
+function clearMaskOps(record = true) {
+  if (record && (mask.ops.length || mask.lastPick)) snapshotUndo();
   mask.ops = [];
   mask.lastPick = null;
   if (maskCtx) maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
@@ -335,6 +448,10 @@ function setSource(source) {
     stageImg.hidden = true;
     stageEmpty.hidden = false;
     if (maskCanvas) maskCanvas.hidden = true;
+    if (paintCanvas) paintCanvas.hidden = true;
+    paintSourceData = null;
+    clearPaintOps(false);
+    undoStack.length = 0;
     exitMaskEdit();
     return;
   }
@@ -344,6 +461,7 @@ function setSource(source) {
   stageImg.src = source.dataUrl;
   fitStageFrame();
   stageImg.onload = () => {
+    if (state.image.source !== source) return; // a newer image replaced this one
     if (maskCanvas) {
       const sameSize = maskSized && maskCanvas.width === source.width && maskCanvas.height === source.height;
       if (sameSize) {
@@ -356,7 +474,16 @@ function setSource(source) {
         maskCanvas.height = source.height;
         maskCtx = maskCanvas.getContext('2d');
         maskSized = true;
-        clearMaskOps();
+        clearMaskOps(false);
+      }
+      // the colour paint layer belongs to one picture only
+      if (paintCanvas && paintSourceData !== source.dataUrl) {
+        paintSourceData = source.dataUrl;
+        paintCanvas.width = source.width;
+        paintCanvas.height = source.height;
+        paintCtx = paintCanvas.getContext('2d');
+        clearPaintOps(false);
+        undoStack.length = 0;
       }
       updateMaskVisibility();
       fitStageFrame();
@@ -412,6 +539,7 @@ function updateMaskVisibility() {
   const inpaint = isInpaint();
   const hasSource = !!activeSource();
   if (maskCanvas) maskCanvas.hidden = !(inpaint && hasSource);
+  if (paintCanvas) paintCanvas.hidden = !(inpaint && hasSource);
   if (maskOutline) maskOutline.hidden = !(inpaint && hasSource);
   // editing widgets live in the fullscreen editor only
   maskTools.hidden = !editing;
@@ -551,23 +679,75 @@ function strokeEnd() {
   updateMaskOutline();
 }
 
+function paintStrokeStart(point) {
+  colorPaint.drawing = true;
+  colorPaint.last = point;
+  const op = { brush: brushRadius(), color: paintColorValue(), points: [[point.x, point.y]] };
+  colorPaint.ops.push(op);
+  colorPaint.currentOp = op;
+  drawPaintStroke(op);
+}
+
+function paintStrokeMove(point) {
+  if (!colorPaint.drawing || !colorPaint.last || !paintCtx) return;
+  const previous = colorPaint.last;
+  if (Math.hypot(point.x - previous.x, point.y - previous.y) < 1.5) return;
+  colorPaint.last = point;
+  const op = colorPaint.ops[colorPaint.ops.length - 1];
+  op.points.push([point.x, point.y]);
+
+  paintCtx.save();
+  paintCtx.strokeStyle = op.color;
+  paintCtx.lineWidth = op.brush * 2;
+  paintCtx.lineCap = 'round';
+  paintCtx.lineJoin = 'round';
+  paintCtx.beginPath();
+  paintCtx.moveTo(previous.x, previous.y);
+  paintCtx.lineTo(point.x, point.y);
+  paintCtx.stroke();
+  paintCtx.restore();
+}
+
+function paintStrokeEnd() {
+  colorPaint.drawing = false;
+  colorPaint.last = null;
+  colorPaint.currentOp = null;
+}
+
+function pickerPick(point) {
+  const color = sampleImageColor(point);
+  if (!color) return;
+  state.ui.inpaintPaintColor = color;
+  persist();
+  if (paintColorInput) paintColorInput.value = color;
+  toast(`picked ${color}`, 'ok', 1800);
+}
+
 function gestureDown(owner, point) {
   if (mask.samBusy) return;
   if (mask.tool === 'sam') {
     if (claimGesture(owner)) samPick(point);
     return;
   }
+  if (mask.tool === 'picker') {
+    if (claimGesture(owner)) pickerPick(point);
+    return;
+  }
   if (!claimGesture(owner)) return;
-  strokeStart(point);
+  snapshotUndo();
+  if (mask.tool === 'brush') paintStrokeStart(point);
+  else strokeStart(point);
 }
 
 function gestureMove(owner, point) {
   if (gesture.owner !== owner) return;
-  strokeMove(point);
+  if (colorPaint.drawing) paintStrokeMove(point);
+  else strokeMove(point);
 }
 
 function gestureUp(owner) {
   strokeEnd();
+  paintStrokeEnd();
   releaseGesture(owner);
 }
 
@@ -616,14 +796,26 @@ function pinchMid(owner) {
 function pinchBegin(owner) {
   if (pinch || !editing) return;
   // the first finger may have started a stroke - drop it so a pinch leaves no stray dot
+  let dropped = false;
   if (mask.drawing && mask.currentOp) {
     const index = mask.ops.indexOf(mask.currentOp);
     if (index >= 0) mask.ops.splice(index, 1);
     replayMask();
+    dropped = true;
   }
+  if (colorPaint.drawing && colorPaint.currentOp) {
+    const index = colorPaint.ops.indexOf(colorPaint.currentOp);
+    if (index >= 0) colorPaint.ops.splice(index, 1);
+    replayPaint();
+    dropped = true;
+  }
+  if (dropped) undoStack.pop(); // the snapshot taken when that stroke started
   mask.drawing = false;
   mask.last = null;
   mask.currentOp = null;
+  colorPaint.drawing = false;
+  colorPaint.last = null;
+  colorPaint.currentOp = null;
   pinchLock = true;
   pinch = { owner, dist: 0, mid: { x: 0, y: 0 }, origin: { x: 0, y: 0 } };
   const points = pinchPoints(owner);
@@ -811,6 +1003,7 @@ async function samPick(point) {
     const masks = (result.masks || []).map((data) => `data:image/png;base64,${data}`);
     if (!masks.length) throw new Error(result.msg || 'no mask returned');
 
+    snapshotUndo();
     if (mask.lastPick && mask.lastPick.applied) {
       mask.ops = mask.ops.filter((op) => op !== mask.lastPick.applied);
     }
@@ -833,6 +1026,7 @@ async function applySamCandidate() {
   const masks = mask.lastPick.masks;
   const index = clamp(state.ui.samCandidate, 0, masks.length - 1);
   const op = { type: 'sam', dataUrl: masks[index] };
+  snapshotUndo();
   const previous = mask.lastPick.applied;
   mask.ops = mask.ops.filter((entry) => entry !== previous);
   mask.ops.push(op);
@@ -916,9 +1110,11 @@ function buildToolsRow() {
   on('params', updatePoseProviderButton);
 
   const row = el('div', { class: 'mask-tools' }, [
-    make('paint', '\u{1F58C}'),
-    make('erase', '\u{1F9F9}'),
-    make('sam', '\u2728'),
+    make('brush', '\u{1F58C}', 'Colour brush - paint on the picture (merged into the image on Generate)'),
+    make('paint', '\u25C9', 'Origin masking mode - paint the inpaint mask'),
+    make('picker', '\u{1F3A8}', 'Colour picker - sample a colour from the picture'),
+    make('erase', '\u{1F9F9}', 'Erase the mask'),
+    make('sam', '\u2728', 'SAM pick - tap a point to add a segment to the mask'),
     el('button', {
       class: 'btn tiny pose-mask-btn', type: 'button', text: '\u{1F9B4}',
       title: 'Pose masks - detect face/hand/foot points and add them to the mask',
@@ -928,11 +1124,15 @@ function buildToolsRow() {
     poseProviderButton,
     el('button', {
       class: 'btn tiny', type: 'button', text: '\u21B6', title: 'Undo',
-      onClick: async () => { mask.ops.pop(); await replayMask(); },
+      onClick: async () => { await undoLastAction(); },
     }),
     el('button', {
       class: 'btn tiny', type: 'button', text: '\u{1F5D1}', title: 'Clear mask',
       onClick: () => clearMaskOps(),
+    }),
+    el('button', {
+      class: 'btn tiny', type: 'button', text: '\u2327', title: 'Clear colour paint layer',
+      onClick: () => clearPaintOps(),
     }),
     el('div', { class: 'brush-slider' }, [brushSlider, brushLabel]),
     el('div', { class: 'row tight', style: { flex: '0 0 auto', gap: '4px' } }, candidateButtons),
@@ -996,6 +1196,7 @@ async function poseMasks() {
       return;
     }
 
+    snapshotUndo();
     for (const item of masks) {
       mask.ops.push({ type: 'pose', dataUrl: item.data, name: item.name });
     }
@@ -1071,6 +1272,7 @@ async function generate() {
     payload.inpaint_full_res = !!params.inpaintFullRes;
     payload.inpaint_full_res_padding = Number(params.inpaintPadding) || 0;
     payload.invert_mask = !!params.invertMask;
+    if (paintHasInk()) payload.paint_layer = exportPaintDataUrl();
   }
   if (params.poseInpaintEnabled) {
     payload.alwayson = { 'Pose inpaint': { args: poseInpaintArgs(params) } };
@@ -1096,6 +1298,7 @@ export function init(container) {
   prompt = createPromptEditor('image');
 
   stageImg = el('img', { class: 'stage-img', alt: '', hidden: true });
+  paintCanvas = el('canvas', { id: 'paintCanvas', hidden: true });
   maskCanvas = el('canvas', { id: 'maskCanvas', hidden: true });
   maskOutline = el('canvas', { id: 'maskOutline', hidden: true });
   stageEmpty = el('div', { class: 'stage-empty' }, [
@@ -1107,10 +1310,18 @@ export function init(container) {
     title: 'Open the fullscreen mask editor',
     onClick: () => enterMaskEdit(),
   });
-  stageFrame = el('div', { class: 'stage-frame' }, [stageImg, maskCanvas, maskOutline]);
+  stageFrame = el('div', { class: 'stage-frame' }, [stageImg, paintCanvas, maskCanvas, maskOutline]);
   stage = el('div', { class: 'image-stage' }, [stageFrame, stageEmpty, editPill]);
 
   maskColorsRow = el('div', { class: 'mask-colors' });
+  paintColorInput = el('input', {
+    type: 'color', value: paintColorValue(),
+    title: 'Colour of the paint layer (merged into the image on Generate)',
+  });
+  paintColorInput.addEventListener('input', () => {
+    state.ui.inpaintPaintColor = paintColorInput.value;
+    persist();
+  });
   const maskColorInput = el('input', {
     type: 'color', value: maskColor(), title: 'Mask colour (display only - generated mask stays white)',
   });
@@ -1145,6 +1356,7 @@ export function init(container) {
   });
   maskColorsRow.append(
     el('label', { title: 'Mask colour' }, [el('span', { text: '\u{1F58C} mask' }), maskColorInput]),
+    el('label', { title: 'Paint layer colour' }, [el('span', { text: '\u{1F3A8} paint' }), paintColorInput]),
     el('label', { title: 'Border colour' }, [el('span', { text: '\u2B1C border' }), outlineColorInput]),
     blinkButton,
   );

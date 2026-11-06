@@ -1551,6 +1551,18 @@ def get_file_mtime_by_path(path: str) -> float | None:
     return row[0] if row else None
 
 
+def set_file_mtime(path: str, mtime: float) -> None:
+    """Refresh the recorded mtime after an image was rewritten in place."""
+    if not path:
+        return
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE generated_images SET file_mtime=? WHERE path=?",
+            (float(mtime), path),
+        )
+        conn.commit()
+
+
 def count_generated_filtered(query: str = "", exclude_disliked: bool = True,
                             since_ts: float | None = None) -> int:
     where_sql, params = _build_keyword_where(query, ["prompt", "negative_prompt", "model_name", "sampler"])

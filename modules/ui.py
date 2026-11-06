@@ -626,6 +626,8 @@ def create_ui():
                                 add_copy_image_controls('inpaint', init_img_with_mask)
                                 gr.HTML(value="", elem_id="img2img_batch_mask_host", elem_classes=["img2img-batch-mask-host"])
                                 img2img_batch_mask_payload = gr.Textbox(value="", visible=False, elem_id="img2img_batch_mask_payload")
+                                # color paint layer from the mask editor; merged into the image in memory on Generate
+                                img2img_inpaint_paint_payload = gr.Textbox(value="", visible=False, elem_id="img2img_inpaint_paint_payload")
 
                             with gr.TabItem('Inpaint sketch', id='inpaint_sketch', elem_id="img2img_inpaint_sketch_tab") as tab_inpaint_color:
                                 inpaint_color_sketch = gr.Image(label="Color sketch inpainting", show_label=False, elem_id="inpaint_sketch", source="upload", interactive=True, type="pil", tool="color-sketch", image_mode="RGB", height=opts.img2img_editor_height, brush_color=opts.img2img_inpaint_sketch_default_brush_color)
@@ -863,6 +865,7 @@ def create_ui():
                     img2img_batch_source_type,
                     img2img_batch_upload,
                     img2img_batch_mask_payload,
+                    img2img_inpaint_paint_payload,
                     output_panel.macro_values,
                 ] + custom_inputs,
                 outputs=[

@@ -101,6 +101,7 @@ export const api_ = {
   collection: () => api('/mlite/api/collection'),
   suggestions: () => api('/mlite/api/suggestions'),
   saveImage: (payload) => api('/mlite/api/save-image', { method: 'POST', body: payload }),
+  overrideOrigin: (payload) => api('/mlite/api/override-origin', { method: 'POST', body: payload }),
   options: (payload) => api('/mlite/api/options', { method: 'POST', body: payload }),
 };
 
@@ -114,6 +115,12 @@ export const api_ = {
  */
 const sourceCache = new Map(); // cache key -> { dataUrl, width, height }
 const SOURCE_CACHE_MAX = 8;
+
+/** Drop a cached source after its file was rewritten in place. */
+export function forgetImageSource(path) {
+  const key = String(path || '').replace(/\\/g, '/');
+  if (key) sourceCache.delete(key);
+}
 
 export async function fetchImageData({ path, url: directUrl, px = 1536 }) {
   const key = String(path || directUrl || '').replace(/\\/g, '/');

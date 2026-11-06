@@ -181,6 +181,7 @@ export function registerResult(result, kind, payload = null, store = state.param
   if (lightPayload) {
     delete lightPayload.init_image;
     delete lightPayload.mask;
+    delete lightPayload.paint_layer;
     delete lightPayload.alwayson;
   }
   for (const image of result.images || []) {

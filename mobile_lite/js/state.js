@@ -93,6 +93,7 @@ export const state = {
     maskColor: '#00e0ff', // display colour of the painted / SAM mask
     maskOutlineColor: '#ffffff', // blinking border drawn around the mask
     maskBlink: true,
+    inpaintPaintColor: '#ff3366', // colour of the paint layer merged into the image on Generate
     poseParts: ['Face', 'Hands', 'Feet'], // pose-mask button: parts painted into the mask
     poseRadiusMode: 'percent', // pose mask point size: 'px' = fixed radius, 'percent' = share of each skeleton
     poseRadius: 40, // pose mask radius in px (px mode)

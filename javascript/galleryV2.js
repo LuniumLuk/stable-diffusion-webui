@@ -104,7 +104,10 @@
   }
 
   function blobUrl(row, kind) {
-    return '/gallery/api/blob?id=' + encodeURIComponent(row.uid) + '&kind=' + kind;
+    // mtime is part of the URL so a rewritten file (Composer "Override Origin")
+    // bypasses the cached blob instead of showing the old picture
+    var version = row && row.mtime ? '&v=' + encodeURIComponent(String(row.mtime)) : '';
+    return '/gallery/api/blob?id=' + encodeURIComponent(row.uid) + '&kind=' + kind + version;
   }
 
   /** Archived items keep only a thumb blob (media policy), so that is the best
@@ -472,6 +475,14 @@
         return function () { onPick(only); };
       }));
     },
+  };
+
+  // Re-query + repaint the grid (used after a file was rewritten in place,
+  // e.g. the Composer's "Override Origin").
+  window.galleryV2Refresh = function () {
+    if (!el(ROOT_ID)) return;
+    refreshFacets();
+    resetAndRefresh();
   };
 
   var _ctxMenuEl = null;
