@@ -1052,12 +1052,12 @@
     return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
   }
 
-  // true for the tool bar and the batch mask panel: overlays that must not pan/paint/zoom
+  // true for the tool bar and the batch mask overlays: they must not pan/paint/zoom
   function inBar(p, e) {
-    const bar = p && p.host && p.host.querySelector(".inpsam-bar");
+    const bar = p && p.host ? p.host.querySelector(".inpsam-bar") : null;
     if (bar && bar.contains(e.target)) return true;
-    const batchPanel = p && p.root ? p.root.querySelector(".inpbatch-panel") : null;
-    return !!(batchPanel && batchPanel.contains(e.target));
+    const overlays = p && p.root ? p.root.querySelectorAll(".inpbatch-panel, .inpbatch-macro-panel") : [];
+    return Array.from(overlays).some((overlay) => overlay.contains(e.target));
   }
 
   function bindRootListeners(p) {

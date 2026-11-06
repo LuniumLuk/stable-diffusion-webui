@@ -71,6 +71,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - custom macros: `@MACRO(FLAG)` declares a boolean macro (off by default), `@MACRO(MOOD){happy, sad}` declares an enum macro (first alias by default); use them like system macros, e.g. `@IF FLAG`, `@IF MOOD == happy`, `@IF !FLAG`
      - a name used in a condition without `@MACRO` is an ordinary boolean macro that is off
      - the macro panel left of the txt2img / img2img result panel lists the fixed system macros (disabled) and the macros in the current prompt; booleans get a toggle, enums a dropdown, and the selection is used for the generation
+     - in the Inpaint tab's batch-mask mode, each mask layer keeps its own custom macro values; a new or duplicated layer starts from the current global values, and the layer's macro panel is at the top-right of the mask editor
      - the editors suggest declared macro names and enum aliases while typing; branches that cannot run for the current macro values are dimmed
      - the macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`, `POSE_INPAINT` (1 while that stage runs, 0 otherwise) and `POSE_INPAINT_PART` (0 outside a pose pass, `FACE`, `FEET` or `HANDS` inside one)
      - `HIRES_FIX` is an img2img pass and `POSE_INPAINT` an inpaint pass, so `IMG2IMG` (and `INPAINT`) are 1 there as well

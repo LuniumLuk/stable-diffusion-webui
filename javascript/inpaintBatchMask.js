@@ -13,9 +13,12 @@
  *   - Right-clicking the mask edit area opens a menu with the mask actions (new, duplicate,
  *     clear current, delete current, delete all).
  *   - On Generate the layers are serialized (in list order) into the hidden
- *     #img2img_batch_mask_payload textbox. The backend then inpaints each mask in order, using
- *     the result of the previous inpaint as the input image for the next one. Only the final
- *     result of the chain is saved/shown; the intermediate steps are discarded.
+ *     #img2img_batch_mask_payload textbox, including each layer's custom macro values. The
+ *     backend then inpaints each mask in order, using the result of the previous inpaint as
+ *     the input image for the next one. Only the final result of the chain is saved/shown;
+ *     the intermediate steps are discarded.
+ *   - Each batch-mask layer has a compact macro panel at the top-right of the mask editor.
+ *     New layers copy the current global macro values; the layer then owns its own copy.
  *
  * The layer data is kept as PNG data URLs (the sketch mask canvas alpha channel is the mask),
  * and is only ever written into the canvas on layer switches / image reloads. The gradio value
@@ -139,7 +142,14 @@
 
     function pushPayload(capture = true) {
         if (state.enabled && capture) captureActiveLayer();
-        const masks = state.enabled ? state.layers.map((layer) => layer.dataUrl).filter(Boolean) : [];
+        const masks = state.enabled
+            ? state.layers
+                .filter((layer) => layer.dataUrl)
+                .map((layer) => ({
+                    image: layer.dataUrl,
+                    macros: layer.macros && typeof layer.macros === "object" ? Object.assign({}, layer.macros) : null,
+                }))
+            : [];
         const payload = masks.length ? JSON.stringify({enabled: true, masks}) : "{}";
         setTextarea(PAYLOAD_ID, payload);
     }
@@ -203,9 +213,76 @@
         refreshGhosts();
     }
 
+    function cloneMacroValues(values) {
+        return Object.assign({}, values && typeof values === "object" ? values : {});
+    }
+
+    function globalMacroValues() {
+        const api = window.promptMacros;
+        return api && typeof api.valuesFor === "function" ? cloneMacroValues(api.valuesFor("img2img")) : {};
+    }
+
+    function ensureLayerMacros(layer) {
+        if (!layer.macros || typeof layer.macros !== "object") layer.macros = globalMacroValues();
+        return layer.macros;
+    }
+
+    function macroBool(value) {
+        if (typeof value === "boolean") return value ? 1 : 0;
+        if (typeof value === "number") return value ? 1 : 0;
+        return ["1", "true", "on", "yes"].includes(String(value == null ? "" : value).trim().toLowerCase()) ? 1 : 0;
+    }
+
+    function macroSystemValues() {
+        const api = window.promptMacros;
+        return api && typeof api.stageMacros === "function" ? api.stageMacros("inpaint") : {};
+    }
+
+    function macroContext() {
+        const api = window.promptMacros;
+        const context = api && typeof api.contextFor === "function" ? api.contextFor("img2img") : null;
+        return {
+            definitions: context && context.definitions ? context.definitions : {},
+            references: context && context.references ? context.references : new Set(),
+        };
+    }
+
+    function normalizeLayerMacros(layer) {
+        const values = ensureLayerMacros(layer);
+        const {definitions, references} = macroContext();
+        const systemNames = new Set(Object.keys(macroSystemValues()));
+        const customKeys = new Set(
+            [...Object.keys(definitions), ...references].filter((key) => !systemNames.has(key))
+        );
+
+        for (const [key, definition] of Object.entries(definitions)) {
+            if (systemNames.has(key)) continue;
+            if (definition.macroType === "enum") {
+                const current = String(values[key] == null ? "" : values[key]).toUpperCase();
+                if (!definition.values.some((item) => item.toUpperCase() === current)) {
+                    values[key] = definition.defaultValue;
+                }
+            } else {
+                values[key] = macroBool(values[key]);
+            }
+        }
+        for (const key of customKeys) {
+            if (!Object.prototype.hasOwnProperty.call(values, key)) {
+                values[key] = definitions[key] && definitions[key].macroType === "enum" ? definitions[key].defaultValue : 0;
+            }
+        }
+        return values;
+    }
+
     function newLayer(name, origin) {
         state.counter += 1;
-        return {id: `inpbatch-${Date.now().toString(36)}-${state.counter}`, name: name || `Mask ${state.counter}`, dataUrl: "", origin: origin || null};
+        return {
+            id: `inpbatch-${Date.now().toString(36)}-${state.counter}`,
+            name: name || `Mask ${state.counter}`,
+            dataUrl: "",
+            origin: origin || null,
+            macros: globalMacroValues(),
+        };
     }
 
     function addLayer() {
@@ -228,6 +305,7 @@
         const index = state.layers.indexOf(source);
         const copy = newLayer(`${source.name} copy`);
         copy.dataUrl = source.dataUrl;
+        copy.macros = cloneMacroValues(source.macros);
         state.layers.splice(index + 1, 0, copy);
         state.activeId = copy.id;
         renderList();
@@ -654,6 +732,112 @@
         return button;
     }
 
+    function macroPanelEl() {
+        const root = getRoot();
+        return root ? root.querySelector(".inpbatch-macro-panel") : null;
+    }
+
+    function macroToggleRow(key, label, active, kind) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `prompt-macro-row is-${kind} ${active ? "is-on" : "is-off"} is-toggle`;
+        button.dataset.macroKey = key;
+        button.disabled = kind === "system";
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+        button.title = kind === "system" ? "Fixed system macro" : label;
+        const name = document.createElement("span");
+        name.className = "prompt-macro-name";
+        name.textContent = label;
+        const value = document.createElement("span");
+        value.className = "prompt-macro-state";
+        value.textContent = active ? "on" : "off";
+        button.append(name, value);
+        if (kind === "custom") {
+            button.addEventListener("click", () => {
+                const layer = activeLayer();
+                if (!layer) return;
+                ensureLayerMacros(layer)[key] = active ? 0 : 1;
+                pushPayload();
+                renderMacroPanel();
+            });
+        }
+        return button;
+    }
+
+    function macroEnumRow(key, label, values, current, kind, title) {
+        const row = document.createElement("label");
+        row.className = `prompt-macro-row is-${kind} is-enum`;
+        row.dataset.macroKey = key;
+        const name = document.createElement("span");
+        name.className = "prompt-macro-name";
+        name.textContent = label;
+
+        const select = document.createElement("select");
+        select.className = "prompt-macro-select";
+        select.disabled = kind === "system";
+        select.title = title || label;
+        for (const value of values) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = value;
+            if (String(value).toUpperCase() === String(current == null ? "" : current).toUpperCase()) {
+                option.selected = true;
+            }
+            select.append(option);
+        }
+        if (kind === "custom") {
+            select.addEventListener("change", () => {
+                const layer = activeLayer();
+                if (!layer) return;
+                ensureLayerMacros(layer)[key] = select.value;
+                pushPayload();
+                renderMacroPanel();
+            });
+        }
+        row.append(name, select);
+        return row;
+    }
+
+    function renderMacroPanel() {
+        const panel = macroPanelEl();
+        if (!panel) return;
+
+        const layer = activeLayer();
+        panel.hidden = !state.enabled || !layer;
+        if (!state.enabled || !layer) return;
+
+        const body = panel.querySelector(".prompt-macro-body");
+        const layerLabel = panel.querySelector(".inpbatch-macro-layer");
+        if (!body) return;
+        if (layerLabel) layerLabel.textContent = layer.name;
+
+        const systems = macroSystemValues();
+        const {definitions, references} = macroContext();
+        const values = normalizeLayerMacros(layer);
+        const systemNames = new Set(Object.keys(systems));
+        const customKeys = new Set(
+            [...Object.keys(definitions), ...references].filter((key) => !systemNames.has(key))
+        );
+
+        body.textContent = "";
+        for (const key of Array.from(customKeys).sort((a, b) => a.localeCompare(b))) {
+            const definition = definitions[key];
+            const label = definition && definition.name ? definition.name : key;
+            if (definition && definition.macroType === "enum") {
+                body.append(macroEnumRow(key, label, definition.values, values[key], "custom", definition.headline));
+            } else {
+                body.append(macroToggleRow(key, label, !!macroBool(values[key]), "custom"));
+            }
+        }
+
+        if (!customKeys.size) {
+            const empty = document.createElement("div");
+            empty.className = "prompt-macro-empty";
+            empty.textContent = "No custom macros";
+            body.append(empty);
+        }
+    }
+
     function renderList() {
         const panel = panelEl();
         if (!panel) return;
@@ -724,6 +908,7 @@
         status.textContent = state.enabled ?
             `${state.layers.length} mask${state.layers.length === 1 ? "" : "s"}` :
             "Single mask";
+        renderMacroPanel();
     }
 
     function panelEl() {
@@ -815,6 +1000,16 @@
         closeMenu();
     }
 
+    function buildMacroPanel() {
+        const panel = document.createElement("div");
+        panel.className = "prompt-macro-panel inpbatch-macro-panel";
+        panel.hidden = true;
+        panel.innerHTML = `
+      <div class="prompt-macro-head"><span>Layer macros</span><span class="inpbatch-macro-layer"></span></div>
+      <div class="prompt-macro-body"></div>`;
+        return panel;
+    }
+
     function buildPanel() {
         const panel = document.createElement("div");
         panel.className = "inpbatch-panel";
@@ -903,7 +1098,7 @@
 
             const q = getParts();
             if (!q || !event.target.closest) return;
-            if (event.target.closest(".inpsam-bar, .inpbatch-panel")) return;
+            if (event.target.closest(".inpsam-bar, .inpbatch-panel, .inpbatch-macro-panel")) return;
             const rect = q.maskCanvas.getBoundingClientRect();
             if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
             event.preventDefault();
@@ -1028,13 +1223,23 @@
         if (!root) return;
 
         let panel = root.querySelector(".inpbatch-panel");
+        const panelCreated = !panel;
         if (!panel) {
             panel = buildPanel();
             root.appendChild(panel);
+        }
+
+        let macroPanel = root.querySelector(".inpbatch-macro-panel");
+        const macroCreated = !macroPanel;
+        if (!macroPanel) {
+            macroPanel = buildMacroPanel();
+            root.appendChild(macroPanel);
+        }
+
+        if (panelCreated || macroCreated) {
             renderList();
             updateChrome();
         }
-
         positionPanel(panel);
         bindSketchListeners();
         watchImage();
@@ -1071,6 +1276,12 @@
             },
             true
         );
+
+        window.addEventListener("pedit-macros-changed", (event) => {
+            if (!event.detail || !event.detail.tab || event.detail.tab === "img2img") {
+                renderMacroPanel();
+            }
+        });
 
         if (typeof onAfterUiUpdate === "function") onAfterUiUpdate(ensure);
         setInterval(ensure, 1000);

@@ -159,8 +159,9 @@ def process_batch(p, input, output_dir, inpaint_mask_dir, args, to_scale=False, 
 def decode_inpaint_batch_masks(payload: str) -> list:
     """Decode the masks produced by the Inpaint tab's batch-mask layer panel.
 
-    The panel serializes ``{"enabled": bool, "masks": [data-url, ...]}``; the list order is the
-    order the masks must be applied in.
+    The panel serializes ``{"enabled": bool, "masks": [{"image": data-url, "macros": {...}}, ...]}``
+    (older payloads may use plain data-url strings). The list order is the order the masks must
+    be applied in; the macro values are optional and are applied to that layer only.
     """
     if not payload:
         return []
@@ -175,11 +176,19 @@ def decode_inpaint_batch_masks(payload: str) -> list:
 
     masks = []
     for index, entry in enumerate(data.get("masks") or []):
-        if not isinstance(entry, str) or not entry:
+        if isinstance(entry, str):
+            data_url, layer_macros = entry, None
+        elif isinstance(entry, dict):
+            data_url = entry.get("image") or entry.get("dataUrl") or ""
+            layer_macros = entry.get("macros") if isinstance(entry.get("macros"), dict) else None
+        else:
+            continue
+
+        if not isinstance(data_url, str) or not data_url:
             continue
 
         try:
-            raw = entry.split(",", 1)[1] if entry.startswith("data:") else entry
+            raw = data_url.split(",", 1)[1] if data_url.startswith("data:") else data_url
             image = Image.open(io.BytesIO(base64.b64decode(raw)))
             image.load()
             mask = image.convert("RGBA")
@@ -191,7 +200,7 @@ def decode_inpaint_batch_masks(payload: str) -> list:
             print(f"Inpaint batch mask: layer {index + 1} is empty, skipping it.")
             continue
 
-        masks.append(mask)
+        masks.append({"mask": mask, "macros": layer_macros})
 
     return masks
 
@@ -200,7 +209,8 @@ def process_inpaint_batch(p, masks, args):
     """Inpaint every mask in order, feeding each result into the next mask as its input image.
 
     Only the final image of the chain is kept: the intermediate results exist to feed the next
-    mask, so they are neither saved to disk nor returned to the gallery.
+    mask, so they are neither saved to disk nor returned to the gallery. Each decoded layer may
+    carry its own macro values; a layer without them uses the job-level values.
     """
     processing.fix_seed(p)
 
@@ -212,18 +222,29 @@ def process_inpaint_batch(p, masks, args):
     state.job_count = len(masks)
     current_image = p.init_images[0]
     inpaint_full_res = p.inpaint_full_res
+    default_macro_values = p.macro_values
     last = None
     last_infotext = ""
     last_index = len(masks) - 1
 
-    for index, mask in enumerate(masks):
+    for index, entry in enumerate(masks):
         if state.interrupted or state.stopping_generation:
             break
+
+        if isinstance(entry, dict):
+            mask = entry.get("mask")
+            layer_macros = entry.get("macros")
+        else:
+            mask, layer_macros = entry, None
+
+        if mask is None:
+            continue
 
         state.job = f"Batch mask {index + 1} out of {len(masks)}"
 
         p.init_images = [current_image]
         p.image_mask = mask
+        p.macro_values = layer_macros if isinstance(layer_macros, dict) else default_macro_values
         p.color_corrections = None
         p.paste_to = None
         p.inpaint_full_res = inpaint_full_res  # init() can switch this off for blank masks
@@ -241,6 +262,8 @@ def process_inpaint_batch(p, masks, args):
         current_image = proc.images[position]
         last = proc
         last_infotext = proc.infotexts[position] if position < len(proc.infotexts) else proc.info
+
+    p.macro_values = default_macro_values
 
     if last is None:
         return None

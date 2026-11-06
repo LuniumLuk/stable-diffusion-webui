@@ -247,7 +247,7 @@ def create_macro_panel(tabname):
     `values` is the hidden JSON field handed to the processing job.
     """
     panel = MacroPanel()
-    with gr.Column(elem_id=f"{tabname}_macro_panel", elem_classes=["prompt-macro-panel-host"], scale=0, min_width=216):
+    with gr.Column(elem_id=f"{tabname}_macro_panel", elem_classes=["prompt-macro-panel-host"], scale=0, min_width=196):
         panel.html = gr.HTML(
             f'<div class="prompt-macro-panel" data-tab="{tabname}"'
             f' data-prompt="{tabname}_prompt" data-negative="{tabname}_neg_prompt"'

@@ -4638,6 +4638,32 @@ body.resizing .resize-handle {
     display: none;
 }
 
+.inpbatch-macro-panel {
+    position: absolute;
+    z-index: 61;
+    top: 8px;
+    right: 8px;
+    width: 196px;
+    max-width: calc(100% - 16px);
+    max-height: calc(100% - 16px) !important;
+    box-sizing: border-box;
+}
+
+.inpbatch-macro-panel[hidden] {
+    display: none !important;
+}
+
+.inpbatch-macro-layer {
+    max-width: 55%;
+    overflow: hidden;
+    font-size: 9px;
+    font-weight: 500;
+    opacity: 0.65;
+    text-overflow: ellipsis;
+    text-transform: none;
+    white-space: nowrap;
+}
+
 .inpbatch-panel {
     position: absolute;
     z-index: 60;
@@ -7974,14 +8000,11 @@ body.resizing .resize-handle {
 /* ==== Prompt macros: sidebar + editor highlighting ==== */
 #txt2img_results_row,
 #img2img_results_row {
-    align-items: flex-start;
-}
-
-#txt2img_results_row,
-#img2img_results_row {
+    flex: 1 1 auto;
     flex-wrap: nowrap;
     align-items: stretch;
     min-width: 0;
+    min-height: 0;
 }
 
 #txt2img_results_panel,
@@ -7993,19 +8016,20 @@ body.resizing .resize-handle {
 
 #txt2img_macro_panel,
 #img2img_macro_panel {
-    flex: 0 0 216px;
-    max-width: 216px;
+    flex: 0 0 196px;
+    max-width: 196px;
 }
 
 .prompt-macro-panel {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     max-height: min(72vh, 720px);
-    padding: 8px;
+    padding: 6px;
     border: 1px solid var(--border-color-primary, rgba(148, 163, 184, 0.35));
-    border-radius: 10px;
+    border-radius: 8px;
     background: var(--background-fill-secondary, rgba(15, 23, 42, 0.35));
+    font-size: 11px;
 }
 
 .prompt-macro-head {
@@ -8013,8 +8037,8 @@ body.resizing .resize-handle {
     align-items: center;
     justify-content: space-between;
     font-weight: 600;
-    font-size: 12px;
-    letter-spacing: 0.04em;
+    font-size: 10px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     opacity: 0.85;
 }
@@ -8027,7 +8051,7 @@ body.resizing .resize-handle {
 .prompt-macro-body {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     min-height: 0;
     overflow-y: auto;
     scrollbar-width: thin;
@@ -8037,15 +8061,48 @@ body.resizing .resize-handle {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    min-height: 26px;
-    padding: 2px 4px;
-    border-radius: 6px;
-    font-size: 12px;
+    gap: 5px;
+    min-height: 20px;
+    padding: 0 3px;
+    border-radius: 5px;
+    font-size: 11px;
+    line-height: 1.2;
+}
+
+.prompt-macro-row.is-toggle {
+    width: 100%;
+    border: 1px solid transparent;
+    background: rgba(148, 163, 184, 0.06);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.prompt-macro-row.is-toggle:hover:not(:disabled) {
+    border-color: var(--border-color-primary, rgba(148, 163, 184, 0.45));
+    background: rgba(148, 163, 184, 0.12);
+}
+
+.prompt-macro-row.is-toggle.is-on {
+    border-color: rgba(139, 92, 246, 0.75);
+    background: rgba(139, 92, 246, 0.22);
+    color: #ede9fe;
 }
 
 .prompt-macro-row.is-system {
-    opacity: 0.62;
+    opacity: 0.72;
+}
+
+.prompt-macro-row.is-system.is-on {
+    opacity: 1;
+    border-color: rgba(251, 191, 36, 0.55);
+    background: rgba(251, 191, 36, 0.12);
+    color: #fef3c7;
+}
+
+.prompt-macro-row:disabled {
+    cursor: default;
 }
 
 .prompt-macro-name {
@@ -8054,29 +8111,44 @@ body.resizing .resize-handle {
     white-space: nowrap;
 }
 
-.prompt-macro-check {
-    margin: 0;
-    accent-color: #8b5cf6;
+.prompt-macro-state {
+    flex: 0 0 auto;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    opacity: 0.65;
+    text-transform: uppercase;
+}
+
+.prompt-macro-row.is-on .prompt-macro-state {
+    opacity: 1;
 }
 
 .prompt-macro-select {
-    max-width: 96px;
-    padding: 1px 4px;
-    border-radius: 6px;
+    max-width: 82px;
+    height: 20px;
+    padding: 0 14px 0 4px !important;
+    border-radius: 5px;
     border: 1px solid var(--border-color-primary, rgba(148, 163, 184, 0.4));
-    background: var(--background-fill-primary, #0f172a);
-    color: inherit;
-    font-size: 12px;
+    background-color: #0f172a !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%2394a3b8' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 5px center;
+    color: #e5e7eb !important;
+    appearance: none;
+    font-size: 10px !important;
+    line-height: 18px !important;
+    color-scheme: dark;
+}
+
+.prompt-macro-select option {
+    background-color: #0f172a;
+    color: #e5e7eb;
 }
 
 .prompt-macro-empty {
-    padding: 6px 2px;
+    padding: 3px 2px;
     opacity: 0.55;
-    font-size: 12px;
-}
-
-.prompt-macro {
-    color: #fbbf24;
+    font-size: 10px;
 }
 
 .pedit-chip.is-macro {

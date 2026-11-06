@@ -143,10 +143,26 @@
   }
 
   function macroRow(key, label, control, kind) {
-    return element('label', { class: 'prompt-macro-row is-' + kind, dataset: { macroKey: key } }, [
+    return element('label', { class: 'prompt-macro-row is-' + kind + ' is-enum', dataset: { macroKey: key } }, [
       element('span', { class: 'prompt-macro-name', text: label }),
       control,
     ]);
+  }
+
+  function toggleRow(key, label, active, kind, title, tab) {
+    const button = element('button', {
+      type: 'button',
+      class: 'prompt-macro-row is-' + kind + (active ? ' is-on' : ' is-off') + ' is-toggle',
+      title: title,
+      dataset: { macroKey: key },
+      disabled: kind === 'system',
+    }, [
+      element('span', { class: 'prompt-macro-name', text: label }),
+      element('span', { class: 'prompt-macro-state', text: active ? 'on' : 'off' }),
+    ]);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (tab) button.addEventListener('click', () => updateValue(tab, key, active ? 0 : 1));
+    return button;
   }
 
   function systemRow(name, macros) {
@@ -160,9 +176,7 @@
       }
       return macroRow(name, name, select, 'system');
     }
-    const input = element('input', { type: 'checkbox', class: 'prompt-macro-check', disabled: true, title: 'Fixed system macro' });
-    input.checked = !!macros[name];
-    return macroRow(name, name, input, 'system');
+    return toggleRow(name, name, !!macros[name], 'system', 'Fixed system macro');
   }
 
   function customRow(tab, key, definition, value) {
@@ -177,10 +191,14 @@
       return macroRow(key, definition.name || key, select, 'custom');
     }
 
-    const input = element('input', { type: 'checkbox', class: 'prompt-macro-check', title: definition ? definition.headline : 'Undeclared boolean macro (off by default)' });
-    input.checked = !!boolValue(value);
-    input.addEventListener('change', () => updateValue(tab, key, input.checked ? 1 : 0));
-    return macroRow(key, definition ? definition.name || key : key, input, 'custom');
+    return toggleRow(
+      key,
+      definition ? definition.name || key : key,
+      !!boolValue(value),
+      'custom',
+      definition ? definition.headline : 'Undeclared boolean macro (off by default)',
+      tab,
+    );
   }
 
   function updateValue(tab, key, value) {
