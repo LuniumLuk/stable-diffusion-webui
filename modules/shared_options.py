@@ -446,6 +446,13 @@ options_templates.update(options_section(('dit-backends', "DiT backends (Anima)"
     "anima_flow_shift": OptionInfo(0.0, "Anima flow shift (0 = auto)", gr.Slider, {"minimum": 0.0, "maximum": 5.0, "step": 0.1}),
 }))
 
+options_templates.update(options_section(('video', "Video", "sd"), {
+    "video_default_engine": OptionInfo("animatediff", "Default video engine", gr.Radio, {"choices": ["animatediff", "cogvideox", "svd", "ltx"]}).info("AnimateDiff = fast anime loops on SD1.5; CogVideoX = 480p clips; SVD = animate a still image; LTX-Video = text or image + prompt"),
+    "video_offload": OptionInfo("auto", "Video VRAM policy", gr.Radio, {"choices": ["auto", "on", "off"]}).info("'auto' keeps the pipeline on the GPU when it fits and otherwise streams modules from RAM (slower, fits small cards)"),
+    "vram_auto_release": OptionInfo(True, "Free the previous engine when switching").info("before an SD checkpoint, DiT sidecar or video job starts, stop/unload whatever else holds VRAM; turn off only if you have VRAM to spare"),
+    "vram_release_after_video": OptionInfo(True, "Unload the video model after each clip").info("frees 4-14 GB again; the next clip pays the load time (~5-60 s)"),
+}))
+
 options_templates.update(options_section((None, "Hidden options"), {
     "disabled_extensions": OptionInfo([], "Disable these extensions"),
     "disable_all_extensions": OptionInfo("none", "Disable all extensions (preserves the list of disabled extensions)", gr.Radio, {"choices": ["none", "extra", "all"]}),

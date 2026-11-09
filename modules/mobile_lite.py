@@ -1079,14 +1079,16 @@ def _qwen_free_webui_vram() -> None:
 
 
 def _qwen_unload_sdxl_locked() -> bool:
-    """Free the A1111 checkpoint + cached VRAM. Must run while holding the queue lock."""
-    import modules.shared as shared
-    from modules import sd_models
+    """Free the A1111 checkpoint, the video engine and the other sidecars.
 
-    moved = False
-    if shared.sd_model is not None:
-        sd_models.unload_model_weights()
-        moved = True
+    Must run while holding the queue lock.  The central switchboard in
+    ``modules.vram`` knows which engines currently hold device memory, so a video
+    pipeline or a leftover Krea 2/Anima sidecar is released here too.
+    """
+    from modules import sd_models, vram
+
+    moved = sd_models.model_data.sd_model is not None
+    vram.claim(vram.QWEN, reason="Qwen-Image sidecar needs the GPU")
     _qwen_free_webui_vram()  # release the allocator cache even when no model was loaded
     return moved
 
@@ -1585,14 +1587,14 @@ def _krea2_free_webui_vram() -> None:
 
 
 def _krea2_unload_sdxl_locked() -> bool:
-    """Free the A1111 checkpoint + cached VRAM. Must run while holding the queue lock."""
-    import modules.shared as shared
-    from modules import sd_models
+    """Free the A1111 checkpoint, the video engine and the other sidecars.
 
-    moved = False
-    if shared.sd_model is not None:
-        sd_models.unload_model_weights()
-        moved = True
+    Must run while holding the queue lock (see ``_qwen_unload_sdxl_locked``).
+    """
+    from modules import sd_models, vram
+
+    moved = sd_models.model_data.sd_model is not None
+    vram.claim(vram.KREA2, reason="Krea 2 sidecar needs the GPU")
     _krea2_free_webui_vram()  # release the allocator cache even when no model was loaded
     return moved
 
@@ -2560,6 +2562,47 @@ def _gallery_action(payload: dict) -> dict:
 # --------------------------------------------------------------------------- routes
 
 
+def _video_progress(task_id: str):
+    """Progress payload for the active video job (None = not ours)."""
+    from modules import video_manager
+
+    job = video_manager.job_status()
+    if not job.get("task_id") or job.get("task_id") != task_id:
+        return None
+    phase = job.get("phase")
+    if phase in (None, "done", "failed", "cancelled"):
+        return None
+
+    elapsed = max(0.0, time.time() - (job.get("started") or time.time()))
+    step = int(job.get("step") or 0)
+    steps = int(job.get("steps") or 0)
+    percent = (100.0 * step / steps) if steps else (99.0 if phase == "saving" else 0.0)
+    texts = {
+        "loading": f"video \u00B7 loading {job.get('engine') or 'model'} ({elapsed:.0f}s)",
+        "generating": f"video \u00B7 step {step}/{steps} ({elapsed:.0f}s)",
+        "saving": "video \u00B7 encoding GIF/MP4\u2026",
+    }
+    return {
+        "active": phase in ("generating", "saving"),
+        "queued": phase == "loading",
+        "completed": False,
+        "progress": round(percent, 1),
+        "eta": None,
+        "live_preview": None,
+        "id_live_preview": -1,
+        "textinfo": texts.get(phase, "video"),
+        "state": {
+            "job": "mlite_video", "job_count": 1, "job_no": 0,
+            "sampling_step": step,
+            "sampling_steps": steps,
+            "skipped": False, "interrupted": False,
+        },
+        "current_image": None,
+        "job_count": 1,
+        "job_no": 0,
+    }
+
+
 def register_routes(app):
     from fastapi import Body, HTTPException
     from starlette.responses import FileResponse, RedirectResponse
@@ -2639,7 +2682,7 @@ def register_routes(app):
 
     @app.get("/mlite/api/status")
     def mlite_status():
-        from modules import progress
+        from modules import progress, video_manager
 
         payload = progress.global_status_api()
         job = _qwen_job_snapshot()
@@ -2650,6 +2693,9 @@ def register_routes(app):
         payload["krea2_active"] = _krea2_job_active()
         if payload["krea2_active"]:
             payload["krea2_task_id"] = krea2_job.get("task_id")
+        payload["video_active"] = video_manager.busy()
+        if payload["video_active"]:
+            payload["video_task_id"] = video_manager.job_status().get("task_id")
         return payload
 
     @app.post("/mlite/api/progress")
@@ -2667,15 +2713,23 @@ def register_routes(app):
         krea2 = _krea2_progress(request.id_task)
         if krea2 is not None:
             return krea2
+        video = _video_progress(request.id_task)
+        if video is not None:
+            return video
         return progress.progressapi(request)
 
     @app.post("/mlite/api/interrupt")
     def mlite_interrupt(payload: dict = Body(default={})):
         import modules.shared as shared
+        from modules import video_manager
 
         if str(payload.get("action") or "") == "skip":
             shared.state.skip()
             return {"ok": True}
+
+        if video_manager.busy():
+            video_manager.cancel()
+            return {"ok": True, "engine": "video"}
 
         # the sd-server can cancel queued jobs only (cancel_generating = false)
         if cancel_qwen_job().get("ok"):
@@ -2720,6 +2774,41 @@ def register_routes(app):
     def mlite_krea2_job():
         return krea2_job_status()
 
+    @app.get("/mlite/api/video/status")
+    def mlite_video_status():
+        from modules import video_manager, vram
+
+        payload = video_manager.status()
+        payload["vram"] = vram.status()
+        return payload
+
+    @app.get("/mlite/api/video/job")
+    def mlite_video_job():
+        from modules import video_manager
+
+        return video_manager.job_status()
+
+    @app.post("/mlite/api/video/unload")
+    def mlite_video_unload():
+        from modules import video_manager
+
+        return {"ok": video_manager.unload_engine(reason="mobile unload")}
+
+    @app.post("/mlite/api/video")
+    def mlite_video(payload: dict = Body(default={})):
+        from modules import video_manager
+
+        try:
+            request = video_manager.parse_request(payload)
+        except Exception as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        if not request.task_id:
+            request.task_id = f"task(mlite-video-{int(time.time())})"
+        result = video_manager.generate(request)
+        if not result.get("ok"):
+            raise HTTPException(status_code=503, detail=str(result.get("error") or "the video job failed"))
+        return {**result, "task_id": request.task_id}
+
     @app.post("/mlite/api/engine")
     def mlite_engine(payload: dict = Body(default={})):
         engine = str(payload.get("engine") or "").strip().lower()
@@ -2743,8 +2832,27 @@ def register_routes(app):
                 _qwen_stop_server()
             if not _krea2_job_active():
                 _krea2_stop_server()
+            # the video pipeline and the Anima sidecar are not engine chips: drop them too
+            try:
+                import modules.shared as shared_state
+                from modules import vram
+
+                if shared_state.state.job_count == 0:  # never yank weights out of a running job
+                    vram.release(vram.VIDEO, reason="engine switch -> sdxl")
+                    vram.release(vram.ANIMA, reason="engine switch -> sdxl")
+            except Exception:
+                pass
             return {"ok": True, "engine": "sdxl", "qwen": _qwen_status_payload(), "krea2": _krea2_status_payload()}
-        raise HTTPException(status_code=422, detail="engine must be 'sdxl', 'qwen' or 'krea2'")
+        if engine == "video":
+            # the video job runner claims the GPU itself; just open the door now
+            try:
+                from modules import vram
+
+                vram.claim(vram.VIDEO, reason="engine switch -> video")
+            except Exception:
+                pass
+            return {"ok": True, "engine": "video"}
+        raise HTTPException(status_code=422, detail="engine must be 'sdxl', 'qwen', 'krea2' or 'video'")
 
     @app.post("/mlite/api/qwen")
     def mlite_qwen(payload: dict = Body(default={})):

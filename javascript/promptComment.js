@@ -26,6 +26,8 @@
         'qwen_neg_prompt',
         'krea2_prompt',
         'krea2_neg_prompt',
+        'video_prompt',
+        'video_neg_prompt',
     ];
 
     // ── helpers ──────────────────────────────────────────────────────────────

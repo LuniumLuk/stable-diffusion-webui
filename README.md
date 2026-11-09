@@ -19,6 +19,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
     - a man in a `(tuxedo:1.21)` - alternative syntax
     - select text and press `Ctrl+Up` or `Ctrl+Down` (or `Command+Up` or `Command+Down` if you're on a MacOS) to automatically adjust attention to selected text (code contributed by anonymous user)
 - Loopback, run img2img processing multiple times
+- Video tab, short anime clips (GIF/MP4) with AnimateDiff-Lightning, CogVideoX-2B, SVD-XT and LTX-Video (text or image + prompt) — see [VIDEO.md](./VIDEO.md); the SD Lite UI has the same screen
 - X/Y/Z plot, a way to draw a 3 dimensional plot of images with different parameters
 - Textual Inversion
     - have as many embeddings as you want and use any names you like for them

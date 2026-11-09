@@ -11,12 +11,14 @@ import * as screenImage from './screen-image.js';
 import * as screenKrea2 from './screen-krea2.js';
 import * as screenQwen from './screen-qwen.js';
 import * as screenText from './screen-text.js';
+import * as screenVideo from './screen-video.js';
 
 const SCREENS = {
   text: screenText,
   image: screenImage,
   krea2: screenKrea2,
   qwen: screenQwen,
+  video: screenVideo,
   gallery: screenGallery,
   compose: screenCompose,
 };

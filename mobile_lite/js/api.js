@@ -94,6 +94,10 @@ export const api_ = {
   krea2: (payload, options) => apiUpload('/mlite/api/krea2', payload, options),
   krea2Status: () => api('/mlite/api/krea2/status'),
   engine: (payload) => api('/mlite/api/engine', { method: 'POST', body: payload }),
+  videoStatus: () => api('/mlite/api/video/status'),
+  videoJob: () => api('/mlite/api/video/job'),
+  video: (payload, options) => apiUpload('/mlite/api/video', payload, options),
+  videoUnload: () => api('/mlite/api/video/unload', { method: 'POST', body: {} }),
   gallery: ({ view = 'all', q = '', page = 1, size = 48, album = 0 } = {}) =>
     api(`/mlite/api/gallery?view=${encodeURIComponent(view)}&q=${encodeURIComponent(q)}&page=${page}&size=${size}&album=${encodeURIComponent(album || 0)}`),
   galleryAction: (payload) => api('/mlite/api/gallery/action', { method: 'POST', body: payload }),

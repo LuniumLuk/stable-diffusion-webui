@@ -31,6 +31,7 @@ import modules.images as images
 import modules.styles
 import modules.sd_models as sd_models
 import modules.sd_vae as sd_vae
+import modules.vram as vram
 try:
     from ldm.data.util import AddMiDaS
     from ldm.models.diffusion.ddpm import LatentDepth2ImageDiffusion
@@ -1113,9 +1114,10 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     else:
         assert p.prompt is not None
 
-    # The qwen/krea2 sidecar hand-over parks SDXL on CPU; bring it back before any
-    # sampling, or the UNet dies with CPU-weights vs CUDA-inputs tensor mismatches.
-    sd_models.ensure_model_on_device()
+    # The qwen/krea2 sidecar hand-over parks SDXL on CPU, and a video job takes the
+    # GPU entirely; bring the checkpoint back (and drop those engines) before sampling,
+    # or the UNet dies with CPU-weights vs CUDA-inputs tensor mismatches.
+    vram.ensure_sd()
 
     devices.torch_gc()
 

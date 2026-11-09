@@ -77,6 +77,8 @@ export const state = {
   qwenParams: null,
   // Krea 2 keeps its own as well (turbo: 8 steps / CFG 1.0 / 32px sizes)
   krea2Params: null,
+  // Video keeps its own (per-engine defaults live on the server)
+  videoParams: null,
   // recent parameter sets per scope (newest first, max 10) - browsed with the ▲/▼ buttons
   // on the folded summary line; keyed like the stores: text / img2img / inpaint / qwen / krea2
   paramHistory: { text: [], img2img: [], inpaint: [], qwen: [], krea2: [] },
@@ -120,7 +122,7 @@ export function emit(name, detail = null) {
   bus.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams', 'krea2Params', 'paramHistory'];
+const PERSIST_KEYS = ['params', 'prompt', 'ui', 'mruKeywords', 'imageParams', 'qwenParams', 'krea2Params', 'videoParams', 'paramHistory'];
 
 export function loadPersisted() {
   try {
@@ -205,6 +207,18 @@ export function krea2Params() {
     state.krea2Params = { steps: 8, cfg: 1, width: 1024, height: 1024, batch: 1, seed: -1, seedLock: false };
   }
   return state.krea2Params;
+}
+
+/** Video parameter set - per-engine defaults are applied by the server on generate. */
+export function videoParams() {
+  if (!state.videoParams) {
+    state.videoParams = {
+      engine: 'animatediff', width: 512, height: 512, frames: 16, fps: 8,
+      steps: 4, guidance: 1.5, seed: -1, seedLock: true,
+      lightning: 'auto', offload: 'auto', refine: 0.25, pingpong: false,
+    };
+  }
+  return state.videoParams;
 }
 
 /** Apply a seed to the shared set and to every image mode set already in use ("Use seed"). */

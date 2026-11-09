@@ -167,7 +167,7 @@ async function recoverResult(taskId) {
 
       if (attempt >= 3) {
         const status = await api_.status();
-        if (!status.active && !status.queued_count && !status.qwen_active && !status.krea2_active) return null;
+        if (!status.active && !status.queued_count && !status.qwen_active && !status.krea2_active && !status.video_active) return null;
       }
     } catch (_error) {
       /* transient network errors while recovering are ignored */
@@ -235,8 +235,15 @@ export async function runJob(kind, payload, { label = 'generating', store = stat
         ? api_.qwen(payload, progress)
         : kind === 'krea2'
           ? api_.krea2(payload, progress)
-          : api_.txt2img(payload, progress));
+          : kind === 'video'
+            ? api_.video(payload, progress)
+            : api_.txt2img(payload, progress));
     setStrip({ label: 'saving…', percent: 1, preview: job.previewSrc || null });
+    if (kind === 'video') {
+      const frames = (response.info && response.info.frames) || 0;
+      toast(`clip ready · ${frames} frames · ${formatElapsed(response.info ? response.info.seconds : 0)}`, 'ok');
+      return response;
+    }
     registerResult(response, kind, payload, store);
     const count = (response.images || []).length;
     toast(`${count} image${count === 1 ? '' : 's'} · ${formatElapsed(response.elapsed || (Date.now() - job.startedAt) / 1000)}`, 'ok');

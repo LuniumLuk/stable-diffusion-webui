@@ -116,6 +116,7 @@ body[data-tab="text"] #screen-text,
 body[data-tab="image"] #screen-image,
 body[data-tab="krea2"] #screen-krea2,
 body[data-tab="qwen"] #screen-qwen,
+body[data-tab="video"] #screen-video,
 body[data-tab="gallery"] #screen-gallery,
 body[data-tab="compose"] #screen-compose { display: flex; }
 
@@ -1656,3 +1657,36 @@ body.text-editing { overflow: hidden; }
 .pedit-cm .pedit-cm-inactive { opacity: 0.42; }
 .pedit-line.is-inactive { opacity: 0.42; }
 .pedit-line.is-macro { background: rgba(251, 191, 36, 0.08); border-left: 2px solid #fbbf24; }
+
+/* ==== Video screen (AnimateDiff / CogVideoX / SVD) ==== */
+.prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  line-height: 1.35;
+}
+.prompt-input:focus { outline: none; border-color: var(--accent); }
+.video-sizes { flex-wrap: wrap; }
+.video-sizes .btn.on { border-color: var(--accent); color: var(--text); font-weight: 600; }
+.video-init {
+  width: 100%;
+  max-height: 190px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #000;
+}
+.video-result img {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #000;
+}
+.video-result .row { margin-top: 8px; }
+.video-result a.btn { text-decoration: none; text-align: center; }
