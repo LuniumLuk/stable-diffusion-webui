@@ -2489,19 +2489,20 @@ def _gallery_action(payload: dict) -> dict:
         except Exception:
             item_key = ""
 
-    # Qwen + Krea 2 outputs live outside the rated database: they can only be archived by
-    # hand (and the bulk "archive unrated" can never reach them - they are not
+    # Qwen + Krea 2 outputs live outside the rated database: they can only be archived or
+    # trashed by hand (and the bulk "archive unrated" can never reach them - they are not
     # generated_images rows)
+    scan_only_actions = ("archive", "unarchive", "trash")
     normalized_path = f"/{path.replace(chr(92), '/').lower().strip('/')}/"
     if (item_key.startswith("qwen-") or item_key.startswith("krea2-")
             or "/outputs/qwen/" in normalized_path or "/outputs/krea2/" in normalized_path):
-        if action not in ("archive", "unarchive"):
-            return {"ok": False, "error": "qwen/krea2 images cannot be rated - archive or unarchive only"}
+        if action not in scan_only_actions:
+            return {"ok": False, "error": "qwen/krea2 images cannot be rated - archive or trash only"}
 
-    # Image Maker outputs (outputs/image_maker) are scan-only too - same archive-only rule.
+    # Image Maker outputs (outputs/image_maker) are scan-only too - same archive/trash rule.
     if item_key.startswith("imagemaker-") or "/outputs/image_maker/" in normalized_path:
-        if action not in ("archive", "unarchive"):
-            return {"ok": False, "error": "image maker images cannot be rated - archive or unarchive only"}
+        if action not in scan_only_actions:
+            return {"ok": False, "error": "image maker images cannot be rated - archive or trash only"}
 
     def _meta_args():
         return (
@@ -2542,6 +2543,10 @@ def _gallery_action(payload: dict) -> dict:
         endorsement_db.unarchive_item(item_key)
     elif action == "archive-unrated":
         return {"ok": True, "archived": int(endorsement_db.archive_all_unrated() or 0)}
+    elif action == "trash":
+        if not item_key:
+            return {"ok": False, "error": "cannot trash: the image has no database key"}
+        return endorsement_db.trash_item_by_key(item_key)
     elif action == "stage" and item_key:
         endorsement_db.stage_item(item_key)
     elif action == "unstage" and item_key:

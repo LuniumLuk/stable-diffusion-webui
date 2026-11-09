@@ -801,6 +801,54 @@ body.mask-editing { overflow: hidden; }
 #viewerImg.is-staged { box-shadow: 0 0 0 2px #f97316, 0 0 14px rgba(249, 115, 22, 0.45); }
 #viewerImg.is-archived { filter: brightness(0.78) saturate(0.85); }
 
+/* gallery preview: the five rating/state actions sit in their own floating capsule
+   above the viewer bar, icon only and never scrolled sideways */
+#viewerQuickBar {
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 10px 8px;
+  padding: 5px;
+  background: rgba(15, 20, 29, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+#viewerQuickBar[hidden] { display: none; }
+
+/* emoji glyphs ignore `color`: the off/on difference is carried by opacity, grayscale
+   and a coloured ring + background, so an active mark stays obvious */
+.viewer-quick-btn {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 19px;
+  line-height: 1;
+  opacity: 0.62;
+  filter: grayscale(0.7);
+  transition: opacity 0.15s ease, filter 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.viewer-quick-btn.on { opacity: 1; filter: none; }
+.viewer-quick-btn:disabled { opacity: 0.25; filter: grayscale(1); }
+.viewer-quick-btn.is-endorse.on { border-color: #22c55e; background: rgba(34, 197, 94, 0.22); box-shadow: 0 0 10px rgba(34, 197, 94, 0.4); }
+.viewer-quick-btn.is-dislike.on { border-color: #ef4444; background: rgba(239, 68, 68, 0.22); box-shadow: 0 0 10px rgba(239, 68, 68, 0.35); }
+.viewer-quick-btn.is-stage.on { border-color: #f97316; background: rgba(249, 115, 22, 0.22); box-shadow: 0 0 10px rgba(249, 115, 22, 0.35); }
+.viewer-quick-btn.is-archive.on { border-color: #94a3b8; background: rgba(148, 163, 184, 0.24); box-shadow: 0 0 10px rgba(148, 163, 184, 0.3); }
+.viewer-quick-btn.is-trash { opacity: 0.85; filter: none; }
+.viewer-quick-btn.is-trash:active { background: rgba(239, 68, 68, 0.26); }
+
 #viewerBar {
   flex: 0 0 auto;
   display: flex;

@@ -319,15 +319,43 @@ function showViewerHint(text) {
 
 const VIEWER_STATE_CLASSES = ['is-endorsed', 'is-disliked', 'is-staged', 'is-archived'];
 
-export function openViewer({ src, title = '', meta = null, actions = [], tag = '', onNavigate = null, canNavigate = null, stateClass = '' }) {
-  document.getElementById('viewerTitle').textContent = title;
+/** The gallery passes its card marks here so the opened image shows the same
+ *  ring (endorsed / disliked / staged) and the archived dim. */
+function setViewerStateClass(stateClass) {
   const img = document.getElementById('viewerImg');
-  // the gallery passes its card marks here so the opened image shows the same
-  // ring (endorsed / disliked / staged) and the archived dim
   img.classList.remove(...VIEWER_STATE_CLASSES);
   for (const name of String(stateClass || '').split(/\s+/)) {
     if (VIEWER_STATE_CLASSES.includes(name)) img.classList.add(name);
   }
+}
+
+/** Icon-only quick actions in the capsule above the viewer bar. */
+function renderViewerQuickBar(quickActions = []) {
+  const quickBar = document.getElementById('viewerQuickBar');
+  clear(quickBar);
+  quickBar.hidden = !quickActions.length;
+  for (const action of quickActions) {
+    quickBar.append(el('button', {
+      class: `viewer-quick-btn is-${action.kind || 'plain'}${action.active ? ' on' : ''}`,
+      type: 'button',
+      text: action.icon || '',
+      title: action.title || '',
+      disabled: !!action.disabled,
+      onClick: () => action.onClick && action.onClick(),
+    }));
+  }
+}
+
+/** Repaint the viewer chrome without reopening the image (keeps zoom, pan and folds). */
+export function updateViewerChrome({ stateClass, quickActions } = {}) {
+  if (stateClass !== undefined) setViewerStateClass(stateClass);
+  if (quickActions !== undefined) renderViewerQuickBar(quickActions);
+}
+
+export function openViewer({ src, title = '', meta = null, actions = [], quickActions = [], tag = '', onNavigate = null, canNavigate = null, stateClass = '' }) {
+  document.getElementById('viewerTitle').textContent = title;
+  const img = document.getElementById('viewerImg');
+  setViewerStateClass(stateClass);
   let sameSrc = false;
   try {
     sameSrc = !!src && img.src === new URL(src, location.href).href;
@@ -346,7 +374,9 @@ export function openViewer({ src, title = '', meta = null, actions = [], tag = '
   const stage = document.getElementById('viewerStage');
   const oldMeta = stage.parentElement.querySelector('.viewer-meta');
   if (oldMeta) oldMeta.remove();
-  if (meta) stage.parentElement.insertBefore(meta, document.getElementById('viewerBar'));
+  if (meta) stage.parentElement.insertBefore(meta, document.getElementById('viewerQuickBar'));
+
+  renderViewerQuickBar(quickActions);
 
   const bar = clear(document.getElementById('viewerBar'));
   for (const action of actions) {

@@ -56,7 +56,10 @@ export async function useAsImage(item, { mode = 'img2img', meta = undefined } = 
 /** Endorse/dislike/archive a gallery item or a generated result. */
 export async function galleryAction(action, { key = '', path = '', meta = {}, reload = true } = {}) {
   try {
-    await api_.galleryAction({ action, key, path, meta });
+    // refusals come back as HTTP 200 with ok:false (rated image, missing key, ...) -
+    // they are failures for the caller even though the request succeeded
+    const data = await api_.galleryAction({ action, key, path, meta });
+    if (data && (data.ok === false || data.error)) throw new Error(data.error || `${action} refused`);
     toast(`${action} ok`, 'ok', 1600);
     if (reload) emit('gallery-refresh');
     return true;

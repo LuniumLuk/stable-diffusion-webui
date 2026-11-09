@@ -2,7 +2,7 @@
 
 import { api, api_ } from './api.js';
 import { emit, on, persist, state } from './state.js';
-import { clear, closeSheet, closeViewer, debounce, el, openSheet, openViewer, toast } from './ui.js';
+import { clear, closeSheet, closeViewer, debounce, el, openSheet, openViewer, toast, updateViewerChrome } from './ui.js';
 import { galleryAction, makeMetaNode, useAsImage, useMetaInText, viewerSrc } from './send.js';
 
 const VIEWS = [
@@ -16,6 +16,10 @@ const VIEWS = [
   { id: 'imagemaker', label: '\u{1F4F7} Image Maker' },
   { id: 'nonesdxl', label: '\u{1F6AB} None SDXL' },
 ];
+
+// views whose membership follows the rating/state flags: an action can move the item out
+// of the list, so those reload the grid instead of patching one card in place
+const STATE_VIEWS = new Set(['unrated', 'endorsed', 'disliked', 'staged', 'archived']);
 
 const PAGE_SIZE = 48;
 
@@ -146,17 +150,9 @@ function actionMeta(item) {
   };
 }
 
-async function act(action, item) {
-  const ok = await galleryAction(action, { key: item.key, path: item.path, meta: actionMeta(item) });
-  if (ok) {
-    closeViewer();
-    loadPage({ reset: true });
-  }
-}
-
 /** Quick action button on a card; actions run without opening the viewer. */
-function quickAction(item, action) {
-  return galleryAction(action, { key: item.key, path: item.path, meta: actionMeta(item) });
+function quickAction(item, action, options = {}) {
+  return galleryAction(action, { key: item.key, path: item.path, meta: actionMeta(item), ...options });
 }
 
 function quickButton(label, title, onClick, on = false) {
@@ -220,6 +216,8 @@ async function sendToKrea2Ref(item) {
   await addImageAsKrea2Ref({ path: item.path, url: item.url });
 }
 
+const CARD_STATE_CLASSES = ['is-endorsed', 'is-disliked', 'is-staged', 'is-archived'];
+
 /** endorsed = green, disliked = red, staged = orange, archived = dimmed (mobile parity) */
 function stateClassOf(item) {
   return [
@@ -231,13 +229,11 @@ function stateClassOf(item) {
 }
 
 function cardNode(item, onTap, withActions) {
-  const badges = badgesHtml(item);
-  const stateClass = stateClassOf(item);
-  const muted = !!(item.disliked || item.archived);
   const thumb = el('div', {
-    class: `thumb ${stateClass}`.trim(),
+    class: `thumb ${stateClassOf(item)}`.trim(),
     role: 'button',
     tabindex: '0',
+    dataset: { key: item.key || '' },
     onClick: () => onTap(item),
     onKeydown: (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
@@ -256,10 +252,10 @@ function cardNode(item, onTap, withActions) {
         thumb.classList.add('has-broken');
       },
     }),
-    muted ? el('div', { class: 'strike' }) : null,
-    badges ? el('span', { class: 'badge', text: badges }) : null,
-    lineageHtml(item),
   ]);
+  applyCardState(thumb, item);
+  const lineage = lineageHtml(item);
+  if (lineage) thumb.append(lineage);
 
   if (!withActions) return el('div', { class: 'thumb-wrap' }, [thumb]);
 
@@ -328,6 +324,85 @@ function lineageActions(item) {
   }];
 }
 
+/** Trash deletes the original file: ask twice, then close the viewer on success. */
+async function confirmTrash(item) {
+  if (!window.confirm('Move this image to trash? The original file and its cached media are deleted.')) return;
+  if (!window.confirm('Delete it for good? The metadata stays in the trash view.')) return;
+  if (await quickAction(item, 'trash')) closeViewer();
+}
+
+/** Local mirror of the backend state transitions (endorse/dislike unstage and
+ *  cancel each other, archiving unstages). */
+const ACTION_STATE = {
+  endorse: { endorsed: true, disliked: false, staged: false },
+  unendorse: { endorsed: false },
+  dislike: { disliked: true, endorsed: false, staged: false },
+  undislike: { disliked: false },
+  stage: { staged: true },
+  unstage: { staged: false },
+  archive: { archived: true, staged: false },
+  unarchive: { archived: false },
+};
+
+const QUICK_ACTIONS = [
+  { kind: 'endorse', icon: '\u2B50', flag: 'endorsed', actionOn: 'unendorse', actionOff: 'endorse', titleOn: 'Remove endorsement', titleOff: 'Endorse', rating: true },
+  { kind: 'dislike', icon: '\u{1F44E}', flag: 'disliked', actionOn: 'undislike', actionOff: 'dislike', titleOn: 'Remove dislike', titleOff: 'Dislike', rating: true },
+  { kind: 'stage', icon: '\u{1F4CC}', flag: 'staged', actionOn: 'unstage', actionOff: 'stage', titleOn: 'Unstage', titleOff: 'Stage', rating: true },
+  { kind: 'archive', icon: '\u{1F4E6}', flag: 'archived', actionOn: 'unarchive', actionOff: 'archive', titleOn: 'Unarchive', titleOff: 'Archive' },
+  { kind: 'trash', icon: '\u{1F5D1}', action: 'trash', title: 'Trash' },
+];
+
+/** Scan-only outputs (Qwen / Krea 2 / Image Maker) cannot be rated, only archived or trashed. */
+function isRatable(item) {
+  return !(item.imagemaker || item.qwen || item.krea2 || item.scan_only);
+}
+
+function galleryQuickActions(item, run) {
+  const ratable = isRatable(item);
+  return QUICK_ACTIONS
+    .filter((def) => ratable || !def.rating)
+    .map((def) => {
+      const active = !!item[def.flag];
+      // the backend silently skips staging a rated image - disable instead of lying
+      const blocked = def.flag === 'staged' && !active && (!!item.endorsed || !!item.disliked);
+      return {
+        kind: def.kind,
+        icon: def.icon,
+        active,
+        disabled: blocked,
+        title: blocked ? 'Rated images cannot be staged' : (def.title || (active ? def.titleOn : def.titleOff)),
+        onClick: () => run(def.action || (active ? def.actionOn : def.actionOff)),
+      };
+    });
+}
+
+/** Draw (or redraw) a card's rating marks: state ring, dim slashes and the badge emoji. */
+function applyCardState(thumb, item) {
+  const stateClasses = stateClassOf(item).split(' ');
+  for (const name of CARD_STATE_CLASSES) thumb.classList.toggle(name, stateClasses.includes(name));
+  for (const node of thumb.querySelectorAll('.strike, .badge')) node.remove();
+
+  // keep the original paint order (image, slashes, badge, lineage) so the lineage
+  // capsules stay on top of the badge
+  const img = thumb.querySelector('img');
+  if (!img) return;
+  let anchor = img;
+  if (item.disliked || item.archived) {
+    const strike = el('div', { class: 'strike' });
+    img.after(strike);
+    anchor = strike;
+  }
+  const badges = badgesHtml(item);
+  if (badges) anchor.after(el('span', { class: 'badge', text: badges }));
+}
+
+function syncCard(item) {
+  if (!gridInner || !item.key) return;
+  for (const thumb of gridInner.querySelectorAll('.thumb[data-key]')) {
+    if (thumb.dataset.key === item.key) applyCardState(thumb, item);
+  }
+}
+
 function openItemViewer(item, list = null) {
   const items = (Array.isArray(list) && list.length) ? list : (feed.items.length ? feed.items : [item]);
   let position = items.indexOf(item);
@@ -350,12 +425,32 @@ function openItemViewer(item, list = null) {
     },
   });
 
+  // Rating/state taps repaint the open viewer in place (zoom, pan and folded prompt stay),
+  // and only the touched grid card is redrawn - no page reload while browsing.
+  const runQuickAction = async (action) => {
+    const current = items[position];
+    if (action === 'trash') {
+      confirmTrash(current);
+      return;
+    }
+    if (!(await quickAction(current, action, { reload: false }))) return;
+    Object.assign(current, ACTION_STATE[action] || {});
+    updateViewerChrome({
+      stateClass: stateClassOf(current),
+      quickActions: galleryQuickActions(current, runQuickAction),
+    });
+    // rating/state views filter on these flags: the item may belong outside the view now
+    if (!feed.album && STATE_VIEWS.has(feed.view)) emit('gallery-refresh');
+    else syncCard(current);
+  };
+
   const show = () => {
     const current = items[position];
     openViewer({
       src: viewerSrc(current),
       title: current.seed !== undefined && current.seed !== null ? `seed ${current.seed}` : '',
       meta: makeMetaNode(itemMetaSections(current), { folded: true }),
+      quickActions: galleryQuickActions(current, runQuickAction),
       actions: (current.imagemaker || current.qwen || current.krea2 || current.scan_only)
         ? ((current.infotext || current.prompt) ? [
           ...lineageActions(current),
@@ -367,9 +462,6 @@ function openItemViewer(item, list = null) {
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
           { label: '\u{1F4CE} To Krea 2', onClick: () => sendToKrea2Ref(current) },
           { label: '\u2B07 Save', onClick: () => downloadItem(current) },
-          current.archived
-            ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
-            : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
         ] : [
           ...lineageActions(current),
           { label: 'Use as Image', accent: true, onClick: () => useAsImage(current, { mode: 'img2img', meta: null }) },
@@ -378,9 +470,6 @@ function openItemViewer(item, list = null) {
           { label: '\u{1F4CE} To Qwen', onClick: () => sendToQwenRef(current) },
           { label: '\u{1F4CE} To Krea 2', onClick: () => sendToKrea2Ref(current) },
           { label: '\u2B07 Save', onClick: () => downloadItem(current) },
-          current.archived
-            ? { label: '\u{1F4E6} Unarchive', onClick: () => act('unarchive', current) }
-            : { label: '\u{1F4E6} Archive', onClick: () => act('archive', current) },
         ])
         : [
         ...lineageActions(current),
@@ -389,15 +478,6 @@ function openItemViewer(item, list = null) {
         { label: 'Use in Text', onClick: () => useMetaInText(metaFromItem(current)) },
         promptVariantAction(current),
         { label: '\u2B07 Save', onClick: () => downloadItem(current) },
-        current.endorsed
-          ? { label: '\u2B50 Un-endorse', onClick: () => act('unendorse', current) }
-          : { label: '\u2B50 Endorse', onClick: () => act('endorse', current) },
-        current.disliked
-          ? { label: 'Undislike', onClick: () => act('undislike', current) }
-          : { label: '\u{1F44E}', onClick: () => act('dislike', current) },
-        current.archived
-          ? { label: 'Unarchive', onClick: () => act('unarchive', current) }
-          : { label: '\u{1F4E6}', onClick: () => act('archive', current) },
       ],
       onNavigate: move,
       canNavigate: canMove,
