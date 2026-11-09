@@ -146,7 +146,17 @@ export function confirmSheet({ title = 'Are you sure?', message = '', confirmLab
 const VIEWER = {
   scale: 1, x: 0, y: 0, rotY: 0, pointers: new Map(), lastTap: 0, tag: '',
   onNavigate: null, canNavigate: null, swipe: null, flipToken: 0, flipAnim: null,
+  pending: null, // 'next'/'prev' while a flip is in flight, before the caller commits it
 };
+
+/**
+ * Direction the viewer is currently flipping towards, or null when it is resting.
+ * The facing image only swaps once the outgoing turn has finished, but a tap landing in
+ * that gap already belongs to the incoming image - callers resolve their item with this.
+ */
+export function viewerPendingDirection() {
+  return VIEWER.pending;
+}
 
 export function closeViewer() {
   document.getElementById('viewer').hidden = true;
@@ -187,6 +197,7 @@ function setViewerLoading(active) {
 /** Stop a running flip animation (a new gesture always wins). */
 function cancelViewerFlip() {
   VIEWER.flipToken += 1;
+  VIEWER.pending = null;
   if (VIEWER.flipAnim) {
     try { VIEWER.flipAnim.cancel(); } catch (_error) { /* already gone */ }
     VIEWER.flipAnim = null;
@@ -209,7 +220,8 @@ function springBackViewer() {
 
 /**
  * Flip-book transition: the current image turns away, the next one turns in from the other
- * side. `onNavigate` is only called once the outgoing image has left the screen.
+ * side. `onNavigate` is only called once the outgoing image has left the screen - until then
+ * `viewerPendingDirection()` reports where the flip is heading.
  */
 function startViewerFlip(direction) {
   const img = document.getElementById('viewerImg');
@@ -225,6 +237,7 @@ function startViewerFlip(direction) {
   const token = ++VIEWER.flipToken;
   const startX = VIEWER.x;
   const startRot = VIEWER.rotY;
+  VIEWER.pending = direction;
   VIEWER.x = 0; VIEWER.rotY = 0;
   applyViewerTransform(); // base style for the incoming image
 
@@ -241,6 +254,7 @@ function startViewerFlip(direction) {
     if (token !== VIEWER.flipToken) return;
     if (out) out.cancel();
     VIEWER.flipAnim = null;
+    VIEWER.pending = null;
     const navigated = VIEWER.onNavigate ? VIEWER.onNavigate(direction) : false;
     if (navigated !== true) {
       if (!out) playViewerBoundary(direction);
@@ -329,21 +343,65 @@ function setViewerStateClass(stateClass) {
   }
 }
 
+/** Run the action a viewer button currently represents. */
+function activateViewerButton(node) {
+  const live = node.__viewerAction;
+  if (live && live.onClick) live.onClick();
+}
+
+/**
+ * Paint `actions` into `host`, reusing the buttons already there instead of swapping nodes.
+ * The viewer repaints right after a swipe, and a button replaced while the finger is still
+ * down on it loses its tap; each button therefore runs its current action, so a reused node
+ * always triggers what it displays.
+ *
+ * A tap that follows a swipe often gets no `click` at all (the browser suppresses it for a
+ * moment), so a tap activates on `pointerup`; the click such a tap may still produce is
+ * ignored, and only keyboard/programmatic clicks (`detail === 0`) go through `click`.
+ */
+function syncViewerButtons(host, actions, describe) {
+  while (host.children.length > actions.length) host.lastElementChild.remove();
+  actions.forEach((action, index) => {
+    let node = host.children[index];
+    if (!node) {
+      node = el('button', { type: 'button' });
+      node.addEventListener('pointerdown', (event) => {
+        node.__press = event.isPrimary ? { x: event.clientX, y: event.clientY } : null;
+      });
+      node.addEventListener('pointerup', (event) => {
+        const press = node.__press;
+        node.__press = null;
+        if (!press || !event.isPrimary) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12) return; // a drag, not a tap
+        activateViewerButton(node);
+      });
+      node.addEventListener('pointercancel', () => { node.__press = null; });
+      node.addEventListener('click', (event) => {
+        if (event.detail !== 0) return; // a pointer tap already ran on pointerup
+        activateViewerButton(node);
+      });
+      host.append(node);
+    }
+    node.__viewerAction = action;
+    const view = describe(action);
+    node.className = view.className;
+    node.textContent = view.text || '';
+    node.title = view.title || '';
+    node.disabled = !!view.disabled;
+  });
+}
+
 /** Icon-only quick actions in the capsule above the viewer bar. */
 function renderViewerQuickBar(quickActions = []) {
   const quickBar = document.getElementById('viewerQuickBar');
-  clear(quickBar);
   quickBar.hidden = !quickActions.length;
-  for (const action of quickActions) {
-    quickBar.append(el('button', {
-      class: `viewer-quick-btn is-${action.kind || 'plain'}${action.active ? ' on' : ''}`,
-      type: 'button',
-      text: action.icon || '',
-      title: action.title || '',
-      disabled: !!action.disabled,
-      onClick: () => action.onClick && action.onClick(),
-    }));
-  }
+  syncViewerButtons(quickBar, quickActions, (action) => ({
+    className: `viewer-quick-btn is-${action.kind || 'plain'}${action.active ? ' on' : ''}`,
+    text: action.icon || '',
+    title: action.title || '',
+    disabled: action.disabled,
+  }));
 }
 
 /** Repaint the viewer chrome without reopening the image (keeps zoom, pan and folds). */
@@ -378,23 +436,20 @@ export function openViewer({ src, title = '', meta = null, actions = [], quickAc
 
   renderViewerQuickBar(quickActions);
 
-  const bar = clear(document.getElementById('viewerBar'));
-  for (const action of actions) {
-    bar.append(el('button', {
-      class: `btn tiny ${action.accent ? 'accent' : ''} ${action.danger ? 'danger' : ''}`,
-      type: 'button',
-      text: action.label,
-      title: action.title || '',
-      disabled: !!action.disabled,
-      onClick: () => action.onClick && action.onClick(),
-    }));
-  }
+  const bar = document.getElementById('viewerBar');
+  syncViewerButtons(bar, actions, (action) => ({
+    className: `btn tiny${action.accent ? ' accent' : ''}${action.danger ? ' danger' : ''}`,
+    text: action.label,
+    title: action.title || '',
+    disabled: action.disabled,
+  }));
 
   VIEWER.scale = 1; VIEWER.x = 0; VIEWER.y = 0; VIEWER.rotY = 0; VIEWER.pointers.clear();
   VIEWER.tag = tag;
   VIEWER.onNavigate = onNavigate;
   VIEWER.canNavigate = canNavigate;
   VIEWER.swipe = null;
+  VIEWER.pending = null;
   applyViewerTransform();
   document.getElementById('viewer').hidden = false;
 }

@@ -2,7 +2,7 @@
 
 import { api, api_ } from './api.js';
 import { emit, on, persist, state } from './state.js';
-import { clear, closeSheet, closeViewer, debounce, el, openSheet, openViewer, toast, updateViewerChrome } from './ui.js';
+import { clear, closeSheet, closeViewer, debounce, el, openSheet, openViewer, toast, updateViewerChrome, viewerPendingDirection } from './ui.js';
 import { galleryAction, makeMetaNode, useAsImage, useMetaInText, viewerSrc } from './send.js';
 
 const VIEWS = [
@@ -371,7 +371,8 @@ function galleryQuickActions(item, run) {
         active,
         disabled: blocked,
         title: blocked ? 'Rated images cannot be staged' : (def.title || (active ? def.titleOn : def.titleOff)),
-        onClick: () => run(def.action || (active ? def.actionOn : def.actionOff)),
+        // the tap resolves on/off against the item it actually lands on (see runQuickAction)
+        onClick: () => run(def),
       };
     });
 }
@@ -425,20 +426,35 @@ function openItemViewer(item, list = null) {
     },
   });
 
+  // A tap can land while the previous image is still turning away. It belongs to the image
+  // being navigated to, not to the one the user has already swiped past.
+  const pendingItem = () => {
+    const heading = viewerPendingDirection();
+    const step = heading === 'next' ? 1 : (heading === 'prev' ? -1 : 0);
+    return items[position + step] || items[position];
+  };
+
   // Rating/state taps repaint the open viewer in place (zoom, pan and folded prompt stay),
   // and only the touched grid card is redrawn - no page reload while browsing.
-  const runQuickAction = async (action) => {
-    const current = items[position];
+  const runQuickAction = async (def) => {
+    const current = pendingItem();
+    // resolve the toggle against the item the tap lands on: mid-flip the button was still
+    // rendered for the outgoing image
+    const action = def.action || (current[def.flag] ? def.actionOn : def.actionOff);
     if (action === 'trash') {
       confirmTrash(current);
       return;
     }
     if (!(await quickAction(current, action, { reload: false }))) return;
     Object.assign(current, ACTION_STATE[action] || {});
-    updateViewerChrome({
-      stateClass: stateClassOf(current),
-      quickActions: galleryQuickActions(current, runQuickAction),
-    });
+    // mid-flip the chrome still belongs to the outgoing image and is about to be repainted
+    // for the incoming one anyway
+    if (!viewerPendingDirection()) {
+      updateViewerChrome({
+        stateClass: stateClassOf(current),
+        quickActions: galleryQuickActions(current, runQuickAction),
+      });
+    }
     // rating/state views filter on these flags: the item may belong outside the view now
     if (!feed.album && STATE_VIEWS.has(feed.view)) emit('gallery-refresh');
     else syncCard(current);

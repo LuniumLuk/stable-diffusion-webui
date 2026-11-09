@@ -2,7 +2,7 @@
 
 import { api_, fetchImageData, optimizedUrl } from './api.js';
 import { emit, state } from './state.js';
-import { busy, openViewer, switchTab, toast } from './ui.js';
+import { busy, openViewer, switchTab, toast, viewerPendingDirection } from './ui.js';
 
 /** Push an already-materialized image into the Image screen and switch to it. */
 export function useSourceAsImage({ dataUrl, width, height, name = 'image', meta = null, uid = '' }, { mode = 'img2img' } = {}) {
@@ -132,22 +132,31 @@ export function openResultViewer(result, { list = null, index = -1, extraActions
   let position = index >= 0 ? Math.min(index, items.length - 1) : items.indexOf(result);
   if (position < 0) position = 0;
 
+  // A tap can land while the previous image is still turning away: it belongs to the image
+  // being navigated to, not to the one the user has already swiped past.
+  const activeItem = () => {
+    const heading = viewerPendingDirection();
+    const step = heading === 'next' ? 1 : (heading === 'prev' ? -1 : 0);
+    return items[position + step] || items[position];
+  };
+  const useItem = (item, mode) => openViewerImage(item, mode, (isNoneSdxlItem(item) || isImageMakerItem(item)) ? null : undefined);
+
   const show = () => {
     const item = items[position];
     const imageOnly = isNoneSdxlItem(item) || isImageMakerItem(item);
     const extras = typeof extraActions === 'function' ? extraActions(item) : extraActions;
     const actions = [
       ...extras,
-      { label: 'Use as Image', accent: true, onClick: () => { openViewerImage(item, 'img2img', imageOnly ? null : undefined); } },
-      { label: 'Use as Inpaint', onClick: () => { openViewerImage(item, 'inpaint', imageOnly ? null : undefined); } },
+      { label: 'Use as Image', accent: true, onClick: () => { useItem(activeItem(), 'img2img'); } },
+      { label: 'Use as Inpaint', onClick: () => { useItem(activeItem(), 'inpaint'); } },
     ];
 
     if (item.path && !imageOnly) {
-      const meta = metaFromResult(item);
       actions.push({
         label: '\u2B50 Endorse',
         onClick: async () => {
-          await galleryAction('endorse', { path: item.path, meta });
+          const target = activeItem();
+          await galleryAction('endorse', { path: target.path, meta: metaFromResult(target) });
         },
       });
     }
@@ -155,8 +164,9 @@ export function openResultViewer(result, { list = null, index = -1, extraActions
       actions.push({
         label: 'Use seed',
         onClick: () => {
-          import('./state.js').then(({ setSeedEverywhere }) => setSeedEverywhere(item.seed));
-          toast(`seed ${item.seed}`, 'ok', 1600);
+          const target = activeItem();
+          import('./state.js').then(({ setSeedEverywhere }) => setSeedEverywhere(target.seed));
+          toast(`seed ${target.seed}`, 'ok', 1600);
         },
       });
     }
