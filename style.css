@@ -7478,6 +7478,277 @@ body.resizing .resize-handle {
     background: rgba(127, 29, 29, 0.25);
 }
 
+.gv2-batch .gv2-btn[data-batch="compare"] {
+    color: #c4b5fd;
+    border-color: rgba(167, 139, 250, 0.6);
+}
+
+.gv2-batch .gv2-btn[data-batch="compare"]:hover:not(:disabled) {
+    background: rgba(139, 92, 246, 0.2);
+    color: #ede9fe;
+}
+
+/* Compare window: selected-image list | preview | detail panel. */
+.gv2-compare {
+    position: fixed;
+    inset: 0;
+    /* below the fullscreen viewer (1151) and the toast (1160) */
+    z-index: 1148;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(2px);
+}
+
+html.gv2-compare-open,
+html.gv2-compare-open body {
+    overflow: hidden;
+}
+
+.gv2-compare-shell {
+    display: flex;
+    flex-direction: column;
+    width: min(1500px, 100%);
+    height: 100%;
+    min-height: 0;
+    background: var(--gv2-bg);
+    border: 1px solid var(--gv2-line);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+    overflow: hidden;
+}
+
+.gv2-compare-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--gv2-line);
+    background: var(--gv2-panel);
+}
+
+.gv2-compare-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.gv2-compare-total {
+    display: inline-block;
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(139, 92, 246, 0.25);
+    border: 1px solid rgba(167, 139, 250, 0.55);
+    font-size: 12px;
+    text-align: center;
+}
+
+.gv2-compare-hint {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+    opacity: 0.65;
+}
+
+.gv2-compare-close {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid var(--gv2-line);
+    background: var(--gv2-bg);
+    color: var(--gv2-text);
+    font-size: 16px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+}
+
+.gv2-compare-close:hover {
+    border-color: rgba(248, 113, 113, 0.7);
+    color: #fca5a5;
+}
+
+.gv2-compare-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+}
+
+/* Horizontal filmstrip on top: the ← / → step order reads left to right. */
+.gv2-compare-list {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-bottom: 1px solid var(--gv2-line);
+    background: rgba(15, 23, 42, 0.45);
+    scrollbar-width: thin;
+}
+
+.gv2-compare-item {
+    position: relative;
+    flex: 0 0 auto;
+    width: 104px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 5px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: rgba(148, 163, 184, 0.07);
+    cursor: pointer;
+    user-select: none;
+}
+
+.gv2-compare-item:hover {
+    border-color: var(--gv2-line);
+    background: rgba(148, 163, 184, 0.14);
+}
+
+.gv2-compare-item.is-active {
+    border-color: rgba(167, 139, 250, 0.75);
+    background: rgba(139, 92, 246, 0.18);
+}
+
+.gv2-compare-item.is-endorsed { box-shadow: inset 0 3px 0 #22c55e; }
+.gv2-compare-item.is-disliked { box-shadow: inset 0 3px 0 #ef4444; }
+.gv2-compare-item.is-staged { box-shadow: inset 0 3px 0 #f97316; }
+.gv2-compare-item.is-archived { opacity: 0.72; }
+
+.gv2-compare-item.is-dragging {
+    opacity: 0.45;
+}
+
+.gv2-compare-item.is-drag-over-before {
+    border-left: 2px solid #a78bfa;
+}
+
+.gv2-compare-item.is-drag-over-after {
+    border-right: 2px solid #a78bfa;
+}
+
+.gv2-compare-num {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    min-width: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: rgba(2, 6, 23, 0.8);
+    color: #e5e7eb;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 15px;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* gradio's `.gradio-container img { height: auto }` outranks a single class and
+   would size the thumbnails by their aspect ratio */
+.gv2-compare-list .gv2-compare-thumb {
+    display: block;
+    width: 100%;
+    height: 58px;
+    min-height: 58px;
+    max-height: 58px;
+    object-fit: cover;
+    border-radius: 6px;
+    background: #0b1220;
+}
+
+.gv2-compare-name {
+    font-size: 10.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gv2-compare-sub {
+    font-size: 9.5px;
+    opacity: 0.62;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gv2-compare-empty {
+    padding: 10px;
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+.gv2-compare-stage {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px;
+    overflow: auto;
+    background:
+        repeating-conic-gradient(rgba(148, 163, 184, 0.06) 0% 25%, transparent 0% 50%)
+        50% / 24px 24px;
+}
+
+.gv2-compare-stage .gv2-detail-media {
+    width: min(100%, calc(54vh * var(--gv2-media-ar, 1)));
+}
+
+.gv2-compare-stage .gv2-detail-img,
+.gv2-compare-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-height: 54vh;
+    object-fit: contain;
+    background: #0b1220;
+    border-radius: 10px;
+    cursor: zoom-in;
+}
+
+.gv2-compare-nav {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+}
+
+.gv2-compare-pos {
+    font-size: 11.5px;
+    opacity: 0.75;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gv2-compare .gv2-compare-detail {
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    border-left: 1px solid var(--gv2-line);
+}
+
+@media (max-width: 1180px) {
+    .gv2-compare-body {
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+    }
+}
+
 .gv2-detail {
     position: fixed;
     inset: 0;
@@ -7857,6 +8128,13 @@ body.resizing .resize-handle {
     color: var(--gv2-muted);
 }
 
+/* long values (paths, prompts) must wrap instead of stretching the panel */
+.gv2-detail-row b {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-align: right;
+}
+
 .gv2-detail-history {
     font-size: 12px;
     color: var(--gv2-muted);
@@ -8120,6 +8398,28 @@ body.resizing .resize-handle {
 #img2img_macro_panel {
     flex: 0 0 196px;
     max-width: 196px;
+    /* gradio columns wrap their children into extra columns when they do not
+       fit; keep the macros + replacer stacked and let the column scroll inside
+       the results row instead of being clipped by it */
+    flex-wrap: nowrap;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+#txt2img_replacer_panel,
+#img2img_replacer_panel {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: 6px;
+    background: var(--body-background-fill, #0b1220);
+}
+
+#txt2img_replacer_panel .prompt-replacer-panel,
+#img2img_replacer_panel .prompt-replacer-panel {
+    background: var(--background-fill-secondary, rgba(15, 23, 42, 0.95));
 }
 
 .prompt-macro-panel {
@@ -8301,6 +8601,288 @@ body.resizing .resize-handle {
 #txt2img_macro_values,
 #img2img_macro_values {
     display: none !important;
+}
+
+/* ==== Prompt replacer: result-column window + edit-area preview ==== */
+#txt2img_replacer_panel,
+#img2img_replacer_panel {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: 6px;
+    background: var(--body-background-fill, #0b1220);
+}
+
+.prompt-replacer-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: min(38vh, 340px);
+    padding: 6px;
+    border: 1px solid var(--border-color-primary, rgba(148, 163, 184, 0.35));
+    border-radius: 8px;
+    background: var(--background-fill-secondary, rgba(15, 23, 42, 0.35));
+    font-size: 11px;
+}
+
+.prepl-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.85;
+}
+
+.prepl-title {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prepl-count {
+    font-weight: 500;
+    opacity: 0.7;
+}
+
+/* img2img keeps separate rule sets for the image and inpaint sub-modes */
+.prepl-mode {
+    flex: none;
+    padding: 0 5px;
+    border-radius: 999px;
+    border: 1px solid rgba(56, 189, 248, 0.5);
+    background: rgba(8, 47, 73, 0.55);
+    color: #7dd3fc;
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 14px;
+    text-transform: uppercase;
+}
+
+.prepl-power {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(248, 113, 113, 0.6);
+    background: rgba(127, 29, 29, 0.3);
+    color: #fca5a5;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.prepl-power.is-on {
+    border-color: rgba(74, 222, 128, 0.6);
+    background: rgba(22, 101, 52, 0.4);
+    color: #86efac;
+}
+
+.prepl-body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.prepl-rule {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: rgba(148, 163, 184, 0.06);
+}
+
+.prepl-rule.is-off {
+    opacity: 0.55;
+}
+
+.prepl-rule-head {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.prepl-en,
+.prepl-regex,
+.prepl-del,
+.prepl-add,
+.prepl-clear {
+    flex: none;
+    border: 1px solid var(--border-color-primary, rgba(148, 163, 184, 0.4));
+    background: rgba(15, 23, 42, 0.6);
+    color: inherit;
+    border-radius: 5px;
+    font: inherit;
+    font-size: 10px;
+    line-height: 16px;
+    padding: 0 4px;
+    cursor: pointer;
+}
+
+.prepl-en {
+    color: #86efac;
+}
+
+.prepl-rule.is-off .prepl-en {
+    color: #94a3b8;
+}
+
+.prepl-regex {
+    color: #94a3b8;
+}
+
+.prepl-regex.is-on {
+    color: #fcd34d;
+    border-color: rgba(251, 191, 36, 0.55);
+    background: rgba(120, 72, 12, 0.35);
+}
+
+.prepl-regex code {
+    font-size: 10px;
+}
+
+.prepl-hits {
+    flex: 1 1 auto;
+    font-size: 9.5px;
+    opacity: 0.65;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prepl-hits.is-hit {
+    opacity: 1;
+    color: #7dd3fc;
+}
+
+.prepl-hits.is-error {
+    opacity: 1;
+    color: #fca5a5;
+}
+
+.prepl-del {
+    color: #fca5a5;
+}
+
+.prepl-del:hover {
+    border-color: rgba(239, 68, 68, 0.7);
+    background: rgba(127, 29, 29, 0.35);
+}
+
+/* gradio's Textbox rule (`input.svelte-… { font-size: var(--input-text-size);
+   padding: var(--input-padding) }`) outranks a plain class, so the compact sizes
+   have to be forced. */
+.prompt-replacer-panel input.prepl-input {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    height: 20px !important;
+    min-height: 20px !important;
+    max-height: 20px !important;
+    margin: 0 !important;
+    padding: 0 5px !important;
+    border: 1px solid var(--border-color-primary, rgba(148, 163, 184, 0.35)) !important;
+    border-radius: 5px !important;
+    background: rgba(2, 6, 23, 0.55) !important;
+    color: inherit !important;
+    font-family: inherit !important;
+    font-size: 11px !important;
+    font-weight: 400 !important;
+    line-height: 18px !important;
+    box-shadow: none !important;
+}
+
+.prompt-replacer-panel input.prepl-input:focus {
+    border-color: rgba(167, 139, 250, 0.8) !important;
+}
+
+.prompt-replacer-panel input.prepl-input.prepl-replace {
+    border-left: 2px solid rgba(74, 222, 128, 0.55) !important;
+}
+
+.prompt-replacer-panel input.prepl-input.prepl-find {
+    border-left: 2px solid rgba(251, 191, 36, 0.55) !important;
+}
+
+.prepl-empty {
+    padding: 3px 2px;
+    opacity: 0.55;
+    font-size: 10px;
+}
+
+.prepl-foot {
+    display: flex;
+    gap: 4px;
+}
+
+.prepl-add {
+    flex: 1 1 auto;
+    color: #c4b5fd;
+    border-color: rgba(167, 139, 250, 0.5);
+    padding: 2px 4px;
+}
+
+.prepl-add:hover {
+    background: rgba(139, 92, 246, 0.2);
+}
+
+.prepl-clear {
+    color: #94a3b8;
+}
+
+/* Inline replace preview, drawn INSIDE the prompt text by promptReplacer.js:
+   the match is struck through and the replacement follows it inline.
+   Text mode (CodeMirror) uses mark + widget decorations, chips mode decorates
+   the chip text itself. */
+.pedit-cm-wrap .prepl-cm-old {
+    color: #fca5a5;
+    background: rgba(127, 29, 29, 0.22);
+    border-radius: 3px;
+    padding: 0 1px;
+    text-decoration: line-through;
+    text-decoration-color: rgba(248, 113, 113, 0.95);
+    text-decoration-thickness: 1.5px;
+}
+
+.pedit-cm-wrap .prepl-cm-new {
+    display: inline;
+    margin: 0 1px;
+    padding: 0 5px;
+    border: 1px solid rgba(74, 222, 128, 0.45);
+    border-radius: 999px;
+    background: rgba(22, 101, 52, 0.35);
+    color: #86efac;
+    font-size: 0.86em;
+    white-space: pre;
+}
+
+.pedit-chip-text .prepl-inline-old {
+    color: #fca5a5;
+    text-decoration: line-through;
+    text-decoration-color: rgba(248, 113, 113, 0.95);
+}
+
+.pedit-chip-text .prepl-inline-new {
+    margin-left: 3px;
+    color: #86efac;
+    font-weight: 600;
+}
+
+/* ==== img2img resize tabs: "By mask" only exists in the inpaint sub-modes ==== */
+
+/* the tab button is hidden by img2imgStagePanel.js when the sub-mode has no mask */
+#img2img_tabs_resize .tab-nav button.img2img-mask-tab-hidden {
+    display: none;
 }
 
 /* ---------------------------------------------------------------- global secure mode */

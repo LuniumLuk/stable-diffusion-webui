@@ -494,6 +494,52 @@ export async function createPromptCM({
     provide: (field) => EditorView.decorations.from(field),
   });
 
+  /* ------------------------------------------------- prompt-replacer preview */
+  // Inline marks pushed by javascript/promptReplacer.js (setReplacePreview): the
+  // matched range is struck through and the replacement is drawn right after it.
+  // Visual only - the document never changes - and dropped on every edit, so the
+  // caller re-applies with fresh offsets.
+
+  class ReplacePreviewWidget extends WidgetType {
+    constructor(text) {
+      super();
+      this.text = text;
+    }
+
+    eq(other) { return other instanceof ReplacePreviewWidget && other.text === this.text; }
+
+    toDOM() {
+      const chip = document.createElement('span');
+      chip.className = 'prepl-cm-new';
+      chip.textContent = ' \u2192 ' + this.text;
+      chip.title = 'Prompt replacer: the struck-out text is replaced by this';
+      return chip;
+    }
+  }
+
+  const setReplacePreview = StateEffect.define();
+  const replacePreviewField = StateField.define({
+    create: () => Decoration.none,
+    update(value, tr) {
+      if (tr.docChanged) return Decoration.none;
+      for (const effect of tr.effects) {
+        if (!effect.is(setReplacePreview)) continue;
+        const marks = [];
+        for (const range of effect.value || []) {
+          if (!range || range.to <= range.from) continue;
+          marks.push(Decoration.mark({ class: 'prepl-cm-old' }).range(range.from, range.to));
+          marks.push(Decoration.widget({
+            widget: new ReplacePreviewWidget(range.text || ''),
+            side: 1,
+          }).range(range.to));
+        }
+        return marks.length ? Decoration.set(marks, true) : Decoration.none;
+      }
+      return value;
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+
   /** Comment lines, `# ---` markers and disabled `#(...)` groups, from the document. */
   function buildDecorations(state) {
     const marks = [];
@@ -1254,6 +1300,7 @@ export async function createPromptCM({
           enterkeyhint: 'enter',
         }),
         activeTokenField,
+        replacePreviewField,
         decorationField,
         dropCursor(),
         EditorView.updateListener.of((update) => {
@@ -1367,6 +1414,21 @@ export async function createPromptCM({
     focus: () => view.focus(),
     requestMeasure: () => view.requestMeasure(),
     refreshMacros: () => view.dispatch({ effects: macroEffect.of(true) }),
+    /** Inline replace preview: [{from, to, text}] offsets in the current document. */
+    setReplacePreview(ranges) {
+      const limit = view.state.doc.length;
+      const safe = [];
+      for (const range of ranges || []) {
+        const from = Math.max(0, Math.min(limit, Number(range && range.from) || 0));
+        const to = Math.max(0, Math.min(limit, Number(range && range.to) || 0));
+        if (to > from) safe.push({ from, to, text: String(range.text == null ? '' : range.text) });
+      }
+      try {
+        view.dispatch({ effects: setReplacePreview.of(safe) });
+      } catch (error) {
+        /* stale offsets or a dispatch during an update - the next refresh re-applies */
+      }
+    },
     closePopups: () => closePopup(),
     destroy() {
       destroyed = true;

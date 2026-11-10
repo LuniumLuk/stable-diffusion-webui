@@ -238,6 +238,7 @@ def endorse_current(js_data, images, index):
 class MacroPanel:
     html = None
     values = None
+    replacer = None
 
 
 def create_macro_panel(tabname):
@@ -259,6 +260,13 @@ def create_macro_panel(tabname):
         panel.values = gr.Textbox(
             value="{}", show_label=False, elem_id=f"{tabname}_macro_values",
             elem_classes=["prompt-macro-values"],
+        )
+        # prompt replacer: rendered by javascript/promptReplacer.js; the rules only
+        # touch the outgoing request, the prompt boxes keep the typed text
+        panel.replacer = gr.HTML(
+            f'<div class="prompt-replacer-panel" data-tab="{tabname}"'
+            f' data-prompt="{tabname}_prompt" data-negative="{tabname}_neg_prompt"></div>',
+            elem_id=f"{tabname}_replacer_panel",
         )
     return panel
 

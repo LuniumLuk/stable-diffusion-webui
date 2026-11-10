@@ -36,6 +36,30 @@ def get_crop_region(mask, pad=0):
     return max(x1 - pad, 0), max(y1 - pad, 0), min(x2 + pad, mask.size[0]), min(y2 + pad, mask.size[1])
 
 
+def mask_union_crop_region(masks, invert=False):
+    """
+    Union bounding box of the inpaint regions of the given masks (already-binary "L" images).
+
+    Empty or ``None`` entries are skipped; returns ``None`` when no mask has any content.
+    ``invert`` measures the complement instead, matching "Inpaint not masked".
+    """
+    box = None
+    for mask in masks:
+        if mask is None:
+            continue
+        layer = mask.convert("L")
+        if invert:
+            layer = ImageOps.invert(layer)
+        region = get_crop_region_v2(layer)
+        if not region:
+            continue
+
+        x1, y1, x2, y2 = region
+        box = (x1, y1, x2, y2) if box is None else (min(box[0], x1), min(box[1], y1), max(box[2], x2), max(box[3], y2))
+
+    return box
+
+
 def expand_crop_region(crop_region, processing_width, processing_height, image_width, image_height):
     """expands crop region get_crop_region() to match the ratio of the image the region will processed in; returns expanded region
     for example, if user drew mask in a 128x32 region, and the dimensions for processing are 512x512, the region will be expanded to 128x128."""

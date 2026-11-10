@@ -42,6 +42,8 @@ const MAX_SUGGEST = 14;
 const POLL_MS = 600;
 
 const instances = new Map(); // host id -> CM instance (debug + tests)
+// promptReplacer.js draws its inline preview through these instances
+window.promptCMInstances = instances;
 
 /* ------------------------------------------------------------------ helpers */
 

@@ -16,8 +16,8 @@ const IMG2IMG_STAGE_FALLBACK_FIELDS = [
     { key: "image_cfg_scale", label: "Image CFG Scale" },
     { key: "width", label: "Width" },
     { key: "height", label: "Height" },
-    { key: "resize_tab", label: "Resize To/By" },
-    { key: "scale_by", label: "Scale (Resize by)" },
+    { key: "resize_tab", label: "Resize To/By/Mask" },
+    { key: "scale_by", label: "Scale (Resize by / By mask)" },
     { key: "batch_count", label: "Batch count" },
     { key: "batch_size", label: "Batch size" },
     { key: "denoising_strength", label: "Denoising strength" },
@@ -222,8 +222,41 @@ function img2imgStageApplyByIndex(index) {
 }
 
 /**
- * Visually select the Resize To/By tab matching the hidden selector value
- * (0 = Resize to, 1 = Resize by). Called from the selector's change event,
+ * The "By mask" resize tab measures the inpaint mask, so it only exists in the inpaint
+ * modes (2 = inpaint, 3 = inpaint sketch, 4 = inpaint upload).
+ */
+function img2imgMaskScaleTabVisible() {
+    const modeNav = gradioApp().querySelector('#mode_img2img .tab-nav');
+    if (!modeNav) return false;
+
+    const buttons = Array.prototype.slice.call(modeNav.querySelectorAll('button'));
+    const idx = buttons.findIndex(function (button) { return button.classList.contains('selected'); });
+    return idx >= 2 && idx <= 4;
+}
+
+/**
+ * Hide the "By mask" resize tab outside the inpaint modes, and leave it selected only
+ * where it means something: a hidden tab must never stay the active one.
+ */
+function syncImg2imgMaskScaleTab() {
+    const tabsEl = gradioApp().getElementById('img2img_tabs_resize');
+    if (!tabsEl) return;
+
+    const nav = tabsEl.querySelector('.tab-nav');
+    const buttons = nav ? Array.prototype.slice.call(nav.querySelectorAll('button')) : [];
+    if (buttons.length < 3) return;
+
+    const show = img2imgMaskScaleTabVisible();
+    buttons[2].classList.toggle('img2img-mask-tab-hidden', !show);
+
+    if (!show && buttons[2].classList.contains('selected')) {
+        buttons[0].click();
+    }
+}
+
+/**
+ * Visually select the Resize To/By/Mask tab matching the hidden selector value
+ * (0 = Resize to, 1 = Resize by, 2 = By mask). Called from the selector's change event,
  * which gradio fires for both user clicks and stage-apply output updates.
  */
 function syncImg2imgResizeTab(value) {
@@ -231,10 +264,13 @@ function syncImg2imgResizeTab(value) {
     if (!tabsEl) return [];
 
     const idx = Number(value);
-    if (idx !== 0 && idx !== 1) return [];
+    if (idx !== 0 && idx !== 1 && idx !== 2) return [];
+
+    syncImg2imgMaskScaleTab();
 
     const buttons = tabsEl.querySelectorAll('button');
-    const target = buttons[idx];
+    // a Resize-by-mask state restored outside the inpaint modes falls back to "Resize to"
+    const target = buttons[idx === 2 && !img2imgMaskScaleTabVisible() ? 0 : idx];
     if (target && !target.classList.contains('selected')) {
         target.click();
     }
@@ -264,3 +300,13 @@ document.addEventListener('keydown', function(event) {
         event.stopPropagation();
     }
 });
+
+// The resize tabs follow the img2img sub-mode: keep "By mask" in sync with it.
+// Bubble phase, so gradio has already moved `selected` to the clicked sub-mode tab.
+document.addEventListener('click', function(event) {
+    if (!(event.target instanceof Element) || !event.target.closest('#mode_img2img .tab-nav')) return;
+    setTimeout(syncImg2imgMaskScaleTab, 0);
+    setTimeout(syncImg2imgMaskScaleTab, 300);
+});
+
+onUiLoaded(syncImg2imgMaskScaleTab);

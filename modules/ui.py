@@ -115,6 +115,13 @@ def resize_from_to_html(width, height, scale_by):
     return f"resize: from <span class='resolution'>{width}x{height}</span> to <span class='resolution'>{target_width}x{target_height}</span>"
 
 
+MASK_AREA_SCALE_HINT = (
+    "generate at the masked area's bounding box <span class='resolution'>× Scale</span>: "
+    "snapped to 8px, limited to 64-2048. Batch masks use the union of all layers, "
+    "\"Inpaint not masked\" measures the unpainted area. Inpaint modes only."
+)
+
+
 def process_interrogate(interrogation_function, mode, ii_input_dir, ii_output_dir, *ii_singles):
     if mode in {0, 1, 3, 4}:
         return [interrogation_function(ii_singles[mode]), None]
@@ -724,6 +731,10 @@ def create_ui():
                                             gr.Slider(label="Unused", elem_id="img2img_unused_scale_by_slider")
                                             button_update_resize_to = gr.Button(visible=False, elem_id="img2img_update_resize_to")
 
+                                    with gr.Tab(label="By mask", id="mask", elem_id="img2img_tab_resize_mask") as tab_scale_mask:
+                                        scale_by_mask = gr.Slider(minimum=0.05, maximum=4.0, step=0.05, label="Scale", value=1.0, elem_id="img2img_scale_mask")
+                                        FormHTML(MASK_AREA_SCALE_HINT, elem_id="img2img_mask_scale_hint")
+
                                     on_change_args = dict(
                                         fn=resize_from_to_html,
                                         _js="currentImg2imgSourceResolution",
@@ -737,6 +748,14 @@ def create_ui():
 
                             tab_scale_to.select(fn=lambda: 0, inputs=[], outputs=[selected_scale_tab])
                             tab_scale_by.select(fn=lambda: 1, inputs=[], outputs=[selected_scale_tab])
+                            tab_scale_mask.select(fn=lambda: 2, inputs=[], outputs=[selected_scale_tab])
+
+                            # the mask tab owns the same scale value as "Resize by": either slider
+                            # writes it into the one the generation call reads
+                            tab_scale_by.select(fn=lambda scale: scale, inputs=[scale_by], outputs=[scale_by_mask], show_progress=False)
+                            tab_scale_mask.select(fn=lambda scale: scale, inputs=[scale_by], outputs=[scale_by_mask], show_progress=False)
+                            scale_by_mask.release(fn=lambda scale: scale, inputs=[scale_by_mask], outputs=[scale_by], show_progress=False)
+                            scale_by_mask.change(fn=lambda scale: scale, inputs=[scale_by_mask], outputs=[scale_by], show_progress=False)
 
                             # When the hidden tab selector changes (user click or stage
                             # apply), visually switch the Resize To/By tabs accordingly.

@@ -731,6 +731,9 @@
         if (!textarea) return;
         host.dataset.peditReady = '1';
         const macroTab = host.id.startsWith('img2img') ? 'img2img' : 'txt2img';
+        // inline prompt-replacer preview: only the two generation prompt boxes
+        const replacerTab = host.id.startsWith('txt2img') ? 'txt2img'
+            : (host.id.startsWith('img2img') ? 'img2img' : '');
 
         host.classList.add('pedit-host');
 
@@ -820,7 +823,11 @@
             else if (macro) children.push(`<span class="pedit-chip-kind" title="${syntax && syntax.ok ? 'custom macro' : 'custom macro error'}">${syntax && syntax.ok ? '🎛' : '⚠️'}</span>`);
             else if (token.kind === 'angle') children.push('<span class="pedit-chip-kind" title="extra network tag">◈</span>');
             else if (syntax) children.push(`<span class="pedit-chip-kind" title="${syntax.ok ? 'prompt syntax' : 'prompt syntax error'}">${syntax.ok ? '🎲' : '⚠️'}</span>`);
-            children.push(`<span class="pedit-chip-text">${escapeHtml(token.text || '…')}</span>`);
+            const chipLabel = token.text || '…';
+            const chipText = replacerTab && window.promptReplacer && window.promptReplacer.decorateChipText
+                ? window.promptReplacer.decorateChipText(chipLabel, replacerTab)
+                : escapeHtml(chipLabel);
+            children.push(`<span class="pedit-chip-text">${chipText}</span>`);
             if (syntax) {
                 if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
                     children.push(`<span class="pedit-chip-w pedit-chip-pick" title="keywords drawn per image / keywords in the group">${syntax.count}/${syntax.items.length}</span>`);
@@ -1489,6 +1496,12 @@
         window.addEventListener('pedit-macros-changed', (event) => {
             if (mode() !== 'chips') return;
             if (!event.detail || !event.detail.tab || event.detail.tab === macroTab) render();
+        });
+
+        // the replacer rules changed: redraw the inline replace marks
+        window.addEventListener('pedit-replacer-changed', (event) => {
+            if (!replacerTab || mode() !== 'chips') return;
+            if (!event.detail || !event.detail.tab || event.detail.tab === replacerTab) render();
         });
 
         setInterval(() => {

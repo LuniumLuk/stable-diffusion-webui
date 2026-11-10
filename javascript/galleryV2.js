@@ -825,6 +825,8 @@
         '<button class="gv2-btn gv2-btn-quiet gv2-batch-exit" data-batch="exitselect" title="Leave select mode (Esc)">\u2715 Exit select</button>' +
         '<span class="gv2-adv-sep gv2-batch-sep"></span>' +
         '<button class="gv2-btn gv2-btn-quiet" data-batch="selectpage" title="Select all items currently loaded in the grid">Select shown</button>' +
+        '<button class="gv2-btn" data-batch="compare" disabled ' +
+          'title="Open the compare window for the selected images (drag the list to reorder)">\u2194 Compare window</button>' +
         '<button class="gv2-btn" data-batch="endorse">Endorse</button>' +
         '<button class="gv2-btn" data-batch="dislike">Dislike</button>' +
         '<button class="gv2-btn" data-batch="archive">Archive</button>' +
@@ -930,6 +932,7 @@
       if (action === 'clear') { setSelection([]); return; }
       if (action === 'exitselect') { setSelectMode(false); return; }
       if (action === 'selectpage') { selectPage(); return; }
+      if (action === 'compare') { openCompareWindow(); return; }
       if (action === 'copy-censored') { copySelectedToCensored(); return; }
       if (action === 'album') {
         if (!state.selected.size) { toast('Select items first', true); return; }
@@ -1840,6 +1843,14 @@
     bar.classList.toggle('gv2-batch-hidden', !(state.selectMode || state.selected.size > 0));
     bar.classList.toggle('gv2-batch-off', state.selected.size === 0);
     bar.classList.toggle('gv2-batch-selecting', state.selectMode);
+    var compareBtn = bar.querySelector('[data-batch="compare"]');
+    if (compareBtn) {
+      var enough = state.selected.size >= 2;
+      compareBtn.disabled = !enough;
+      compareBtn.title = enough
+        ? 'Open the compare window for the ' + state.selected.size + ' selected image(s) (drag the list to reorder)'
+        : 'Select at least two images to open the compare window';
+    }
   }
 
   function setSelectMode(on) {
@@ -1922,6 +1933,7 @@
     if (ev.defaultPrevented || ev.repeat) return;
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (window.gv2LightboxNav || ev._lightboxHandled) return;
+    if (el('gv2-compare')) return;
     if (isTypingTarget(ev.target)) return;
     var root = el(ROOT_ID);
     if (!root || !root.getClientRects().length) return;
@@ -2452,9 +2464,66 @@
       '</div>';
   }
 
+  function reloadDetail(item) {
+    return api('/gallery/api/item?id=' + encodeURIComponent(item.uid))
+      .then(function (fresh) { renderDetail(fresh); })
+      .catch(function () {});
+  }
+
   function renderDetail(item) {
     var box = el('gv2-detail');
     if (!box) return;
+    box.innerHTML = '<div class="gv2-detail-stage"></div>' +
+      '<div class="gv2-detail-panel">' + detailPanelHtml(item, true) + '</div>';
+    box.classList.remove('gv2-detail-hidden');
+    applyDetailMediaMode();
+
+    el('gv2-detail-close').addEventListener('click', closeDetail);
+    var mediaToggle = el('gv2-detail-media-toggle');
+    if (mediaToggle) {
+      mediaToggle.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        state.detailMediaLeft = !state.detailMediaLeft;
+        savePrefs();
+        applyDetailMediaMode();
+      });
+    }
+    var detailStage = box.querySelector('.gv2-detail-stage');
+    if (detailStage) {
+      detailStage.addEventListener('click', function (ev) {
+        // clicking the empty space around the preview leaves the drawer
+        if (ev.target && ev.target.closest && ev.target.closest('.gv2-detail-img')) return;
+        closeDetail();
+      });
+    }
+    var detailImg = box.querySelector('.gv2-detail-img');
+    if (detailImg) {
+      // item dimensions can be missing on old rows - the loaded picture knows better
+      var mediaBox = box.querySelector('.gv2-detail-media');
+      var syncMediaRatio = function () {
+        if (!mediaBox || !detailImg.naturalWidth || !detailImg.naturalHeight) return;
+        mediaBox.style.setProperty('--gv2-media-ar',
+          (detailImg.naturalWidth / detailImg.naturalHeight).toFixed(4));
+      };
+      syncMediaRatio();
+      detailImg.addEventListener('load', syncMediaRatio);
+      // a dropped/missing preview blob still leaves the thumb on screen
+      detailImg.addEventListener('error', function () {
+        if (detailImg.dataset.fallback === 'thumb') return;
+        detailImg.dataset.fallback = 'thumb';
+        detailImg.src = blobUrl(item, 'thumb');
+      });
+      detailImg.addEventListener('click', function () { openDetailViewer(item); });
+    }
+    wireDetailPanel(box, item, { markCard: true });
+  }
+
+  /**
+   * Markup of the detail panel. `withMedia` keeps the preview and the toggle
+   * that moves it to the stage; the compare window shows the picture in its own
+   * stage and asks for the metadata-only panel.
+   */
+  function detailPanelHtml(item, withMedia) {
     var meta = item.meta || {};
     var rows = [
       ['Source', item.source + (item.variant ? ' / ' + item.variant : '')],
@@ -2500,16 +2569,15 @@
       return esc(e.event) + ' \u00b7 ' + esc(e.at);
     }).join('<br>');
     var expiry = expiryText(item);
-    box.innerHTML =
-      '<div class="gv2-detail-stage"></div>' +
-      '<div class="gv2-detail-panel">' +
-        '<div class="gv2-detail-head">' +
-          '<button id="gv2-detail-media-toggle" class="gv2-detail-media-toggle" ' +
-            'title="Show the preview on the left">\u25a5</button>' +
-          '<button id="gv2-detail-close" class="gv2-detail-close">\u00d7</button>' +
-        '</div>' +
-        '<div class="gv2-detail-img-wrap">' + img + '</div>' +
-        '<div class="gv2-detail-body">' +
+    var head = withMedia === false ? '' :
+      '<div class="gv2-detail-head">' +
+        '<button id="gv2-detail-media-toggle" class="gv2-detail-media-toggle" ' +
+          'title="Show the preview on the left">\u25a5</button>' +
+        '<button id="gv2-detail-close" class="gv2-detail-close">\u00d7</button>' +
+      '</div>';
+    var media = withMedia === false ? '' : '<div class="gv2-detail-img-wrap">' + img + '</div>';
+    return head + media +
+      '<div class="gv2-detail-body">' +
           (item.state !== 'trashed'
             ? '<div class="gv2-detail-fileops">' +
                 '<button class="gv2-btn gv2-btn-quiet" data-detail-op="download" ' +
@@ -2563,71 +2631,44 @@
           '</div>' +
           '<div class="gv2-detail-section"><div class="gv2-detail-label">History</div>' +
             '<div class="gv2-detail-history">' + (events || 'none') + '</div></div>' +
-        '</div>' +
-      '</div>';
-    box.classList.remove('gv2-detail-hidden');
-    applyDetailMediaMode();
+        '</div>';
+  }
 
-    el('gv2-detail-close').addEventListener('click', closeDetail);
-    var mediaToggle = el('gv2-detail-media-toggle');
-    if (mediaToggle) {
-      mediaToggle.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        state.detailMediaLeft = !state.detailMediaLeft;
-        savePrefs();
-        applyDetailMediaMode();
-      });
-    }
-    var detailStage = box.querySelector('.gv2-detail-stage');
-    if (detailStage) {
-      detailStage.addEventListener('click', function (ev) {
-        // clicking the empty space around the preview leaves the drawer
-        if (ev.target && ev.target.closest && ev.target.closest('.gv2-detail-img')) return;
-        closeDetail();
-      });
-    }
-    var detailImg = box.querySelector('.gv2-detail-img');
-    if (detailImg) {
-      // item dimensions can be missing on old rows - the loaded picture knows better
-      var mediaBox = box.querySelector('.gv2-detail-media');
-      var syncMediaRatio = function () {
-        if (!mediaBox || !detailImg.naturalWidth || !detailImg.naturalHeight) return;
-        mediaBox.style.setProperty('--gv2-media-ar',
-          (detailImg.naturalWidth / detailImg.naturalHeight).toFixed(4));
-      };
-      syncMediaRatio();
-      detailImg.addEventListener('load', syncMediaRatio);
-      // a dropped/missing preview blob still leaves the thumb on screen
-      detailImg.addEventListener('error', function () {
-        if (detailImg.dataset.fallback === 'thumb') return;
-        detailImg.dataset.fallback = 'thumb';
-        detailImg.src = blobUrl(item, 'thumb');
-      });
-      detailImg.addEventListener('click', function () { openDetailViewer(item); });
-    }
-    box.querySelectorAll('[data-detail-op]').forEach(function (btn) {
+  /**
+   * Wires every control of a rendered detail panel. `scope` holds the markup -
+   * the detail drawer or the compare window column.
+   */
+  function wireDetailPanel(scope, item, opts) {
+    opts = opts || {};
+    var rerender = opts.rerender || function () { return reloadDetail(item); };
+    var panelEl = scope.classList && scope.classList.contains('gv2-detail-panel')
+      ? scope
+      : scope.querySelector('.gv2-detail-panel');
+    scope.querySelectorAll('[data-detail-op]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var op = btn.getAttribute('data-detail-op');
         if (op === 'download') downloadItem(item);
         else if (op === 'explorer') revealItem(item);
       });
     });
-    var parentBtn = el('gv2-detail-parent');
+    var parentBtn = scope.querySelector('#gv2-detail-parent');
     if (parentBtn && item.parent && item.parent.exists) {
       parentBtn.addEventListener('click', function () {
+        if (opts.openParent) { opts.openParent(item.parent.uid); return; }
         openDetailUid(item.parent.uid, { pushTrail: true });
       });
     }
-    var backBtn = el('gv2-detail-back');
+    var backBtn = scope.querySelector('#gv2-detail-back');
     if (backBtn) {
       backBtn.addEventListener('click', function () {
         var previous = state.detailTrail.pop();
         if (previous) openDetailUid(previous);
       });
     }
-    box.querySelectorAll('[data-send-act]').forEach(function (btn) {
+    scope.querySelectorAll('[data-send-act]').forEach(function (btn) {
       var act = btn.getAttribute('data-send-act');
       btn.addEventListener('click', function () {
+        if (opts.beforeSend) opts.beforeSend();
         sendItemTo(item, act, bareSendAction(act) ? { only: sendDefaultOnly(act) } : undefined);
       });
       if (bareSendAction(act)) {
@@ -2640,44 +2681,43 @@
         });
       }
     });
-    box.querySelectorAll('[data-detail-act]').forEach(function (btn) {
+    scope.querySelectorAll('[data-detail-act]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var current = detailRow();
-        var act = current ? actionFor(current, btn.getAttribute('data-detail-act')) : btn.getAttribute('data-detail-act');
+        var act = actionFor(item, btn.getAttribute('data-detail-act'));
         runAction(act, [item.uid], {}).then(function () {
-          markDetailCard(false);
-          return api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(renderDetail).catch(function () {});
+          if (opts.markCard) markDetailCard(false);
+          return rerender();
         });
       });
     });
-    var addBtn = el('gv2-detail-tagadd');
+    var addBtn = scope.querySelector('#gv2-detail-tagadd');
     if (addBtn) {
       addBtn.addEventListener('click', function () {
-        var value = el('gv2-detail-taginput').value.trim();
+        var value = scope.querySelector('#gv2-detail-taginput').value.trim();
         if (!value) return;
         runAction('add_tag', [item.uid], { tag: value, category: 'workflow' }).then(function () {
-          api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(renderDetail).catch(function () {});
+          api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(rerender).catch(function () {});
           refreshFacets();
         });
       });
     }
-    box.querySelectorAll('[data-remove-tag]').forEach(function (btn) {
+    scope.querySelectorAll('[data-remove-tag]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         runAction('remove_tag', [item.uid], { tag: btn.getAttribute('data-remove-tag'), category: 'workflow' })
           .then(function () {
-            api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(renderDetail).catch(function () {});
+            api('/gallery/api/item?id=' + encodeURIComponent(item.uid)).then(rerender).catch(function () {});
             refreshFacets();
           });
       });
     });
-    var copyBtn = el('gv2-copy-prompt');
+    var copyBtn = scope.querySelector('#gv2-copy-prompt');
     if (copyBtn) {
       copyBtn.addEventListener('click', function () {
         if (navigator.clipboard) navigator.clipboard.writeText(activePrompt(item));
         toast(state.promptVariant === 'compiled' && hasCompiledPrompt(item) ? 'Compiled prompt copied' : 'Prompt copied');
       });
     }
-    box.querySelectorAll('[data-prompt-variant]').forEach(function (btn) {
+    scope.querySelectorAll('[data-prompt-variant]').forEach(function (btn) {
       btn.addEventListener('click', function (ev) {
         ev.stopPropagation();
         var next = btn.getAttribute('data-prompt-variant');
@@ -2685,31 +2725,32 @@
         if (state.promptVariant === next) return;
         state.promptVariant = next;
         savePrefs();
-        // re-render in place, keeping the drawer where the user was reading
-        var panel = box.querySelector('.gv2-detail-panel');
+        // re-render in place, keeping the panel where the user was reading
+        var panel = panelEl;
         var scroll = panel ? panel.scrollTop : 0;
-        renderDetail(item);
-        var nextPanel = box.querySelector('.gv2-detail-panel');
-        if (nextPanel) nextPanel.scrollTop = scroll;
+        var done = rerender();
+        var restore = function () { if (panelEl) panelEl.scrollTop = scroll; };
+        if (done && typeof done.then === 'function') done.then(restore, restore);
+        else restore();
       });
     });
-    var albumSetBtn = el('gv2-detail-album-set');
+    var albumSetBtn = scope.querySelector('#gv2-detail-album-set');
     if (albumSetBtn) {
       albumSetBtn.addEventListener('click', function () {
-        var pick = el('gv2-detail-album-pick');
+        var pick = scope.querySelector('#gv2-detail-album-pick');
         if (!pick || !pick.value) { toast('Pick an album first', true); return; }
         api('/gallery/api/albums/items', { album: parseInt(pick.value, 10), add: [item.uid], remove: [] })
           .then(function (data) {
             state.albums = (data && data.albums) || [];
             renderAlbums();
             toast('added to album');
-            return refreshDetail();
+            return rerender();
           })
           .then(function () { resetAndRefresh(); })
           .catch(function (err) { toast('Album add failed: ' + err.message, true); });
       });
     }
-    var albumRemoveBtn = el('gv2-detail-album-remove');
+    var albumRemoveBtn = scope.querySelector('#gv2-detail-album-remove');
     if (albumRemoveBtn) {
       albumRemoveBtn.addEventListener('click', function () {
         if (!item.album_id) { toast('not in an album', true); return; }
@@ -2718,13 +2759,13 @@
             state.albums = (data && data.albums) || [];
             renderAlbums();
             toast('removed from album');
-            return refreshDetail();
+            return rerender();
           })
           .then(function () { resetAndRefresh(); })
           .catch(function (err) { toast('Album remove failed: ' + err.message, true); });
       });
     }
-    var albumCoverBtn = el('gv2-detail-album-cover');
+    var albumCoverBtn = scope.querySelector('#gv2-detail-album-cover');
     if (albumCoverBtn) {
       albumCoverBtn.addEventListener('click', function () {
         if (!item.album_id) { toast('add it to an album first', true); return; }
@@ -2733,7 +2774,7 @@
             state.albums = (data && data.albums) || [];
             renderAlbums();
             toast('album cover updated');
-            return refreshDetail();
+            return rerender();
           })
           .catch(function (err) { toast('Cover update failed: ' + err.message, true); });
       });
@@ -2758,6 +2799,371 @@
     state.detailTrail = [];
     state.detailDetached = false;
     markDetailCard(false);
+  }
+
+  // ------------------------------------------------------------- compare
+
+  // Overlay launched from select mode: the selected images in their own order
+  // (drag the list to reorder - the grid keeps its order), one large preview of
+  // the active image, and the regular detail panel beside it.
+  var cmp = { keys: [], active: null, items: {}, dragging: null };
+
+  function compareOpen() { return !!el('gv2-compare'); }
+
+  function compareRow(uid) {
+    for (var i = 0; i < state.rows.length; i++) {
+      if (state.rows[i].uid === uid) return state.rows[i];
+    }
+    return null;
+  }
+
+  function compareItem(uid) {
+    return cmp.items[uid] || compareRow(uid) || null;
+  }
+
+  function compareFileName(row) {
+    var name = row.rel_path || row.path || row.uid || '';
+    return String(name).split(/[\\/]/).pop();
+  }
+
+  function compareMarks(row) {
+    var rating = ratingOf(row);
+    var marks = '';
+    if (rating === 'endorsed') marks += ' is-endorsed';
+    else if (rating === 'disliked') marks += ' is-disliked';
+    if (row.state === 'staged') marks += ' is-staged';
+    if (row.state === 'archived') marks += ' is-archived';
+    return marks;
+  }
+
+  function loadCompareItem(uid, force) {
+    if (!uid) return Promise.reject(new Error('no item'));
+    if (!force && cmp.items[uid]) return Promise.resolve(cmp.items[uid]);
+    return api('/gallery/api/item?id=' + encodeURIComponent(uid)).then(function (item) {
+      cmp.items[uid] = item;
+      return item;
+    });
+  }
+
+  function openCompareWindow() {
+    var keys = [];
+    state.rows.forEach(function (row) {
+      if (state.selected.has(row.uid)) keys.push(row.uid);
+    });
+    if (keys.length < 2) { toast('Select at least two images to compare', true); return; }
+    closeCompareWindow();
+    closeDetail();
+    cmp.keys = keys;
+    cmp.active = keys[0];
+    cmp.items = {};
+    cmp.dragging = null;
+    var root = el(ROOT_ID);
+    if (!root) return;
+    var host = document.createElement('div');
+    host.id = 'gv2-compare';
+    host.className = 'gv2-compare';
+    host.innerHTML =
+      '<div class="gv2-compare-shell" role="dialog" aria-label="Compare window">' +
+        '<div class="gv2-compare-head">' +
+          '<span class="gv2-compare-title">Compare <span class="gv2-compare-total">' + keys.length + '</span></span>' +
+          '<span class="gv2-compare-hint">drag the strip to reorder \u00b7 click to preview \u00b7 \u2190 \u2192 step \u00b7 Esc close</span>' +
+          '<button class="gv2-compare-close" title="Close the compare window (Esc)">\u00d7</button>' +
+        '</div>' +
+        '<div id="gv2-compare-list" class="gv2-compare-list"></div>' +
+        '<div class="gv2-compare-body">' +
+          '<div id="gv2-compare-stage" class="gv2-compare-stage"></div>' +
+          '<div id="gv2-compare-detail" class="gv2-detail-panel gv2-compare-detail"></div>' +
+        '</div>' +
+      '</div>';
+    root.appendChild(host);
+    document.documentElement.classList.add('gv2-compare-open');
+    host.querySelector('.gv2-compare-close').addEventListener('click', closeCompareWindow);
+    host.addEventListener('click', function (ev) {
+      if (ev.target === host) closeCompareWindow();
+    });
+    wireCompareList();
+    renderCompareList();
+    loadCompareItem(cmp.active).then(function (item) {
+      renderCompareStage(item);
+      renderCompareDetail(item);
+    }).catch(function (err) { toast('Compare failed: ' + err.message, true); });
+  }
+
+  function closeCompareWindow() {
+    var host = el('gv2-compare');
+    if (host && host.parentNode) host.parentNode.removeChild(host);
+    document.documentElement.classList.remove('gv2-compare-open');
+    cmp.keys = [];
+    cmp.active = null;
+    cmp.items = {};
+    cmp.dragging = null;
+  }
+
+  function renderCompareList() {
+    var list = el('gv2-compare-list');
+    if (!list) return;
+    var scrollLeft = list.scrollLeft;
+    var html = '';
+    cmp.keys.forEach(function (uid, index) {
+      var row = compareItem(uid);
+      if (!row) return;
+      var active = uid === cmp.active;
+      var rating = ratingOf(row);
+      var sub = [];
+      if (row.width && row.height) sub.push(row.width + '\u00d7' + row.height);
+      if (rating === 'endorsed') sub.push('\u2b50 endorsed');
+      else if (rating === 'disliked') sub.push('\u{1F44E} disliked');
+      if (row.state && row.state !== 'active') sub.push(row.state);
+      var name = compareFileName(row);
+      html += '<div class="gv2-compare-item' + (active ? ' is-active' : '') + compareMarks(row) + '"' +
+        ' draggable="true" data-key="' + esc(uid) + '" title="' + esc(name) + '">' +
+        '<span class="gv2-compare-num">' + (index + 1) + '</span>' +
+        (row.state === 'trashed'
+          ? '<span class="gv2-compare-thumb gv2-thumb-empty">no media</span>'
+          : '<img class="gv2-compare-thumb" src="' + blobUrl(row, 'thumb') + '" alt="" draggable="false">') +
+        '<span class="gv2-compare-name">' + esc(name) + '</span>' +
+        '<span class="gv2-compare-sub">' + esc(sub.join(' \u00b7 ')) + '</span>' +
+      '</div>';
+    });
+    list.innerHTML = html || '<div class="gv2-compare-empty">nothing selected</div>';
+    list.scrollLeft = scrollLeft;
+    var activeNode = list.querySelector('.gv2-compare-item.is-active');
+    if (activeNode && activeNode.scrollIntoView) {
+      activeNode.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+
+  function clearCompareDropMarks() {
+    var list = el('gv2-compare-list');
+    if (!list) return;
+    list.querySelectorAll('.is-drag-over-before, .is-drag-over-after, .is-dragging').forEach(function (node) {
+      node.classList.remove('is-drag-over-before', 'is-drag-over-after', 'is-dragging');
+    });
+  }
+
+  function moveCompareKey(from, to, after) {
+    if (!from || !to || from === to) return;
+    var keys = cmp.keys.filter(function (key) { return key !== from; });
+    var idx = keys.indexOf(to);
+    if (idx < 0) return;
+    keys.splice(after ? idx + 1 : idx, 0, from);
+    cmp.keys = keys;
+    renderCompareList();
+    var active = compareItem(cmp.active);
+    if (active) renderCompareStage(active);
+  }
+
+  function wireCompareList() {
+    var list = el('gv2-compare-list');
+    if (!list) return;
+    list.addEventListener('click', function (ev) {
+      var item = ev.target.closest ? ev.target.closest('.gv2-compare-item') : null;
+      if (item) selectCompareKey(item.getAttribute('data-key'));
+    });
+    list.addEventListener('dragstart', function (ev) {
+      var item = ev.target.closest ? ev.target.closest('.gv2-compare-item') : null;
+      if (!item) return;
+      cmp.dragging = item.getAttribute('data-key');
+      item.classList.add('is-dragging');
+      if (ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = 'move';
+        try { ev.dataTransfer.setData('text/plain', cmp.dragging); } catch (error) { /* ignore */ }
+      }
+    });
+    list.addEventListener('dragover', function (ev) {
+      if (!cmp.dragging) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+      var over = ev.target.closest ? ev.target.closest('.gv2-compare-item') : null;
+      list.querySelectorAll('.is-drag-over-before, .is-drag-over-after').forEach(function (node) {
+        node.classList.remove('is-drag-over-before', 'is-drag-over-after');
+      });
+      if (!over || over.getAttribute('data-key') === cmp.dragging) return;
+      var rect = over.getBoundingClientRect();
+      over.classList.add(ev.clientX > rect.left + rect.width / 2 ? 'is-drag-over-after' : 'is-drag-over-before');
+    });
+    list.addEventListener('drop', function (ev) {
+      if (!cmp.dragging) return;
+      ev.preventDefault();
+      var over = ev.target.closest ? ev.target.closest('.gv2-compare-item') : null;
+      var from = cmp.dragging;
+      cmp.dragging = null;
+      if (over) {
+        var rect = over.getBoundingClientRect();
+        moveCompareKey(from, over.getAttribute('data-key'), ev.clientX > rect.left + rect.width / 2);
+      }
+      clearCompareDropMarks();
+    });
+    list.addEventListener('dragend', function () {
+      cmp.dragging = null;
+      clearCompareDropMarks();
+    });
+  }
+
+  function selectCompareKey(uid) {
+    if (!uid) return;
+    cmp.active = uid;
+    renderCompareList();
+    var cached = cmp.items[uid];
+    if (cached) {
+      renderCompareStage(cached);
+      renderCompareDetail(cached);
+    }
+    loadCompareItem(uid).then(function (item) {
+      if (cmp.active !== uid) return;
+      renderCompareStage(item);
+      renderCompareDetail(item);
+    }).catch(function (err) { toast('Compare failed: ' + err.message, true); });
+  }
+
+  function compareNavigate(dir) {
+    if (!cmp.keys.length) return;
+    var idx = cmp.keys.indexOf(cmp.active);
+    var next = idx < 0 ? 0 : idx + dir;
+    if (next < 0) { toast('start of the list'); return; }
+    if (next >= cmp.keys.length) { toast('end of the list'); return; }
+    selectCompareKey(cmp.keys[next]);
+  }
+
+  function renderCompareStage(item) {
+    var stage = el('gv2-compare-stage');
+    if (!stage) return;
+    var index = cmp.keys.indexOf(item.uid);
+    var rating = ratingOf(item);
+    var flags = '';
+    if (rating === 'endorsed') flags += ' gv2-detail-media-endorsed';
+    else if (rating === 'disliked') flags += ' gv2-detail-media-disliked';
+    if (item.state === 'staged') flags += ' gv2-detail-media-staged';
+    if (item.state === 'archived') flags += ' gv2-detail-media-archived';
+    var style = (item.width && item.height)
+      ? ' style="--gv2-media-ar:' + (item.width / item.height).toFixed(4) + '"'
+      : '';
+    var media = item.state === 'trashed'
+      ? '<div class="gv2-thumb gv2-thumb-empty">no media (trash)</div>'
+      : '<div class="gv2-detail-media' + flags + '"' + style + '>' +
+          '<img class="gv2-compare-img" src="' + detailPreviewUrl(item) + '" alt="" ' +
+            'title="Click to open the fullscreen viewer (wheel = zoom, drag = pan)">' +
+          (item.state === 'archived' ? '<div class="gv2-strike"></div>' : '') +
+        '</div>';
+    stage.innerHTML = media +
+      '<div class="gv2-compare-nav">' +
+        '<button class="gv2-btn" data-compare-nav="-1"' + (index <= 0 ? ' disabled' : '') + '>\u2190 Prev</button>' +
+        '<span class="gv2-compare-pos">' + (index + 1) + ' / ' + cmp.keys.length + ' \u00b7 ' +
+          esc(compareFileName(item)) + '</span>' +
+        '<button class="gv2-btn" data-compare-nav="1"' +
+          (index >= cmp.keys.length - 1 ? ' disabled' : '') + '>Next \u2192</button>' +
+      '</div>';
+    var img = stage.querySelector('.gv2-compare-img');
+    if (img) {
+      var mediaBox = stage.querySelector('.gv2-detail-media');
+      var syncRatio = function () {
+        if (!mediaBox || !img.naturalWidth || !img.naturalHeight) return;
+        mediaBox.style.setProperty('--gv2-media-ar', (img.naturalWidth / img.naturalHeight).toFixed(4));
+      };
+      syncRatio();
+      img.addEventListener('load', syncRatio);
+      img.addEventListener('error', function () {
+        if (img.dataset.fallback === 'thumb') return;
+        img.dataset.fallback = 'thumb';
+        img.src = blobUrl(item, 'thumb');
+      });
+      if (item.state !== 'trashed') {
+        img.addEventListener('click', function () { openCompareViewer(item); });
+      }
+    }
+    stage.querySelectorAll('[data-compare-nav]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        compareNavigate(parseInt(btn.getAttribute('data-compare-nav'), 10));
+      });
+    });
+  }
+
+  function renderCompareDetail(item) {
+    var host = el('gv2-compare-detail');
+    if (!host) return;
+    host.innerHTML = detailPanelHtml(item, false);
+    wireDetailPanel(host, item, {
+      rerender: function () { return refreshCompareItem(item.uid); },
+      beforeSend: closeCompareWindow,
+      openParent: function (uid) { closeCompareWindow(); openDetail(uid); }
+    });
+  }
+
+  function refreshCompareItem(uid) {
+    return loadCompareItem(uid, true).then(function (item) {
+      if (!compareOpen() || cmp.active !== uid) return item;
+      renderCompareStage(item);
+      renderCompareDetail(item);
+      renderCompareList();
+      return item;
+    }).catch(function (err) {
+      dropCompareKey(uid);
+      toast('Compare item is gone: ' + ((err && err.message) || 'unknown'), true);
+      return null;
+    });
+  }
+
+  function dropCompareKey(uid) {
+    var idx = cmp.keys.indexOf(uid);
+    if (idx < 0) return;
+    cmp.keys.splice(idx, 1);
+    delete cmp.items[uid];
+    if (!cmp.keys.length) { closeCompareWindow(); return; }
+    if (cmp.active === uid) cmp.active = cmp.keys[Math.min(idx, cmp.keys.length - 1)];
+    renderCompareList();
+    var item = compareItem(cmp.active);
+    if (item) {
+      renderCompareStage(item);
+      renderCompareDetail(item);
+    } else {
+      selectCompareKey(cmp.active);
+    }
+  }
+
+  function compareApply(act) {
+    var item = compareItem(cmp.active);
+    if (!item) return Promise.resolve();
+    if (item.state === 'trashed') { toast('use restore / purge for trashed items', true); return Promise.resolve(); }
+    return runAction(actionFor(item, act), [item.uid], {}).then(function () { return refreshCompareItem(item.uid); });
+  }
+
+  function compareTrash() {
+    var item = compareItem(cmp.active);
+    if (!item || item.state === 'trashed') return;
+    if (!window.confirm('Trash now? The original file and media will be deleted (metadata kept).')) return;
+    runAction('trash', [item.uid], {}).then(function () { return refreshCompareItem(item.uid); });
+  }
+
+  // Fullscreen viewer: same app-wide lightbox as the drawer, stepping through
+  // the compare order instead of the grid order.
+  function openCompareViewer(item) {
+    if (typeof window.openLightbox !== 'function') { toast('Image viewer unavailable', true); return; }
+    var previewSrc = item.state === 'trashed' ? '' : detailPreviewUrl(item);
+    window.gv2LightboxNav = {
+      nav: function (offset) { navCompareViewer(offset); },
+      split: false,
+      closeDetail: closeCompareWindow,
+      cleanup: function () {}
+    };
+    detailViewerSrc(item, previewSrc, function (src) {
+      if (window.gv2LightboxNav) window.openLightbox(src, { split: false });
+    });
+  }
+
+  function navCompareViewer(offset) {
+    var idx = cmp.keys.indexOf(cmp.active);
+    var next = idx + offset;
+    if (idx < 0 || next < 0 || next >= cmp.keys.length) return;
+    cmp.active = cmp.keys[next];
+    renderCompareList();
+    loadCompareItem(cmp.active).then(function (item) {
+      if (!window.gv2LightboxNav) return; // viewer was closed while loading
+      renderCompareStage(item);
+      renderCompareDetail(item);
+      detailViewerSrc(item, detailPreviewUrl(item), function (src) {
+        if (window.gv2LightboxNav) window.openLightbox(src, { split: false });
+      });
+    }).catch(function () {});
   }
 
   // ---------------------------------------------------------------- misc
@@ -2905,6 +3311,19 @@
       // `_lightboxHandled` covers the same-tick race: the viewer's own Escape
       // handler clears gv2LightboxNav before this listener runs.
       if (ev._lightboxHandled) return;
+      if (compareOpen()) {
+        if (isTypingTarget(ev.target)) return;
+        if (ev.key === 'Escape') { ev.preventDefault(); closeCompareWindow(); return; }
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        if (ev.key === 'ArrowLeft') { ev.preventDefault(); compareNavigate(-1); }
+        else if (ev.key === 'ArrowRight') { ev.preventDefault(); compareNavigate(1); }
+        else if (ev.key === 'ArrowUp') { ev.preventDefault(); if (!ev.repeat) compareApply('endorse'); }
+        else if (ev.key === 'ArrowDown') { ev.preventDefault(); if (!ev.repeat) compareApply('dislike'); }
+        else if (ev.key === 'Delete') { ev.preventDefault(); compareTrash(); }
+        else if (ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); if (!ev.repeat) compareApply('archive'); }
+        else if (ev.key === 's' || ev.key === 'S') { ev.preventDefault(); if (!ev.repeat) compareApply('stage'); }
+        return;
+      }
       if (ev.key === 'Escape') {
         if (drawerOpen) { closeDetail(); return; }
         if (state.selectMode) setSelectMode(false);
@@ -2959,6 +3378,15 @@
     scheduled = true;
     setTimeout(function () {
       scheduled = false;
+      // gradio can tear the tab down while the compare window is open: the
+      // overlay disappears with it, so release the scroll lock as well
+      if (!el('gv2-compare') && document.documentElement.classList.contains('gv2-compare-open')) {
+        document.documentElement.classList.remove('gv2-compare-open');
+        cmp.keys = [];
+        cmp.active = null;
+        cmp.items = {};
+        cmp.dragging = null;
+      }
       init();
     }, 250);
   }

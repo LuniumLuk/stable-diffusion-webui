@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, UnidentifiedImageError
 import gradio as gr
 
-from modules import images, input_resize
+from modules import images, input_resize, masking
 from modules.infotext_utils import create_override_settings_dict, parse_generation_parameters
 from modules.processing import Processed, StableDiffusionProcessingImg2Img, process_images
 from modules.shared import opts, state
@@ -205,6 +205,31 @@ def decode_inpaint_batch_masks(payload: str) -> list:
     return masks
 
 
+def mask_area_scaled_size(masks, invert: bool, scale: float, image_size=None):
+    """Resolution for the "By mask" resize tab: the union bbox of the inpaint regions, scaled.
+
+    ``masks`` holds the editor mask and the batch-mask layers (PIL images or ``{"mask": ...}``
+    entries). The bounding box is taken from the region the sampler will actually inpaint, so
+    "Inpaint not masked" measures its complement. Returns ``None`` when no mask has content.
+    """
+    binary = []
+    for entry in masks:
+        mask = entry.get("mask") if isinstance(entry, dict) else entry
+        if mask is None:
+            continue
+
+        mask = processing.create_binary_mask(mask)
+        if image_size and mask.size != image_size:
+            mask = mask.resize(image_size, Image.NEAREST)
+        binary.append(mask)
+
+    box = masking.mask_union_crop_region(binary, invert=invert)
+    if box is None:
+        return None
+
+    return input_resize.round8((box[2] - box[0]) * scale), input_resize.round8((box[3] - box[1]) * scale)
+
+
 def merge_inpaint_paint_layer(image, payload: str):
     """Composite the mask editor's color paint layer onto the init image.
 
@@ -344,10 +369,21 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
     image = images.fix_image(image)
     mask = images.fix_image(mask)
 
+    batch_masks = decode_inpaint_batch_masks(img2img_batch_mask_payload) if mode == 2 else []
+
     if selected_scale_tab == 1 and not is_batch:
         assert image, "Can't scale by because no image is selected"
 
         width, height = input_resize.scaled_size(image.width, image.height, scale_by)
+    elif selected_scale_tab == 2 and not is_batch:
+        assert image, "Can't scale by the masked area because no image is selected"
+
+        mask_area_size = mask_area_scaled_size(masks=[mask, *batch_masks], invert=inpainting_mask_invert, scale=scale_by, image_size=image.size)
+        if mask_area_size:
+            width, height = mask_area_size
+        else:
+            # nothing painted: fall back to the picture size so the tab is never a dead end
+            width, height = input_resize.scaled_size(image.width, image.height, scale_by)
 
     assert 0. <= denoising_strength <= 1., 'can only work with strength in [0.0, 1.0]'
 
@@ -386,7 +422,8 @@ def img2img(id_task: str, request: gr.Request, mode: int, prompt: str, negative_
     if shared.opts.enable_console_prompts:
         print(f"\nimg2img: {prompt}", file=shared.progress_print_out)
 
-    batch_masks = decode_inpaint_batch_masks(img2img_batch_mask_payload) if mode == 2 else []
+    if selected_scale_tab == 2 and not is_batch:
+        p.extra_generation_params["Resize by mask"] = f"{width}x{height} (x{float(scale_by):g})"
 
     with closing(p):
         if batch_masks:
