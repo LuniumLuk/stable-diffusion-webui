@@ -69,7 +69,7 @@ export function joinSegments(segments) {
  * opening line against the complete group instead of reporting a missing '}'.
  */
 
-const GROUP_RE = /@(?:pick|seq)[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
+const GROUP_RE = /@(?:pick|seq)[ \t]*(?:\([ \t]*\d+[ \t]*(?:,[ \t]*\d+[ \t]*)?\)[ \t]*)?\{/gi;
 
 function lineStarts(text) {
   const starts = [0];

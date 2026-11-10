@@ -11,7 +11,8 @@
  *   }                   keyword lists may span multiple lines
  *
  *   @SEQ{a, b, c}       use 1 keyword per image, in turn, looping after the last
- *   @SEQ(2){a, b, c}    use 2 consecutive keywords per image, wrapping around
+ *   @SEQ(3){a, b}       use each keyword for 3 images in turn, wrapping around
+ *   @SEQ(3, 2){a, b}    the same, starting at the second keyword
  *
  * `@` custom macros — a line of its own declares a macro used by conditions:
  *
@@ -39,7 +40,8 @@
  *     ok,        // grammar is valid
  *     tag,       // 'pick' / 'seq' for a valid directive, the typed name for an unknown one
  *     raw,       // the keyword as typed
- *     count,     // keywords used per image (clamped to the group size)
+ *     count,     // keywords drawn per image for @PICK, images per keyword for @SEQ
+ *     start,     // 1-based keyword an @SEQ group begins with (1 for @PICK)
  *     items,     // the keywords inside the braces
  *     kind,      // 'pick' | 'seq' | 'unknown'
  *     headline,  // one line: what the syntax does (or what is wrong with it)
@@ -56,7 +58,7 @@
  */
 
 export const PICK_EXAMPLE = '@PICK{a, b, c} or @PICK(2){a, b, c}';
-export const SEQ_EXAMPLE = '@SEQ{a, b, c} or @SEQ(2){a, b, c}';
+export const SEQ_EXAMPLE = '@SEQ{a, b, c}, @SEQ(2){a, b, c} or @SEQ(2, 3){a, b, c}';
 export const SYNTAX_EXAMPLES = `${PICK_EXAMPLE} \u00b7 ${SEQ_EXAMPLE}`;
 
 const TAG_RE = /^@([A-Za-z][\w-]*)/;
@@ -132,34 +134,34 @@ function validPick(raw, count, items) {
   };
 }
 
-function validSequence(raw, count, items) {
+function validSequence(raw, count, start, items) {
   const total = items.length;
-  const used = Math.min(Math.max(count, 1), total);
+  const repeat = Math.max(count, 1);
+  const first = (start - 1) % total;
+  const startNote = start > 1 ? ` starting at keyword ${start} \u2192 ${items[first]}` : '';
   let headline;
   if (total === 1) {
     headline = 'Sequence \u2014 the group holds a single keyword, so every image uses it.';
-  } else if (used >= total) {
-    headline = `Sequence \u2014 all ${total} keywords are used, in order, for every image.`;
+  } else if (repeat === 1) {
+    headline = `Sequence \u2014 one keyword per image, in order${startNote}, then back to the start.`;
   } else {
-    headline = `Sequence \u2014 ${used} consecutive keyword${used === 1 ? '' : 's'} per image, in order, starting over after the last one.`;
+    headline = `Sequence \u2014 each keyword is used for ${repeat} images in turn${startNote}, then the list starts over.`;
   }
-  const wrapAt = (start) => {
-    const out = [];
-    for (let offset = 0; offset < used; offset += 1) out.push(items[(start + offset) % total]);
-    return out.join(', ');
-  };
   return {
     ok: true,
     tag: 'seq',
     raw,
     kind: 'seq',
-    count: used,
+    count: repeat,
+    start,
     items,
     headline,
     details: [
       `Keywords: ${keywordPreview(items)}`,
       total > 1
-        ? `Image 1 \u2192 ${wrapAt(0)}, image 2 \u2192 ${wrapAt(1)}, \u2026 and back to the first keyword after ${total} images.`
+        ? (repeat === 1
+          ? `Image 1 \u2192 ${items[first]}, image 2 \u2192 ${items[(first + 1) % total]}, \u2026 and back to the first keyword after ${total} images.`
+          : `Images 1\u2013${repeat} \u2192 ${items[first]}, images ${repeat + 1}\u2013${repeat * 2} \u2192 ${items[(first + 1) % total]}, \u2026 repeating after ${repeat * total} images.`)
         : 'Nothing steps: the group has a single keyword.',
     ],
   };
@@ -195,22 +197,37 @@ export function analyzeAtSyntax(body) {
   bodyStart = bodyStart < 0 ? rest.length : bodyStart;
 
   let count = 1;
+  let start = 1;
   if (rest[bodyStart] === '(') {
     const close = rest.indexOf(')', bodyStart);
     if (close < 0) {
-      return invalid(raw, { tag, kind, error: 'Missing the closing \u201c)\u201d of the count.', hint: `Count syntax: @${kind.toUpperCase()}(2){a, b, c}` });
+      return invalid(raw, { tag, kind, error: 'Missing the closing \u201c)\u201d of the parameters.', hint: `Parameter syntax: @${kind.toUpperCase()}(2){a, b, c}` });
     }
-    const countText = rest.slice(bodyStart + 1, close).trim();
-    if (!/^\d+$/.test(countText)) {
-      return invalid(raw, {
-        tag,
-        kind,
-        error: countText ? `The count \u201c${countText}\u201d is not a whole number.` : `The count is empty \u2014 write a number, for example @${kind.toUpperCase()}(2){a, b, c}.`,
-      });
+    const params = rest.slice(bodyStart + 1, close).split(',').map((part) => part.trim());
+    if (params.length > 2) {
+      return invalid(raw, { tag, kind, error: 'Too many parameters \u2014 write a repeat count and an optional start item.' });
     }
-    count = parseInt(countText, 10);
+    for (const param of params) {
+      if (!/^\d+$/.test(param)) {
+        return invalid(raw, {
+          tag,
+          kind,
+          error: param
+            ? `The parameter \u201c${param}\u201d is not a whole number.`
+            : `A parameter is empty \u2014 write a number, for example ${kind === 'seq' ? '@SEQ(2, 1)' : '@PICK(2)'}{a, b, c}.`,
+        });
+      }
+    }
+    if (params.length === 2 && kind !== 'seq') {
+      return invalid(raw, { tag, kind, error: '@PICK takes a single count \u2014 only @SEQ can start at a given keyword.' });
+    }
+    count = parseInt(params[0], 10);
+    if (params.length === 2) start = parseInt(params[1], 10);
     if (count < 1) {
-      return invalid(raw, { tag, kind, error: 'The count must be 1 or more.' });
+      return invalid(raw, { tag, kind, error: kind === 'seq' ? 'The repeat count must be 1 or more.' : 'The count must be 1 or more.' });
+    }
+    if (start < 1) {
+      return invalid(raw, { tag, kind, error: 'The start item must be 1 or more.' });
     }
     bodyStart = close + 1;
     while (bodyStart < rest.length && /\s/.test(rest[bodyStart])) bodyStart += 1;
@@ -238,7 +255,7 @@ export function analyzeAtSyntax(body) {
     return invalid(raw, { tag, kind, error: 'The keyword list is empty \u2014 separate keywords with commas.' });
   }
 
-  return kind === 'seq' ? validSequence(raw, count, items) : validPick(raw, count, items);
+  return kind === 'seq' ? validSequence(raw, count, start, items) : validPick(raw, count, items);
 }
 
 /** Plain-text hover hint (what the chip `title` shows). */

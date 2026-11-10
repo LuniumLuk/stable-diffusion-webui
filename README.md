@@ -70,7 +70,8 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - the gallery keeps both the source prompt and the compiled prompt (as written, with the picks drawn); its info panel switches between them (remembered) and the send actions follow the choice
 - Keyword sequence, the same group syntax but walking the list instead of drawing from it
      - `@SEQ{a, b, c}` gives image 1 `a`, image 2 `b`, image 3 `c`, then starts over at `a`
-     - `@SEQ(2){a, b, c}` takes two consecutive keywords per image (`a, b`, then `b, c`, then `c, a`); a count that covers the whole group uses every keyword in order
+     - `@SEQ(3){a, b}` uses each keyword for 3 images in turn: `a, a, a, b, b, b`, then starts over at `a`
+     - `@SEQ(3, 2){a, b}` does the same but starts with the second keyword: `b, b, b, a, a, a` (the start wraps around the group like the sequence itself)
      - the position follows the image's place in the generation, so batch size 4 walks four positions; the seed does not change it, which makes a sequence reproducible
      - groups may span lines, hold nested groups, and mix freely with `@PICK` in the same prompt
 - Conditional prompt blocks, a way to keep per-stage text in one prompt

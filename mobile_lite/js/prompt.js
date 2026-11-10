@@ -396,9 +396,9 @@ function createChipsField(key, placeholder, title, macroContext) {
       if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
         children.push(el('span', {
           class: `pedit-chip-w pedit-chip-${syntax.kind}`,
-          text: `${syntax.count}/${syntax.items.length}`,
+          text: syntax.kind === 'seq' ? `\u00D7${syntax.count}` : `${syntax.count}/${syntax.items.length}`,
           title: syntax.kind === 'seq'
-            ? 'keywords used per image / keywords in the group'
+            ? 'images per keyword / keywords in the group' + (syntax.start > 1 ? ` \u00B7 starts at keyword ${syntax.start}` : '')
             : 'keywords drawn per image / keywords in the group',
         }));
       }

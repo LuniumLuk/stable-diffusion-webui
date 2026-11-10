@@ -124,24 +124,65 @@ def test_sequence_does_not_depend_on_the_seed():
     assert sequence("@SEQ{a, b, c}", 1, seed=1234) == sequence("@SEQ{a, b, c}", 1, seed=9876) == "b"
 
 
-def test_sequence_count_takes_consecutive_keywords_and_wraps():
-    assert [sequence("@SEQ(2){red, green, blue}", index) for index in range(5)] == [
-        "red, green",
-        "green, blue",
-        "blue, red",
-        "red, green",
-        "green, blue",
+def test_sequence_repeat_uses_each_keyword_for_that_many_images():
+    assert [sequence("@SEQ(3){a, b}", index) for index in range(6)] == ["a", "a", "a", "b", "b", "b"]
+
+
+def test_sequence_repeat_then_walks_to_the_next_keyword():
+    assert [sequence("@SEQ(2){red, green, blue}", index) for index in range(6)] == [
+        "red",
+        "red",
+        "green",
+        "green",
+        "blue",
+        "blue",
     ]
 
 
-def test_sequence_count_is_clamped_to_the_group():
-    assert sequence("@SEQ(9){red, green}", 0) == "red, green"
-    assert sequence("@SEQ(0){red, green}", 0) == "@SEQ(0){red, green}"
+def test_sequence_repeat_is_not_clamped_to_the_group():
+    assert [sequence("@SEQ(9){red, green}", index) for index in range(10)] == ["red"] * 9 + ["green"]
+
+
+def test_sequence_start_selects_the_keyword_to_begin_with():
+    assert [sequence("@SEQ(1, 2){red, green, blue}", index) for index in range(4)] == [
+        "green",
+        "blue",
+        "red",
+        "green",
+    ]
+
+
+def test_sequence_repeat_and_start_combine():
+    assert [sequence("@SEQ(2, 2){red, green, blue}", index) for index in range(6)] == [
+        "green",
+        "green",
+        "blue",
+        "blue",
+        "red",
+        "red",
+    ]
+
+
+def test_sequence_start_wraps_around_the_group():
+    assert sequence("@SEQ(1, 5){red, green, blue}", 0) == "green"
+
+
+def test_sequence_broken_parameters_stay_literal():
+    for prompt in (
+        "@SEQ(0){red, green}",
+        "@SEQ(1, 0){red, green}",
+        "@SEQ(2,){red, green}",
+        "@SEQ(, 2){red, green}",
+        "@SEQ(2, 1, 3){red, green}",
+        "@PICK(1, 2){red, green}",
+    ):
+        assert sequence(prompt, 0) == prompt
 
 
 def test_sequence_tag_is_case_insensitive_and_allows_spaces():
     assert sequence("@seq{a, b}", 1) == "b"
     assert sequence("@SEQ ( 1 ) {a, b, c}", 2) == "c"
+    assert sequence("@SEQ ( 2 , 3 ) {a, b, c}", 4) == "b"
 
 
 def test_sequence_keeps_the_text_around_the_group():

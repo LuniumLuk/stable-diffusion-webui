@@ -485,9 +485,10 @@ class StableDiffusionProcessing:
 
         Runs after the seeds are known (one draw per generated image), so a batch
         count of 16 draws 16 times.  @SEQ uses the image's position in the
-        generation instead of a draw, so its keywords are used in turn and the list
-        loops: image 1 gets the first keyword, image 2 the second, … image n the
-        first again.
+        generation instead of a draw: each keyword is used for `count` consecutive
+        images, the keywords are used in turn and the list loops, so with
+        `@SEQ(3){a, b}` image 1-3 get 'a', image 4-6 get 'b', image 7-9 get 'a'
+        again.  A second parameter picks the keyword the sequence starts with.
 
         Two lists come out of it.  `all_prompts_compiled` /
         `all_negative_prompts_compiled` are the source prompts with the picks drawn

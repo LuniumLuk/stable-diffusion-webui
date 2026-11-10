@@ -168,7 +168,7 @@
     // grammar; @PICK and @SEQ are the only keyword directives today.
 
     const PICK_EXAMPLE = '@PICK{a, b, c} or @PICK(2){a, b, c}';
-    const SEQ_EXAMPLE = '@SEQ{a, b, c} or @SEQ(2){a, b, c}';
+    const SEQ_EXAMPLE = '@SEQ{a, b, c}, @SEQ(2){a, b, c} or @SEQ(2, 3){a, b, c}';
     const SYNTAX_EXAMPLES = PICK_EXAMPLE + ' · ' + SEQ_EXAMPLE;
 
     /** Splits an @PICK body at top level commas (commas inside (), [], {}, <> stay). */
@@ -215,16 +215,28 @@
         at = at < 0 ? rest.length : at;
 
         let count = 1;
+        let start = 1;
         if (rest[at] === '(') {
             const close = rest.indexOf(')', at);
-            if (close < 0) return invalidSyntax(raw, tag, kind, 'Missing the closing “)” of the count.', 'Count syntax: @' + kind.toUpperCase() + '(2){a, b, c}');
-            const countText = rest.slice(at + 1, close).trim();
-            if (!/^\d+$/.test(countText)) {
-                return invalidSyntax(raw, tag, kind,
-                    countText ? 'The count “' + countText + '” is not a whole number.' : 'The count is empty — write a number, for example @' + kind.toUpperCase() + '(2){a, b, c}.', '');
+            if (close < 0) return invalidSyntax(raw, tag, kind, 'Missing the closing “)” of the parameters.', 'Parameter syntax: @' + kind.toUpperCase() + '(2){a, b, c}');
+            const params = rest.slice(at + 1, close).split(',').map((part) => part.trim());
+            if (params.length > 2) {
+                return invalidSyntax(raw, tag, kind, 'Too many parameters — write a repeat count and an optional start item.', '');
             }
-            count = parseInt(countText, 10);
-            if (count < 1) return invalidSyntax(raw, tag, kind, 'The count must be 1 or more.', '');
+            for (const param of params) {
+                if (!/^\d+$/.test(param)) {
+                    return invalidSyntax(raw, tag, kind,
+                        param ? 'The parameter “' + param + '” is not a whole number.'
+                            : 'A parameter is empty — write a number, for example ' + (kind === 'seq' ? '@SEQ(2, 1)' : '@PICK(2)') + '{a, b, c}.', '');
+                }
+            }
+            if (params.length === 2 && kind !== 'seq') {
+                return invalidSyntax(raw, tag, kind, '@PICK takes a single count — only @SEQ can start at a given keyword.', '');
+            }
+            count = parseInt(params[0], 10);
+            if (params.length === 2) start = parseInt(params[1], 10);
+            if (count < 1) return invalidSyntax(raw, tag, kind, kind === 'seq' ? 'The repeat count must be 1 or more.' : 'The count must be 1 or more.', '');
+            if (start < 1) return invalidSyntax(raw, tag, kind, 'The start item must be 1 or more.', '');
             at = close + 1;
             while (at < rest.length && /\s/.test(rest[at])) at++;
         }
@@ -253,25 +265,26 @@
         const shown = items.slice(0, 8).join(' · ') + (items.length > 8 ? ' … (+' + (items.length - 8) + ')' : '');
 
         if (kind === 'seq') {
+            const total = items.length;
+            const repeat = Math.max(count, 1);
+            const first = (start - 1) % total;
+            const startNote = start > 1 ? ' starting at keyword ' + start + ' → ' + items[first] : '';
             let headline;
-            if (items.length === 1) {
+            if (total === 1) {
                 headline = 'Sequence — the group holds a single keyword, so every image uses it.';
-            } else if (drawn >= items.length) {
-                headline = 'Sequence — all ' + items.length + ' keywords are used, in order, for every image.';
+            } else if (repeat === 1) {
+                headline = 'Sequence — one keyword per image, in order' + startNote + ', then back to the start.';
             } else {
-                headline = 'Sequence — ' + drawn + ' consecutive keyword' + (drawn === 1 ? '' : 's') + ' per image, in order, starting over after the last one.';
+                headline = 'Sequence — each keyword is used for ' + repeat + ' images in turn' + startNote + ', then the list starts over.';
             }
-            const wrapAt = (start) => {
-                const out = [];
-                for (let i = 0; i < drawn; i++) out.push(items[(start + i) % items.length]);
-                return out.join(', ');
-            };
             return {
-                ok: true, tag: 'seq', raw: raw, kind: 'seq', count: drawn, items: items, headline: headline,
+                ok: true, tag: 'seq', raw: raw, kind: 'seq', count: repeat, start: start, items: items, headline: headline,
                 details: [
                     'Keywords: ' + shown,
-                    items.length > 1
-                        ? 'Image 1 → ' + wrapAt(0) + ', image 2 → ' + wrapAt(1) + ', … and back to the first keyword after ' + items.length + ' images.'
+                    total > 1
+                        ? (repeat === 1
+                            ? 'Image 1 → ' + items[first] + ', image 2 → ' + items[(first + 1) % total] + ', … and back to the first keyword after ' + total + ' images.'
+                            : 'Images 1–' + repeat + ' → ' + items[first] + ', images ' + (repeat + 1) + '–' + (repeat * 2) + ' → ' + items[(first + 1) % total] + ', … repeating after ' + (repeat * total) + ' images.')
                         : 'Nothing steps: the group has a single keyword.',
                 ],
             };
@@ -574,7 +587,7 @@
      * validated against the whole group so it is not flagged as missing '}'.
      */
 
-    const GROUP_RE = /@(?:pick|seq)[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
+    const GROUP_RE = /@(?:pick|seq)[ \t]*(?:\([ \t]*\d+[ \t]*(?:,[ \t]*\d+[ \t]*)?\)[ \t]*)?\{/gi;
 
     function lineStartOffsets(text) {
         const starts = [0];
@@ -862,10 +875,12 @@
             children.push(`<span class="pedit-chip-text">${chipText}</span>`);
             if (syntax) {
                 if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
-                    const badgeTitle = syntax.kind === 'seq'
-                        ? 'keywords used per image / keywords in the group'
-                        : 'keywords drawn per image / keywords in the group';
-                    children.push(`<span class="pedit-chip-w pedit-chip-${syntax.kind}" title="${badgeTitle}">${syntax.count}/${syntax.items.length}</span>`);
+                    if (syntax.kind === 'seq') {
+                        const badgeTitle = 'images per keyword / keywords in the group' + (syntax.start > 1 ? ' · starts at keyword ' + syntax.start : '');
+                        children.push(`<span class="pedit-chip-w pedit-chip-seq" title="${badgeTitle}">×${syntax.count}</span>`);
+                    } else {
+                        children.push(`<span class="pedit-chip-w pedit-chip-pick" title="keywords drawn per image / keywords in the group">${syntax.count}/${syntax.items.length}</span>`);
+                    }
                 }
             } else if (Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9) {
                 children.push(`<span class="pedit-chip-w" title="weight">×${escapeHtml(formatWeight(token.weight))}</span>`);
