@@ -62,14 +62,14 @@ export function joinSegments(segments) {
   return segments.map((segment) => segment.lead + segment.body + segment.tail).join('');
 }
 
-/* ------------------------------------------------- multi-line @PICK groups
+/* --------------------------------------- multi-line @PICK / @SEQ groups
  *
- * The token model is line based, but the backend accepts an @PICK keyword list
+ * The token model is line based, but the backend accepts a keyword list
  * that spans lines.  Scan the whole prompt once so the editors can validate the
  * opening line against the complete group instead of reporting a missing '}'.
  */
 
-const PICK_GROUP_RE = /@pick[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
+const GROUP_RE = /@(?:pick|seq)[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
 
 function lineStarts(text) {
   const starts = [0];
@@ -101,9 +101,9 @@ export function findPickGroups(text) {
 
   const starts = lineStarts(source);
   const groups = [];
-  PICK_GROUP_RE.lastIndex = 0;
+  GROUP_RE.lastIndex = 0;
   let match;
-  while ((match = PICK_GROUP_RE.exec(source)) !== null) {
+  while ((match = GROUP_RE.exec(source)) !== null) {
     const start = match.index;
     const openLine = lineAtOffset(starts, start);
     const lineStart = starts[openLine];
@@ -111,7 +111,7 @@ export function findPickGroups(text) {
     if (/^\s*#(?!\()/.test(source.slice(lineStart, start))) continue;
 
     let depth = 1;
-    let index = PICK_GROUP_RE.lastIndex;
+    let index = GROUP_RE.lastIndex;
     let close = -1;
     while (index < source.length) {
       const ch = source[index];
@@ -142,7 +142,7 @@ export function findPickGroups(text) {
       syntax: analyzeAtSyntax(raw),
     });
     // nested @PICK directives belong to the outer keyword list
-    PICK_GROUP_RE.lastIndex = end;
+    GROUP_RE.lastIndex = end;
   }
   return groups;
 }
@@ -225,13 +225,13 @@ export function classify(body, syntaxOverride = null, allowCondition = true) {
   }
 
   // every keyword starting with '@' is a directive and must pass the grammar:
-  // a well formed @PICK is a `pick` token, a broken directive an `at` token carrying
-  // the error (the chips and the CodeMirror decorations style it as broken).
-  // `syntaxOverride` is the already-validated full group for a multi-line @PICK header.
+  // a well formed @PICK / @SEQ is a `pick` / `seq` token, a broken directive an `at`
+  // token carrying the error (the chips and the CodeMirror decorations style it as
+  // broken).  `syntaxOverride` is the already-validated full group for a multi-line header.
   const syntax = syntaxOverride || analyzeAtSyntax(text);
   if (syntax) {
     return {
-      kind: syntax.ok ? 'pick' : 'at',
+      kind: syntax.ok ? syntax.kind : 'at',
       text,
       weight: DEFAULT_WEIGHT,
       disabled: false,
@@ -297,9 +297,10 @@ export function classify(body, syntaxOverride = null, allowCondition = true) {
 
 /** Build the body text for a token with the given weight / disabled flag. */
 export function rebuild(token, weight, disabled) {
-  // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
-  // and a broken '@' directive (and an @IF / @MACRO line) must keep its text as typed
-  if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond' || token.kind === 'macro') return token.text;
+  // a random-pick / sequence group has no weight of its own and cannot be disabled
+  // with '#(...)', and a broken '@' directive (and an @IF / @MACRO line) must keep
+  // its text as typed
+  if (token.kind === 'pick' || token.kind === 'seq' || token.kind === 'at' || token.kind === 'cond' || token.kind === 'macro') return token.text;
 
   const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
   let inner;

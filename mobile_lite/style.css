@@ -1058,6 +1058,8 @@ body.mask-editing { overflow: hidden; }
   text-underline-offset: 3px;
 }
 .pedit-chip-pick { font-variant-numeric: tabular-nums; }
+/* '@SEQ' walks its keywords per image instead of drawing them */
+.pedit-chip-seq { color: #81c784; font-variant-numeric: tabular-nums; }
 /* '@IF' stage conditions: a directive line, not a comment */
 .pedit-line.is-condition { background: rgba(139, 92, 246, 0.12); border-left: 2px solid #8b5cf6; }
 .pedit-chip.is-cond { border-color: #8b5cf6; background: rgba(139, 92, 246, 0.16); }

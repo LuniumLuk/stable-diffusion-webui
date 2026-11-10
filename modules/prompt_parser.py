@@ -28,17 +28,24 @@ plain: /([^\\\[\]():|]|\\.)+/
 %import common.SIGNED_NUMBER -> NUMBER
 """)
 
-# ── random pick ──────────────────────────────────────────────────────────────
+# ── random pick / sequence groups ────────────────────────────────────────────
 #
 # @PICK{a, b, c}     - one of the keywords, drawn at random
 # @PICK(2){a, b, c}  - two of the keywords, drawn at random
+# @SEQ{a, b, c}      - the keywords are used in turn: image 1 gets 'a', image 2 gets
+#                      'b', … and the list starts over after the last keyword
+# @SEQ(2){a, b, c}   - two consecutive keywords per image, wrapping around
 #
 # The count must be 1 or more.  A malformed group (unknown tag, bad count, missing
 # brace, empty list) is left as typed, so the prompt editor can flag it in place.
 # The groups are resolved once per generated image (see StableDiffusionProcessing.
-# apply_random_picks), so a batch count of 16 spends 16 independent draws.
+# apply_random_picks), so a batch count of 16 spends 16 independent draws and a
+# @SEQ group walks through 16 positions.
 
-re_pick = re.compile(r"@pick[ \t]*(?:\([ \t]*(0*[1-9]\d*)[ \t]*\)[ \t]*)?\{", re.IGNORECASE)
+re_prompt_group = re.compile(
+    r"@(?P<tag>pick|seq)[ \t]*(?:\([ \t]*(?P<count>0*[1-9]\d*)[ \t]*\)[ \t]*)?\{",
+    re.IGNORECASE,
+)
 
 _OPENING = "([{<"
 _CLOSING = ")]}>"
@@ -91,13 +98,41 @@ def pick_items(items, count, rng) -> str:
     return ', '.join(items[i] for i in sorted(rng.sample(range(len(items)), count)))
 
 
-def find_pick_group(text: str, start: int):
-    """Locates the @PICK group starting at `start`.
+def sequence_items(items, count, index) -> str:
+    """Returns `count` consecutive keywords starting at the `index`-th, wrapping around.
 
-    Returns (keywords start, keywords end, count) - both indexes into `text`, the
-    end being exclusive - or None when the tag does not open a closed group.
+    The sequence loops, so image 3 of a three keyword group starts over at the
+    first keyword.  `count` is clamped to the number of keywords, and a count that
+    covers them all resolves to every keyword in order.
+
+    >>> sequence_items(['a', 'b', 'c'], 1, 0)
+    'a'
+    >>> sequence_items(['a', 'b', 'c'], 1, 3)
+    'a'
+    >>> sequence_items(['a', 'b', 'c'], 2, 2)
+    'c, a'
+    >>> sequence_items(['a', 'b', 'c'], 9, 1)
+    'a, b, c'
     """
-    match = re_pick.match(text, start)
+    if not items:
+        return ''
+
+    count = min(max(int(count), 1), len(items))
+    if count >= len(items):
+        return ', '.join(items)
+
+    start = int(index) % len(items)
+    return ', '.join(items[(start + offset) % len(items)] for offset in range(count))
+
+
+def find_prompt_group(text: str, start: int):
+    """Locates the @PICK / @SEQ group starting at `start`.
+
+    Returns (keywords start, keywords end, count, tag) - the indexes point into
+    `text`, the end being exclusive, the tag is 'pick' or 'seq' - or None when the
+    tag does not open a closed group.
+    """
+    match = re_prompt_group.match(text, start)
     if match is None:
         return None
 
@@ -110,17 +145,20 @@ def find_pick_group(text: str, start: int):
         elif ch == '}':
             depth -= 1
             if depth == 0:
-                return match.end(), index, int(match.group(1) or 1)
+                return match.end(), index, int(match.group('count') or 1), match.group('tag').lower()
         index += 1
 
     return None
 
 
-def expand_prompt_picks(prompt: str, rng=None) -> str:
-    """Replaces every @PICK group in `prompt` with the keywords drawn from it.
+def expand_prompt_picks(prompt: str, rng=None, sequence_index: int = 0) -> str:
+    """Replaces every @PICK / @SEQ group in `prompt` with the keywords it resolves to.
 
-    Groups are expanded inside out, so a @PICK may contain another @PICK. Groups
-    that are not properly closed, or that have no keywords, are left untouched.
+    @PICK draws at random (seeded by `rng`), @SEQ walks the keyword list with
+    `sequence_index` - the position of the image inside the generation - and loops
+    after the last keyword.  Groups are expanded inside out, so a group may contain
+    another group.  Groups that are not properly closed, or that have no keywords,
+    are left untouched.
 
     >>> import random
     >>> expand_prompt_picks("@PICK(3){a, b, c}", random.Random(0))
@@ -135,6 +173,16 @@ def expand_prompt_picks(prompt: str, rng=None) -> str:
     True
     >>> expand_prompt_picks("@PICK{a, b, c}", random.Random(3)) == expand_prompt_picks("@PICK{a, b, c}", random.Random(3))
     True
+    >>> expand_prompt_picks("@SEQ{a, b, c}", sequence_index=0)
+    'a'
+    >>> expand_prompt_picks("@SEQ{a, b, c}", sequence_index=1)
+    'b'
+    >>> expand_prompt_picks("@SEQ{a, b, c}", sequence_index=3)
+    'a'
+    >>> expand_prompt_picks("@SEQ(2){a, b, c}", sequence_index=2)
+    'c, a'
+    >>> expand_prompt_picks("@seq ( 1 ) {a, b, c}", sequence_index=4)
+    'b'
     >>> expand_prompt_picks("no picks, here (x:1.2)", random.Random(3))
     'no picks, here (x:1.2)'
     >>> expand_prompt_picks("@PICK{a, b", random.Random(3))
@@ -150,23 +198,26 @@ def expand_prompt_picks(prompt: str, rng=None) -> str:
     parts = []
     position = 0
     while position < len(prompt):
-        match = re_pick.search(prompt, position)
+        match = re_prompt_group.search(prompt, position)
         if match is None:
             break
 
-        group = find_pick_group(prompt, match.start())
+        group = find_prompt_group(prompt, match.start())
         if group is None:
             parts.append(prompt[position:match.end()])
             position = match.end()
             continue
 
-        keywords_start, keywords_end, count = group
-        keywords = expand_prompt_picks(prompt[keywords_start:keywords_end], rng)
+        keywords_start, keywords_end, count, tag = group
+        keywords = expand_prompt_picks(prompt[keywords_start:keywords_end], rng, sequence_index)
         items = split_pick_items(keywords)
 
         parts.append(prompt[position:match.start()])
         if items:
-            parts.append(pick_items(items, count, rng))
+            if tag == 'seq':
+                parts.append(sequence_items(items, count, sequence_index))
+            else:
+                parts.append(pick_items(items, count, rng))
         else:
             parts.append(prompt[match.start():keywords_end + 1])
         position = keywords_end + 1
@@ -195,9 +246,10 @@ def strip_prompt_comments(text: str) -> str:
     scripts.process() and the diffusion model always receive clean prompts.  The
     originals (with comments) are preserved in all_prompts_with_comments /
     all_negative_prompts_with_comments for PNG metadata and gallery restore, and
-    the source with the @PICK groups drawn is what the gallery stores as the
-    compiled prompt.  The '@IF' block directives and '@MACRO' definitions are
-    kept here (strip_condition_directives removes them just before conditioning).
+    the source with the @PICK groups drawn and the @SEQ groups stepped is what the
+    gallery stores as the compiled prompt.  The '@IF' block directives and '@MACRO'
+    definitions are kept here (strip_condition_directives removes them just before
+    conditioning).
 
     >>> strip_prompt_comments("a, b\\n# comment\\n#(off), c")
     'a, b\\nc'
@@ -737,9 +789,9 @@ def compile_prompt(text: str, macros=None) -> str:
     its own macros).
 
     The *compiled prompt* the gallery stores is something else: it is the prompt as
-    written with the @PICK groups drawn (see StableDiffusionProcessing.
-    compiled_prompts_for_image).  This function is the last step before the
-    conditioning is built.
+    written with the @PICK groups drawn and the @SEQ groups stepped (see
+    StableDiffusionProcessing.compiled_prompts_for_image).  This function is the
+    last step before the conditioning is built.
 
     >>> compile_prompt("@IF TXT2IMG\\n# note\\na\\n@ENDIF", stage_macros("txt2img"))
     'a'

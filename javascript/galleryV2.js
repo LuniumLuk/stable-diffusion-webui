@@ -43,6 +43,11 @@
     ['portrait', 'Portrait'],
     ['square', 'Square']
   ];
+  var THUMB_RATIOS = [
+    ['1:1', '1:1'],
+    ['2:3', '2:3'],
+    ['3:2', '3:2']
+  ];
 
   var GROUP_EMOJI = {
     sdxl: '\u{1F5BC}',
@@ -63,6 +68,7 @@
     pageMode: 'scroll',
     pageSize: PAGE,
     thumbSize: 'm',
+    thumbRatio: '1:1', // card aspect: '1:1', '2:3' or '3:2'
     page: 1,
     total: 0,
     rows: [],
@@ -792,6 +798,9 @@
                 '<option value="m">Thumb: Medium</option>' +
                 '<option value="l">Thumb: Large</option>' +
               '</select>' +
+              '<select id="gv2-thumb-ratio" class="gv2-select" title="Thumbnail aspect ratio">' +
+                THUMB_RATIOS.map(function (r) { return '<option value="' + r[0] + '">Thumb: ' + r[1] + '</option>'; }).join('') +
+              '</select>' +
               '<span class="gv2-adv-sep"></span>' +
               '<span class="gv2-row-label">Date</span>' +
               '<input type="date" id="gv2-date-from" class="gv2-date" title="From date (inclusive)">' +
@@ -862,7 +871,7 @@
     el('gv2-refresh').addEventListener('click', function () { refreshFacets(); resetAndRefresh(); });
     el('gv2-select').addEventListener('click', function () { setSelectMode(!state.selectMode); });
     el('gv2-top').addEventListener('click', function () {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollPaneToTop();
     });
     el('gv2-more').addEventListener('click', function () { loadPage(true); });
     el('gv2-sync').addEventListener('click', function () { runMaintenance('reindex', 'Sync'); });
@@ -899,6 +908,7 @@
     el('gv2-page-mode').value = state.pageMode;
     el('gv2-page-size').value = String(state.pageSize);
     el('gv2-thumb-size').value = state.thumbSize;
+    el('gv2-thumb-ratio').value = state.thumbRatio;
     el('gv2-page-mode').addEventListener('change', function () {
       state.pageMode = el('gv2-page-mode').value === 'pages' ? 'pages' : 'scroll';
       savePrefs();
@@ -914,6 +924,11 @@
       state.thumbSize = el('gv2-thumb-size').value || 'm';
       savePrefs();
       applyThumbSize();
+    });
+    el('gv2-thumb-ratio').addEventListener('change', function () {
+      state.thumbRatio = thumbRatioValue(el('gv2-thumb-ratio').value);
+      savePrefs();
+      applyThumbRatio();
     });
     el('gv2-date-from').addEventListener('change', applyDateRange);
     el('gv2-date-to').addEventListener('change', applyDateRange);
@@ -1537,6 +1552,7 @@
       var size = parseInt(prefs.pageSize, 10);
       if (size >= 12 && size <= 500) state.pageSize = size;
       if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
+      state.thumbRatio = thumbRatioValue(prefs.thumbRatio);
       if (prefs.detailMediaLeft === true) state.detailMediaLeft = true;
       if (prefs.promptVariant === 'compiled') state.promptVariant = 'compiled';
       if (prefs.folds && typeof prefs.folds === 'object') {
@@ -1559,6 +1575,7 @@
         pageMode: state.pageMode,
         pageSize: state.pageSize,
         thumbSize: state.thumbSize,
+        thumbRatio: state.thumbRatio,
         detailMediaLeft: !!state.detailMediaLeft,
         promptVariant: state.promptVariant === 'compiled' ? 'compiled' : 'source',
         sendDefaults: state.sendDefaults,
@@ -1572,6 +1589,22 @@
     if (!root) return;
     ['xs', 's', 'm', 'l'].forEach(function (k) { root.classList.remove('gv2-thumb-' + k); });
     root.classList.add('gv2-thumb-' + (state.thumbSize || 'm'));
+  }
+
+  // Only the accepted ratios reach the DOM class, so a hand-edited pref can never
+  // inject an arbitrary class name.
+  function thumbRatioValue(value) {
+    for (var i = 0; i < THUMB_RATIOS.length; i++) {
+      if (THUMB_RATIOS[i][0] === value) return value;
+    }
+    return '1:1';
+  }
+
+  function applyThumbRatio() {
+    var root = el(ROOT_ID);
+    if (!root) return;
+    THUMB_RATIOS.forEach(function (r) { root.classList.remove('gv2-ratio-' + r[0].replace(':', 'x')); });
+    root.classList.add('gv2-ratio-' + thumbRatioValue(state.thumbRatio).replace(':', 'x'));
   }
 
   function dateInputValue(ts) {
@@ -1689,6 +1722,7 @@
       .catch(function (err) { toast('Query failed: ' + err.message, true); })
       .finally(function () {
         state.busy = false;
+        fitPane();
         setTimeout(autoLoadCheck, 60);
       });
   }
@@ -2594,11 +2628,11 @@
           '</div>' +
           '<div class="gv2-detail-actions">' + detailActionButtons(item) + '</div>' +
           '<div class="gv2-detail-keys">' +
-            '<span><kbd>\u2190</kbd><kbd>\u2192</kbd> prev / next</span>' +
+            '<span><kbd>\u2190</kbd><kbd>\u2192</kbd> or <kbd>A</kbd><kbd>D</kbd> prev / next</span>' +
             '<span><kbd>\u2191</kbd> endorse</span>' +
             '<span><kbd>\u2193</kbd> dislike</span>' +
             '<span><kbd>Del</kbd> trash</span>' +
-            '<span><kbd>A</kbd> archive</span>' +
+            '<span><kbd>X</kbd> archive</span>' +
             '<span><kbd>S</kbd> stage</span>' +
             '<span><kbd>Esc</kbd> close</span>' +
           '</div>' +
@@ -2866,7 +2900,7 @@
       '<div class="gv2-compare-shell" role="dialog" aria-label="Compare window">' +
         '<div class="gv2-compare-head">' +
           '<span class="gv2-compare-title">Compare <span class="gv2-compare-total">' + keys.length + '</span></span>' +
-          '<span class="gv2-compare-hint">drag the strip to reorder \u00b7 click to preview \u00b7 \u2190 \u2192 step \u00b7 Esc close</span>' +
+          '<span class="gv2-compare-hint">drag the strip to reorder \u00b7 click to preview \u00b7 \u2190 \u2192 / A D step \u00b7 X archive \u00b7 S stage \u00b7 Esc close</span>' +
           '<button class="gv2-compare-close" title="Close the compare window (Esc)">\u00d7</button>' +
         '</div>' +
         '<div id="gv2-compare-list" class="gv2-compare-list"></div>' +
@@ -3304,6 +3338,12 @@
         } else if (ev.key === 'ArrowDown') {
           ev.preventDefault();
           if (!ev.repeat) detailApply('dislike');
+        } else if (ev.key === 'a' || ev.key === 'A') {
+          ev.preventDefault();
+          stepOpenViewer(-1);
+        } else if (ev.key === 'd' || ev.key === 'D') {
+          ev.preventDefault();
+          stepOpenViewer(1);
         }
         return;
       }
@@ -3315,12 +3355,12 @@
         if (isTypingTarget(ev.target)) return;
         if (ev.key === 'Escape') { ev.preventDefault(); closeCompareWindow(); return; }
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-        if (ev.key === 'ArrowLeft') { ev.preventDefault(); compareNavigate(-1); }
-        else if (ev.key === 'ArrowRight') { ev.preventDefault(); compareNavigate(1); }
+        if (ev.key === 'ArrowLeft' || ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); compareNavigate(-1); }
+        else if (ev.key === 'ArrowRight' || ev.key === 'd' || ev.key === 'D') { ev.preventDefault(); compareNavigate(1); }
         else if (ev.key === 'ArrowUp') { ev.preventDefault(); if (!ev.repeat) compareApply('endorse'); }
         else if (ev.key === 'ArrowDown') { ev.preventDefault(); if (!ev.repeat) compareApply('dislike'); }
         else if (ev.key === 'Delete') { ev.preventDefault(); compareTrash(); }
-        else if (ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); if (!ev.repeat) compareApply('archive'); }
+        else if (ev.key === 'x' || ev.key === 'X') { ev.preventDefault(); if (!ev.repeat) compareApply('archive'); }
         else if (ev.key === 's' || ev.key === 'S') { ev.preventDefault(); if (!ev.repeat) compareApply('stage'); }
         return;
       }
@@ -3331,12 +3371,12 @@
       }
       if (!drawerOpen || isTypingTarget(ev.target)) return;
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-      if (ev.key === 'ArrowLeft') { ev.preventDefault(); detailNavigate(-1); }
-      else if (ev.key === 'ArrowRight') { ev.preventDefault(); detailNavigate(1); }
+      if (ev.key === 'ArrowLeft' || ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); detailNavigate(-1); }
+      else if (ev.key === 'ArrowRight' || ev.key === 'd' || ev.key === 'D') { ev.preventDefault(); detailNavigate(1); }
       else if (ev.key === 'ArrowUp') { ev.preventDefault(); detailApply('endorse'); }
       else if (ev.key === 'ArrowDown') { ev.preventDefault(); detailApply('dislike'); }
       else if (ev.key === 'Delete') { ev.preventDefault(); detailTrash(); }
-      else if (ev.key === 'a' || ev.key === 'A') { ev.preventDefault(); detailApply('archive'); }
+      else if (ev.key === 'x' || ev.key === 'X') { ev.preventDefault(); detailApply('archive'); }
       else if (ev.key === 's' || ev.key === 'S') {
         ev.preventDefault();
         if (!ev.repeat) detailToggleStage();
@@ -3370,6 +3410,13 @@
     return tag === 'input' || tag === 'textarea' || tag === 'select' || node.isContentEditable === true;
   }
 
+  // A / D swipe the same way the arrow keys do: the open fullscreen viewer steps
+  // through the drawer / compare order it was opened from.
+  function stepOpenViewer(offset) {
+    var nav = window.gv2LightboxNav;
+    if (nav && typeof nav.nav === 'function') nav.nav(offset);
+  }
+
   // ---------------------------------------------------------------- init
 
   var scheduled = false;
@@ -3388,6 +3435,7 @@
         cmp.dragging = null;
       }
       init();
+      watchPane();
     }, 250);
   }
 
@@ -3412,14 +3460,93 @@
   function updateTopButton() {
     var btn = el('gv2-top');
     if (!btn) return;
-    var y = window.scrollY || document.documentElement.scrollTop || 0;
+    var y = paneScrollTop();
     btn.classList.toggle('gv2-top-hidden', y <= 600);
+  }
+
+  // style.css turns the gallery root into its own scroll pane (see "fixed top
+  // band" there), so the back-to-top button has to read that pane, not the window.
+  function paneEl() {
+    return el(ROOT_ID);
+  }
+
+  function paneScrollTop() {
+    var root = paneEl();
+    if (root && root.scrollHeight > root.clientHeight) return root.scrollTop || 0;
+    return window.scrollY || document.documentElement.scrollTop || 0;
+  }
+
+  function scrollPaneToTop() {
+    var root = paneEl();
+    if (root && root.scrollHeight > root.clientHeight) {
+      root.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // The fixed top band (progress bar + the versions strip) cannot be scrolled
+  // away, so the gallery is its own scroll pane and is sized to the space left in
+  // the viewport: its top edge stays below the band and no card can slide under
+  // the strip.  A hidden tab measures as zero and is fitted by the ResizeObserver
+  // once it is shown.
+  //
+  // Vertical space the layout keeps below the pane (tab padding, the column gap,
+  // the footer slot, the app container padding).  Each term is a layout constant,
+  // so this stays right when the pane is resized - the document height itself is
+  // clamped to the viewport and cannot be used for it.
+  function spaceBelowPane(root) {
+    var container = document.querySelector('gradio-app > .gradio-container') || document.body;
+    var space = 0;
+    var node = root;
+    while (node && node !== container && node.parentElement) {
+      var cs = getComputedStyle(node);
+      space += (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.marginBottom) || 0);
+      var parent = node.parentElement;
+      var parentStyle = getComputedStyle(parent);
+      // a row gap only separates this node from a sibling that is actually laid out
+      var columnFlow = parentStyle.display.indexOf('flex') >= 0 || parentStyle.display.indexOf('grid') >= 0;
+      var next = node.nextElementSibling;
+      if (columnFlow && next && next.getClientRects().length) space += parseFloat(parentStyle.rowGap) || 0;
+      node = parent;
+    }
+    var footer = document.getElementById('footer');
+    if (footer) {
+      var footerStyle = getComputedStyle(footer);
+      space += footer.getBoundingClientRect().height;
+      space += (parseFloat(footerStyle.marginTop) || 0) + (parseFloat(footerStyle.marginBottom) || 0);
+    }
+    space += parseFloat(getComputedStyle(container).paddingBottom) || 0;
+    return space;
+  }
+
+  // The pane owns the scrolling, so the window must never scroll: the fixed top
+  // band would then paint over the cards.
+  function fitPane() {
+    var root = paneEl();
+    if (!root || !root.getClientRects().length) return;
+    var top = root.getBoundingClientRect().top + (window.scrollY || 0);
+    var height = Math.max(280, Math.round(window.innerHeight - top - spaceBelowPane(root) - 2)) + 'px';
+    if (root.style.getPropertyValue('--gv2-pane-height') !== height) {
+      root.style.setProperty('--gv2-pane-height', height);
+    }
+  }
+
+  var _paneWatched = false;
+  function watchPane() {
+    if (_paneWatched) return;
+    var root = paneEl();
+    if (!root) return;
+    _paneWatched = true;
+    fitPane();
+    if (window.ResizeObserver) new ResizeObserver(function () { fitPane(); }).observe(root);
+    window.addEventListener('resize', fitPane);
   }
 
   function hookAutoScroll() {
     if (_autoScrollHooked) return;
     _autoScrollHooked = true;
-    window.addEventListener('scroll', function () {
+    var schedule = function () {
       if (_autoScrollScheduled) return;
       _autoScrollScheduled = true;
       requestAnimationFrame(function () {
@@ -3427,7 +3554,12 @@
         updateTopButton();
         autoLoadCheck();
       });
-    }, { passive: true });
+    };
+    // the gallery scrolls inside its own pane now, and scroll events do not
+    // bubble - listen on the pane as well as on the window
+    window.addEventListener('scroll', schedule, { passive: true });
+    var root = paneEl();
+    if (root) root.addEventListener('scroll', schedule, { passive: true });
     window.addEventListener('resize', function () { updateTopButton(); autoLoadCheck(); });
     updateTopButton();
   }
@@ -3439,6 +3571,7 @@
     loadPrefs();
     buildChrome(root);
     applyThumbSize();
+    applyThumbRatio();
     wireChips(root);
     wireFolds(root);
     applyFolds();

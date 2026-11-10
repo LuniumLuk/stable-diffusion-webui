@@ -10,6 +10,9 @@
  *     blue
  *   }                   keyword lists may span multiple lines
  *
+ *   @SEQ{a, b, c}       use 1 keyword per image, in turn, looping after the last
+ *   @SEQ(2){a, b, c}    use 2 consecutive keywords per image, wrapping around
+ *
  * `@` custom macros — a line of its own declares a macro used by conditions:
  *
  *   @MACRO(FLAG)                 boolean macro, off by default
@@ -34,11 +37,11 @@
  * `analyzeAtSyntax(body)` returns null for an ordinary keyword and otherwise
  *   {
  *     ok,        // grammar is valid
- *     tag,       // 'pick' for a valid directive, the typed name for an unknown one
+ *     tag,       // 'pick' / 'seq' for a valid directive, the typed name for an unknown one
  *     raw,       // the keyword as typed
- *     count,     // keywords drawn per image (clamped to the group size)
+ *     count,     // keywords used per image (clamped to the group size)
  *     items,     // the keywords inside the braces
- *     kind,      // 'pick' | 'unknown'
+ *     kind,      // 'pick' | 'seq' | 'unknown'
  *     headline,  // one line: what the syntax does (or what is wrong with it)
  *     details,   // extra hint lines (preview of the result / the fix)
  *   }
@@ -53,6 +56,8 @@
  */
 
 export const PICK_EXAMPLE = '@PICK{a, b, c} or @PICK(2){a, b, c}';
+export const SEQ_EXAMPLE = '@SEQ{a, b, c} or @SEQ(2){a, b, c}';
+export const SYNTAX_EXAMPLES = `${PICK_EXAMPLE} \u00b7 ${SEQ_EXAMPLE}`;
 
 const TAG_RE = /^@([A-Za-z][\w-]*)/;
 const OPENING = '([{<';
@@ -92,7 +97,7 @@ function matchBrace(text, open) {
 }
 
 function invalid(raw, { tag = '', kind = 'pick', error, hint = '' }) {
-  return { ok: false, tag, raw, kind, count: 1, items: [], headline: error, details: [hint || `Example: ${PICK_EXAMPLE}`] };
+  return { ok: false, tag, raw, kind, count: 1, items: [], headline: error, details: [hint || `Example: ${SYNTAX_EXAMPLES}`] };
 }
 
 /** Trims a long keyword list for the hover hint. */
@@ -127,6 +132,39 @@ function validPick(raw, count, items) {
   };
 }
 
+function validSequence(raw, count, items) {
+  const total = items.length;
+  const used = Math.min(Math.max(count, 1), total);
+  let headline;
+  if (total === 1) {
+    headline = 'Sequence \u2014 the group holds a single keyword, so every image uses it.';
+  } else if (used >= total) {
+    headline = `Sequence \u2014 all ${total} keywords are used, in order, for every image.`;
+  } else {
+    headline = `Sequence \u2014 ${used} consecutive keyword${used === 1 ? '' : 's'} per image, in order, starting over after the last one.`;
+  }
+  const wrapAt = (start) => {
+    const out = [];
+    for (let offset = 0; offset < used; offset += 1) out.push(items[(start + offset) % total]);
+    return out.join(', ');
+  };
+  return {
+    ok: true,
+    tag: 'seq',
+    raw,
+    kind: 'seq',
+    count: used,
+    items,
+    headline,
+    details: [
+      `Keywords: ${keywordPreview(items)}`,
+      total > 1
+        ? `Image 1 \u2192 ${wrapAt(0)}, image 2 \u2192 ${wrapAt(1)}, \u2026 and back to the first keyword after ${total} images.`
+        : 'Nothing steps: the group has a single keyword.',
+    ],
+  };
+}
+
 /**
  * Grammar-checks one prompt keyword.
  * Returns null when the keyword does not start with '@'.
@@ -141,15 +179,17 @@ export function analyzeAtSyntax(body) {
   }
 
   const tag = tagMatch[1];
-  if (tag.toLowerCase() !== 'pick') {
+  const kind = tag.toLowerCase();
+  if (kind !== 'pick' && kind !== 'seq') {
     return invalid(raw, {
       tag,
       kind: 'unknown',
       error: `Unknown prompt syntax @${tag}.`,
-      hint: `Known syntax: ${PICK_EXAMPLE}`,
+      hint: `Known syntax: ${SYNTAX_EXAMPLES}`,
     });
   }
 
+  const example = kind === 'seq' ? SEQ_EXAMPLE : PICK_EXAMPLE;
   const rest = raw.slice(tagMatch[0].length);
   let bodyStart = rest.search(/\S/);
   bodyStart = bodyStart < 0 ? rest.length : bodyStart;
@@ -158,18 +198,19 @@ export function analyzeAtSyntax(body) {
   if (rest[bodyStart] === '(') {
     const close = rest.indexOf(')', bodyStart);
     if (close < 0) {
-      return invalid(raw, { tag, error: 'Missing the closing \u201c)\u201d of the pick count.', hint: 'Pick count syntax: @PICK(2){a, b, c}' });
+      return invalid(raw, { tag, kind, error: 'Missing the closing \u201c)\u201d of the count.', hint: `Count syntax: @${kind.toUpperCase()}(2){a, b, c}` });
     }
     const countText = rest.slice(bodyStart + 1, close).trim();
     if (!/^\d+$/.test(countText)) {
       return invalid(raw, {
         tag,
-        error: countText ? `The pick count \u201c${countText}\u201d is not a whole number.` : 'The pick count is empty \u2014 write a number, for example @PICK(2){a, b, c}.',
+        kind,
+        error: countText ? `The count \u201c${countText}\u201d is not a whole number.` : `The count is empty \u2014 write a number, for example @${kind.toUpperCase()}(2){a, b, c}.`,
       });
     }
     count = parseInt(countText, 10);
     if (count < 1) {
-      return invalid(raw, { tag, error: 'The pick count must be 1 or more.' });
+      return invalid(raw, { tag, kind, error: 'The count must be 1 or more.' });
     }
     bodyStart = close + 1;
     while (bodyStart < rest.length && /\s/.test(rest[bodyStart])) bodyStart += 1;
@@ -178,25 +219,26 @@ export function analyzeAtSyntax(body) {
   if (rest[bodyStart] !== '{') {
     return invalid(raw, {
       tag,
+      kind,
       error: 'Missing the { \u2026 } keyword list.',
-      hint: `Write ${PICK_EXAMPLE}.`,
+      hint: `Write ${example}.`,
     });
   }
 
   const close = matchBrace(rest, bodyStart);
   if (close < 0) {
-    return invalid(raw, { tag, error: 'Missing the closing \u201c}\u201d of the keyword list.' });
+    return invalid(raw, { tag, kind, error: 'Missing the closing \u201c}\u201d of the keyword list.' });
   }
   if (rest.slice(close + 1).trim()) {
-    return invalid(raw, { tag, error: 'Unexpected text after the keyword list.' });
+    return invalid(raw, { tag, kind, error: 'Unexpected text after the keyword list.' });
   }
 
   const items = splitSyntaxItems(rest.slice(bodyStart + 1, close));
   if (!items.length) {
-    return invalid(raw, { tag, error: 'The keyword list is empty \u2014 separate keywords with commas.' });
+    return invalid(raw, { tag, kind, error: 'The keyword list is empty \u2014 separate keywords with commas.' });
   }
 
-  return validPick(raw, count, items);
+  return kind === 'seq' ? validSequence(raw, count, items) : validPick(raw, count, items);
 }
 
 /** Plain-text hover hint (what the chip `title` shows). */

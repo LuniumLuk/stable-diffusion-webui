@@ -68,6 +68,11 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - the draw is tied to the image seed, so reloading an image's parameters brings back the same keywords
      - keywords starting with `@` are checked and highlighted; right-click a directive (tap it in the mobile UI) for a hint with the N-of-M preview, broken syntax is marked in red with the reason
      - the gallery keeps both the source prompt and the compiled prompt (as written, with the picks drawn); its info panel switches between them (remembered) and the send actions follow the choice
+- Keyword sequence, the same group syntax but walking the list instead of drawing from it
+     - `@SEQ{a, b, c}` gives image 1 `a`, image 2 `b`, image 3 `c`, then starts over at `a`
+     - `@SEQ(2){a, b, c}` takes two consecutive keywords per image (`a, b`, then `b, c`, then `c, a`); a count that covers the whole group uses every keyword in order
+     - the position follows the image's place in the generation, so batch size 4 walks four positions; the seed does not change it, which makes a sequence reproducible
+     - groups may span lines, hold nested groups, and mix freely with `@PICK` in the same prompt
 - Conditional prompt blocks, a way to keep per-stage text in one prompt
      - `@IF TXT2IMG`, `@ELSEIF HIRES_FIX`, `@ELSE`, `@ENDIF`, each on a line of its own; blocks may be nested
      - directives start with `@` so `#` stays reserved for comments and `#(...)` disabled groups; the old `#if` form is rewritten to `@IF` in the gallery/endorsement databases at startup and when an image is restored or stored
@@ -83,7 +88,7 @@ A web interface for Stable Diffusion, implemented using Gradio library.
      - the prompt editors highlight the directives and flag malformed conditions, a missing `@ENDIF` and a stray `@ELSE`; an undeclared macro is a normal off boolean, and a block that is not closed is left in the prompt untouched
      - in the PC editor (text mode) a fold column left of the line numbers folds a `@IF … @ENDIF` block or a `# ---` section into a `⋯ N lines` chip (click the chip to unfold); a section folds up to the line before the next `# ---` marker, so that marker keeps its own line
      - the macro dropdown opens once the space after `@IF` / `@ELSEIF` is typed; after `POSE_INPAINT_PART == ` (space) it lists the `FACE` / `FEET` / `HANDS` / `0` values, and after a custom enum macro `== ` it lists that macro's aliases
-     - the source prompt (PNG metadata, gallery restore) is kept exactly as typed; the compiled prompt (gallery, "send to") is that same text with the `@PICK` groups drawn — comments, disabled groups, `@MACRO` definitions and every `@IF` / `@ELSEIF` / `@ELSE` / `@ENDIF` line with all its branches stay, so nothing but the picks changes
+     - the source prompt (PNG metadata, gallery restore) is kept exactly as typed; the compiled prompt (gallery, "send to") is that same text with the `@PICK` groups drawn and the `@SEQ` groups stepped — comments, disabled groups, `@MACRO` definitions and every `@IF` / `@ELSEIF` / `@ELSE` / `@ENDIF` line with all its branches stay, so nothing but the groups changes
      - just before the model is conditioned the blocks are resolved for the running stage (only the branch that runs survives), the comments are removed and the directive lines dropped, so the model never sees a directive line
 - Batch Processing, process a group of files using img2img
 - Img2img Alternative, reverse Euler method of cross attention control

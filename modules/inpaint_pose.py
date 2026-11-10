@@ -1012,7 +1012,7 @@ def choose_inpaint_prompt(p, index: int, part=None) -> tuple[str, str]:
     def with_picks(text, kind):
         if "@" not in text:
             return text
-        return prompt_parser.expand_prompt_picks(text, prompt_parser.get_pick_rng(seed, index, kind))
+        return prompt_parser.expand_prompt_picks(text, prompt_parser.get_pick_rng(seed, index, kind), index)
 
     return prompt_parser.strip_prompt_comments(with_picks(prompt, "pos")), prompt_parser.strip_prompt_comments(with_picks(negative, "neg"))
 

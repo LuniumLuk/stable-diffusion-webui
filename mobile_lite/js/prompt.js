@@ -390,14 +390,16 @@ function createChipsField(key, placeholder, title, macroContext) {
     if (condition) children.push(el('span', { class: 'pedit-chip-kind', text: '\u2442' }));
     else if (macro) children.push(el('span', { class: 'pedit-chip-kind', text: syntax && syntax.ok ? '\uD83C\uDF9B' : '\u26A0\uFE0F' }));
     else if (token.kind === 'angle') children.push(el('span', { class: 'pedit-chip-kind', text: '\u25C8' }));
-    else if (syntax) children.push(el('span', { class: 'pedit-chip-kind', text: syntax.ok ? '\uD83C\uDFB2' : '\u26A0\uFE0F' }));
+    else if (syntax) children.push(el('span', { class: 'pedit-chip-kind', text: syntax.ok ? (syntax.kind === 'seq' ? '\uD83D\uDD01' : '\uD83C\uDFB2') : '\u26A0\uFE0F', title: syntax.ok ? (syntax.kind === 'seq' ? 'prompt sequence' : 'random pick') : 'prompt syntax error' }));
     children.push(el('span', { class: 'pedit-chip-text', text: token.text || '\u2026' }));
     if (syntax) {
       if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
         children.push(el('span', {
-          class: 'pedit-chip-w pedit-chip-pick',
+          class: `pedit-chip-w pedit-chip-${syntax.kind}`,
           text: `${syntax.count}/${syntax.items.length}`,
-          title: 'keywords drawn per image / keywords in the group',
+          title: syntax.kind === 'seq'
+            ? 'keywords used per image / keywords in the group'
+            : 'keywords drawn per image / keywords in the group',
         }));
       }
     } else if (Math.abs((token.weight || DEFAULT_WEIGHT) - DEFAULT_WEIGHT) > 1e-9) {

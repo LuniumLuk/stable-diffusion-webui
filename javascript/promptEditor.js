@@ -165,9 +165,11 @@
     // ── '@' prompt syntax ───────────────────────────────────────────────────
     // Mirror of mobile_lite/js/prompt-syntax.js (a classic script cannot import the
     // module).  Every keyword starting with '@' is a directive and must pass this
-    // grammar; @PICK is the only directive today.
+    // grammar; @PICK and @SEQ are the only keyword directives today.
 
     const PICK_EXAMPLE = '@PICK{a, b, c} or @PICK(2){a, b, c}';
+    const SEQ_EXAMPLE = '@SEQ{a, b, c} or @SEQ(2){a, b, c}';
+    const SYNTAX_EXAMPLES = PICK_EXAMPLE + ' · ' + SEQ_EXAMPLE;
 
     /** Splits an @PICK body at top level commas (commas inside (), [], {}, <> stay). */
     function splitSyntaxItems(text) {
@@ -190,7 +192,7 @@
     }
 
     function invalidSyntax(raw, tag, kind, error, hint) {
-        return { ok: false, tag: tag, raw: raw, kind: kind, count: 1, items: [], headline: error, details: [hint || 'Example: ' + PICK_EXAMPLE] };
+        return { ok: false, tag: tag, raw: raw, kind: kind, count: 1, items: [], headline: error, details: [hint || 'Example: ' + SYNTAX_EXAMPLES] };
     }
 
     /** Grammar-checks one prompt keyword; null when it does not start with '@'. */
@@ -202,10 +204,12 @@
         if (!tagMatch) return invalidSyntax(raw, '', 'pick', 'A prompt directive needs a name right after @.', '');
 
         const tag = tagMatch[1];
-        if (tag.toLowerCase() !== 'pick') {
-            return invalidSyntax(raw, tag, 'unknown', 'Unknown prompt syntax @' + tag + '.', 'Known syntax: ' + PICK_EXAMPLE);
+        const kind = tag.toLowerCase();
+        if (kind !== 'pick' && kind !== 'seq') {
+            return invalidSyntax(raw, tag, 'unknown', 'Unknown prompt syntax @' + tag + '.', 'Known syntax: ' + SYNTAX_EXAMPLES);
         }
 
+        const example = kind === 'seq' ? SEQ_EXAMPLE : PICK_EXAMPLE;
         const rest = raw.slice(tagMatch[0].length);
         let at = rest.search(/\S/);
         at = at < 0 ? rest.length : at;
@@ -213,19 +217,19 @@
         let count = 1;
         if (rest[at] === '(') {
             const close = rest.indexOf(')', at);
-            if (close < 0) return invalidSyntax(raw, tag, 'pick', 'Missing the closing “)” of the pick count.', 'Pick count syntax: @PICK(2){a, b, c}');
+            if (close < 0) return invalidSyntax(raw, tag, kind, 'Missing the closing “)” of the count.', 'Count syntax: @' + kind.toUpperCase() + '(2){a, b, c}');
             const countText = rest.slice(at + 1, close).trim();
             if (!/^\d+$/.test(countText)) {
-                return invalidSyntax(raw, tag, 'pick',
-                    countText ? 'The pick count “' + countText + '” is not a whole number.' : 'The pick count is empty — write a number, for example @PICK(2){a, b, c}.', '');
+                return invalidSyntax(raw, tag, kind,
+                    countText ? 'The count “' + countText + '” is not a whole number.' : 'The count is empty — write a number, for example @' + kind.toUpperCase() + '(2){a, b, c}.', '');
             }
             count = parseInt(countText, 10);
-            if (count < 1) return invalidSyntax(raw, tag, 'pick', 'The pick count must be 1 or more.', '');
+            if (count < 1) return invalidSyntax(raw, tag, kind, 'The count must be 1 or more.', '');
             at = close + 1;
             while (at < rest.length && /\s/.test(rest[at])) at++;
         }
 
-        if (rest[at] !== '{') return invalidSyntax(raw, tag, 'pick', 'Missing the { … } keyword list.', 'Write ' + PICK_EXAMPLE + '.');
+        if (rest[at] !== '{') return invalidSyntax(raw, tag, kind, 'Missing the { … } keyword list.', 'Write ' + example + '.');
 
         let depth = 0;
         let close = -1;
@@ -239,13 +243,40 @@
                 }
             }
         }
-        if (close < 0) return invalidSyntax(raw, tag, 'pick', 'Missing the closing “}” of the keyword list.', '');
-        if (rest.slice(close + 1).trim()) return invalidSyntax(raw, tag, 'pick', 'Unexpected text after the keyword list.', '');
+        if (close < 0) return invalidSyntax(raw, tag, kind, 'Missing the closing “}” of the keyword list.', '');
+        if (rest.slice(close + 1).trim()) return invalidSyntax(raw, tag, kind, 'Unexpected text after the keyword list.', '');
 
         const items = splitSyntaxItems(rest.slice(at + 1, close));
-        if (!items.length) return invalidSyntax(raw, tag, 'pick', 'The keyword list is empty — separate keywords with commas.', '');
+        if (!items.length) return invalidSyntax(raw, tag, kind, 'The keyword list is empty — separate keywords with commas.', '');
 
         const drawn = Math.min(Math.max(count, 1), items.length);
+        const shown = items.slice(0, 8).join(' · ') + (items.length > 8 ? ' … (+' + (items.length - 8) + ')' : '');
+
+        if (kind === 'seq') {
+            let headline;
+            if (items.length === 1) {
+                headline = 'Sequence — the group holds a single keyword, so every image uses it.';
+            } else if (drawn >= items.length) {
+                headline = 'Sequence — all ' + items.length + ' keywords are used, in order, for every image.';
+            } else {
+                headline = 'Sequence — ' + drawn + ' consecutive keyword' + (drawn === 1 ? '' : 's') + ' per image, in order, starting over after the last one.';
+            }
+            const wrapAt = (start) => {
+                const out = [];
+                for (let i = 0; i < drawn; i++) out.push(items[(start + i) % items.length]);
+                return out.join(', ');
+            };
+            return {
+                ok: true, tag: 'seq', raw: raw, kind: 'seq', count: drawn, items: items, headline: headline,
+                details: [
+                    'Keywords: ' + shown,
+                    items.length > 1
+                        ? 'Image 1 → ' + wrapAt(0) + ', image 2 → ' + wrapAt(1) + ', … and back to the first keyword after ' + items.length + ' images.'
+                        : 'Nothing steps: the group has a single keyword.',
+                ],
+            };
+        }
+
         let headline;
         if (items.length === 1) {
             headline = 'Random pick — the group holds a single keyword, so it is used for every image (nothing is drawn).';
@@ -254,7 +285,6 @@
         } else {
             headline = 'Random pick — ' + drawn + ' of ' + items.length + ' keywords ' + (drawn === 1 ? 'is' : 'are') + ' chosen at random for every image.';
         }
-        const shown = items.slice(0, 8).join(' · ') + (items.length > 8 ? ' … (+' + (items.length - 8) + ')' : '');
         return {
             ok: true, tag: 'pick', raw: raw, kind: 'pick', count: drawn, items: items, headline: headline,
             details: ['Keywords: ' + shown, 'Each image draws again (batch count 16 → 16 draws) and the draw follows the image seed.'],
@@ -538,13 +568,13 @@
         return results;
     }
 
-    /* ------------------------------------------------- multi-line @PICK groups
+    /* -------------------------------------------- multi-line @PICK / @SEQ groups
      * Mirror of findPickGroups in mobile_lite/js/prompt-parse.js: the token model
-     * is line based, but an @PICK keyword list may span lines.  The opening line
-     * is validated against the whole group so it is not flagged as missing '}'.
+     * is line based, but a keyword list may span lines.  The opening line is
+     * validated against the whole group so it is not flagged as missing '}'.
      */
 
-    const PICK_GROUP_RE = /@pick[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
+    const GROUP_RE = /@(?:pick|seq)[ \t]*(?:\([ \t]*\d+[ \t]*\)[ \t]*)?\{/gi;
 
     function lineStartOffsets(text) {
         const starts = [0];
@@ -570,16 +600,16 @@
         if (source.indexOf('@') < 0) return [];
         const starts = lineStartOffsets(source);
         const groups = [];
-        PICK_GROUP_RE.lastIndex = 0;
+        GROUP_RE.lastIndex = 0;
         let match;
-        while ((match = PICK_GROUP_RE.exec(source)) !== null) {
+        while ((match = GROUP_RE.exec(source)) !== null) {
             const start = match.index;
             const openLine = lineForOffset(starts, start);
             const lineStart = starts[openLine];
             if (/^\s*#(?!\()/.test(source.slice(lineStart, start))) continue;
 
             let depth = 1;
-            let index = PICK_GROUP_RE.lastIndex;
+            let index = GROUP_RE.lastIndex;
             let close = -1;
             while (index < source.length) {
                 const ch = source[index];
@@ -609,7 +639,7 @@
                 raw: raw,
                 syntax: analyzeAtSyntax(raw),
             });
-            PICK_GROUP_RE.lastIndex = end;
+            GROUP_RE.lastIndex = end;
         }
         return groups;
     }
@@ -623,9 +653,10 @@
 
     /**
      * Classify a segment body -> { kind, text, weight, disabled, syntax? }
-     *   kind: 'plain' | 'paren' | 'bracket' | 'angle' | 'pick' | 'at'
+     *   kind: 'plain' | 'paren' | 'bracket' | 'angle' | 'pick' | 'seq' | 'at'
      * The weight is the *effective* A1111 weight, so '((x))' is 1.21 and '[x]' is 0.909.
-     * 'pick' is a well formed @PICK group, 'at' a broken '@' directive (see analyzeAtSyntax).
+     * 'pick' is a well formed @PICK group, 'seq' a well formed @SEQ group and 'at' a
+     * broken '@' directive (see analyzeAtSyntax).
      */
     function classify(body, syntaxOverride, allowCondition) {
         const t = body.trim();
@@ -642,11 +673,11 @@
         }
 
         // every keyword starting with '@' is a directive and must pass the grammar;
-        // syntaxOverride is the validated full group for a multi-line @PICK header
+        // syntaxOverride is the validated full group for a multi-line header
         const syntax = syntaxOverride || analyzeAtSyntax(t);
         if (syntax) {
             return {
-                kind: syntax.ok ? 'pick' : 'at',
+                kind: syntax.ok ? syntax.kind : 'at',
                 text: t,
                 weight: DEFAULT_WEIGHT,
                 disabled: false,
@@ -707,9 +738,10 @@
      * Used by every chip action (weight steppers, disable, quick weights).
      */
     function rebuild(token, weight, disabled) {
-        // a random-pick group has no weight of its own and cannot be disabled with '#(...)',
-        // and a broken '@' directive (and an @IF / @MACRO line) must keep its text as typed
-        if (token.kind === 'pick' || token.kind === 'at' || token.kind === 'cond' || token.kind === 'macro') return token.text;
+        // a random-pick / sequence group has no weight of its own and cannot be
+        // disabled with '#(...)', and a broken '@' directive (and an @IF / @MACRO
+        // line) must keep its text as typed
+        if (token.kind === 'pick' || token.kind === 'seq' || token.kind === 'at' || token.kind === 'cond' || token.kind === 'macro') return token.text;
 
         const flat = Math.abs(weight - DEFAULT_WEIGHT) < 1e-9;
         let inner;
@@ -822,7 +854,7 @@
             if (condition) children.push(`<span class="pedit-chip-kind" title="${syntax && syntax.ok ? 'stage condition' : 'stage condition error'}">${syntax && syntax.ok ? '⑂' : '⚠️'}</span>`);
             else if (macro) children.push(`<span class="pedit-chip-kind" title="${syntax && syntax.ok ? 'custom macro' : 'custom macro error'}">${syntax && syntax.ok ? '🎛' : '⚠️'}</span>`);
             else if (token.kind === 'angle') children.push('<span class="pedit-chip-kind" title="extra network tag">◈</span>');
-            else if (syntax) children.push(`<span class="pedit-chip-kind" title="${syntax.ok ? 'prompt syntax' : 'prompt syntax error'}">${syntax.ok ? '🎲' : '⚠️'}</span>`);
+            else if (syntax) children.push(`<span class="pedit-chip-kind" title="${syntax.ok ? (syntax.kind === 'seq' ? 'prompt sequence' : 'random pick') : 'prompt syntax error'}">${syntax.ok ? (syntax.kind === 'seq' ? '🔁' : '🎲') : '⚠️'}</span>`);
             const chipLabel = token.text || '…';
             const chipText = replacerTab && window.promptReplacer && window.promptReplacer.decorateChipText
                 ? window.promptReplacer.decorateChipText(chipLabel, replacerTab)
@@ -830,7 +862,10 @@
             children.push(`<span class="pedit-chip-text">${chipText}</span>`);
             if (syntax) {
                 if (!condition && !macro && syntax.ok && syntax.items.length > 1) {
-                    children.push(`<span class="pedit-chip-w pedit-chip-pick" title="keywords drawn per image / keywords in the group">${syntax.count}/${syntax.items.length}</span>`);
+                    const badgeTitle = syntax.kind === 'seq'
+                        ? 'keywords used per image / keywords in the group'
+                        : 'keywords drawn per image / keywords in the group';
+                    children.push(`<span class="pedit-chip-w pedit-chip-${syntax.kind}" title="${badgeTitle}">${syntax.count}/${syntax.items.length}</span>`);
                 }
             } else if (Math.abs((token.weight || 1) - DEFAULT_WEIGHT) > 1e-9) {
                 children.push(`<span class="pedit-chip-w" title="weight">×${escapeHtml(formatWeight(token.weight))}</span>`);

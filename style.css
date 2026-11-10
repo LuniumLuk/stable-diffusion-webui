@@ -5324,6 +5324,12 @@ body.resizing .resize-handle {
     font-variant-numeric: tabular-nums;
 }
 
+/* '@SEQ' walks its keywords per image instead of drawing them */
+.pedit-chip-seq {
+    background: rgba(129, 199, 132, 0.32);
+    font-variant-numeric: tabular-nums;
+}
+
 /* '@IF' stage conditions: a directive line, not a comment */
 .pedit-line.is-condition {
     background: rgba(139, 92, 246, 0.1);
@@ -6250,6 +6256,15 @@ body.resizing .resize-handle {
     --gv2-accent: #38bdf8;
     color: var(--gv2-text);
     color-scheme: dark;
+    /* The progress bar and the versions strip are fixed in the reserved top band
+       (see --webui-top-header-height), so the gallery scrolls inside this pane
+       instead of scrolling the window: galleryV2.js sizes it to the space left
+       in the viewport, which keeps every card below the band. */
+    height: var(--gv2-pane-height, calc(100vh - var(--webui-top-header-height) - 100px));
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
 }
 
 .gv2-loading {
@@ -7115,6 +7130,16 @@ body.resizing .resize-handle {
     aspect-ratio: 1 / 1;
     object-fit: cover;
     background: #0b1220;
+}
+
+/* Options > "Thumb: 1:1 / 2:3 / 3:2": the card box follows the chosen ratio, the
+   picture keeps covering it, so the grid rows simply get taller or shorter. */
+.gv2-root.gv2-ratio-2x3 .gv2-thumb {
+    aspect-ratio: 2 / 3;
+}
+
+.gv2-root.gv2-ratio-3x2 .gv2-thumb {
+    aspect-ratio: 3 / 2;
 }
 
 .gv2-thumb-empty {

@@ -481,10 +481,13 @@ class StableDiffusionProcessing:
         self.main_negative_prompt = self.all_negative_prompts[0]
 
     def apply_random_picks(self):
-        """Resolves the @PICK(...){...} groups of every prompt of this generation.
+        """Resolves the @PICK(...){...} and @SEQ(...){...} groups of every prompt of this generation.
 
         Runs after the seeds are known (one draw per generated image), so a batch
-        count of 16 draws 16 times.
+        count of 16 draws 16 times.  @SEQ uses the image's position in the
+        generation instead of a draw, so its keywords are used in turn and the list
+        loops: image 1 gets the first keyword, image 2 the second, … image n the
+        first again.
 
         Two lists come out of it.  `all_prompts_compiled` /
         `all_negative_prompts_compiled` are the source prompts with the picks drawn
@@ -513,7 +516,7 @@ class StableDiffusionProcessing:
                     continue
 
                 seed = seeds[index] if seeds is not None and index < len(seeds) else self.seed
-                picked.append(prompt_parser.expand_prompt_picks(prompt, prompt_parser.get_pick_rng(seed, index, kind)))
+                picked.append(prompt_parser.expand_prompt_picks(prompt, prompt_parser.get_pick_rng(seed, index, kind), index))
 
             return picked
 
