@@ -337,6 +337,12 @@ def _clamp_float(value, low, high, default):
     return max(low, min(high, result))
 
 
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "0", "false", "off", "no")
+    return bool(value)
+
+
 def _clamp_resolution(value, default, multiple=8):
     value = _clamp_int(value, 64, 2048, default)
     return max(64, int(round(value / multiple)) * multiple)
@@ -2667,6 +2673,7 @@ def register_routes(app):
                 "sampler_img2img": image_defaults["sampler"],
             },
             "live_preview": bool(shared.opts.live_previews_enable),
+            "secure_mode_hide_images": bool(getattr(shared.opts, "secure_mode_hide_images", False)),
             "page_size": 48,
             "qwen": _qwen_status_payload(),
         }
@@ -2960,6 +2967,9 @@ def register_routes(app):
             if mode in MODE_CHOICES:
                 shared.opts.set("mobile_lite_mode", mode)
                 applied.append("mobile_lite_mode")
+        if "secure_mode_hide_images" in payload:
+            shared.opts.set("secure_mode_hide_images", _as_bool(payload["secure_mode_hide_images"]))
+            applied.append("secure_mode_hide_images")
         if payload.get("sd_model_checkpoint"):
             title = str(payload["sd_model_checkpoint"])
             if not sd_models.checkpoint_is_available(title):

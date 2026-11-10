@@ -310,6 +310,7 @@ options_templates.update(options_section(('ui_prompt_editing', "Prompt editing",
 options_templates.update(options_section(('ui_gallery', "Gallery", "ui"), {
     "return_grid": OptionInfo(True, "Show grid in gallery"),
     "do_not_show_images": OptionInfo(False, "Do not show any images in gallery"),
+    "secure_mode_hide_images": OptionInfo(False, "Global secure mode: show every image as a blank placeholder").info("masks gallery thumbnails and previews, txt2img/img2img results, input images, the inpaint canvases and the full page viewer in both the desktop and the mobile lite UI; images still load in the browser, so this hides the screen from onlookers rather than restricting access"),
     "js_modal_lightbox": OptionInfo(True, "Full page image viewer: enable"),
     "js_modal_lightbox_initially_zoomed": OptionInfo(True, "Full page image viewer: show images zoomed in by default"),
     "js_modal_lightbox_gamepad": OptionInfo(False, "Full page image viewer: navigate with gamepad"),

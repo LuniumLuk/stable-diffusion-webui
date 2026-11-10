@@ -183,6 +183,7 @@
     "overlay_inpaint": true,
     "return_grid": false,
     "do_not_show_images": false,
+    "secure_mode_hide_images": false,
     "js_modal_lightbox": true,
     "js_modal_lightbox_initially_zoomed": true,
     "js_modal_lightbox_gamepad": false,

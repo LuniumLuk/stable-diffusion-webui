@@ -13,6 +13,11 @@ def javascript_html():
     # Ensure localization is in `window` before scripts
     head = f'<script type="text/javascript">{localization.localization_js(shared.opts.localization)}</script>\n'
 
+    # Set the secure-mode class before the body renders, so the first paint already has the
+    # images masked instead of briefly showing them; javascript/secureMode.js keeps it in sync.
+    if shared.opts.data.get("secure_mode_hide_images"):
+        head += '<script type="text/javascript">document.documentElement.classList.add("secure-mode-hide-images")</script>\n'
+
     script_js = os.path.join(script_path, "script.js")
     head += f'<script type="text/javascript" src="{webpath(script_js)}"></script>\n'
 

@@ -8302,3 +8302,23 @@ body.resizing .resize-handle {
 #img2img_macro_values {
     display: none !important;
 }
+
+/* ---------------------------------------------------------------- global secure mode */
+
+/* Setting: "Global secure mode: show every image as a blank placeholder". Flattening the
+   pixels leaves nothing of the underlying content readable while the layout stays intact,
+   so generation, masking and gallery navigation keep working. The class also lands on <html>
+   from the server-rendered head, which avoids a flash of real images on page load. */
+
+html.secure-mode-hide-images img,
+html.secure-mode-hide-images canvas,
+html.secure-mode-hide-images video {
+    filter: grayscale(1) contrast(0) brightness(0.72) !important;
+    outline: 1px dashed rgba(128, 128, 128, 0.55) !important;
+    outline-offset: -1px;
+}
+
+/* Images painted as a CSS background (full page viewer backdrop, ...) are dropped outright. */
+html.secure-mode-hide-images [style*="background-image"] {
+    background-image: none !important;
+}

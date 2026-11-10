@@ -61,6 +61,11 @@ function updateModelChip() {
   chip.title = model;
 }
 
+/** Global secure mode: style.css flattens every img/canvas/video under this body class. */
+function applySecureMode() {
+  document.body.classList.toggle('secure-mode-hide-images', !!state.boot.secure_mode_hide_images);
+}
+
 /** Apply a /mlite/api/models payload to the boot state (and the header chip). */
 function syncBootModels(data) {
   if (!data) return;
@@ -144,6 +149,26 @@ function openSettingsSheet() {
     },
   }));
 
+  const secureOptions = [
+    { value: true, label: 'On' },
+    { value: false, label: 'Off' },
+  ];
+  const secureButtons = secureOptions.map((option) => el('button', {
+    type: 'button',
+    class: !!state.boot.secure_mode_hide_images === option.value ? 'on' : '',
+    text: option.label,
+    onClick: () => {
+      secureButtons.forEach((button, index) => button.classList.toggle('on', secureOptions[index].value === option.value));
+      api_.options({ secure_mode_hide_images: option.value })
+        .then(() => {
+          state.boot.secure_mode_hide_images = option.value;
+          applySecureMode();
+          toast(`secure mode: ${option.label}`, 'ok', 2000);
+        })
+        .catch((error) => toast(`could not save: ${error.message}`, 'err'));
+    },
+  }));
+
   const statusLine = el('div', { class: 'small muted', text: 'checking server…' });
   api_.status().then((info) => {
     statusLine.textContent = info.active
@@ -158,6 +183,11 @@ function openSettingsSheet() {
         el('label', { text: 'Default UI (mobile lite redirect)' }),
         el('div', { class: 'segmented' }, modeButtons),
         el('div', { class: 'small muted', text: 'Auto sends phones/tablets that open / here; "Desktop only" turns the redirect off; "Always" sends every browser.' }),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Global secure mode' }),
+        el('div', { class: 'segmented' }, secureButtons),
+        el('div', { class: 'small muted', text: 'Blanks every image (results, gallery thumbnails, previews, editor canvases) with a placeholder. Shared with the desktop UI.' }),
       ]),
       statusLine,
       el('div', { class: 'option-list' }, [
@@ -215,6 +245,7 @@ async function main() {
   }
 
   updateModelChip();
+  applySecureMode();
   document.body.classList.remove('booting');
   applyTab(state.ui.lastTab || 'text');
 }

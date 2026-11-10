@@ -1690,3 +1690,22 @@ body.text-editing { overflow: hidden; }
 }
 .video-result .row { margin-top: 8px; }
 .video-result a.btn { text-decoration: none; text-align: center; }
+
+/* ---------------------------------------------------------------- global secure mode */
+
+/* Setting: "Global secure mode". Flattening the pixels leaves nothing of the underlying
+   content readable while layout and controls keep working. The body class is applied from
+   js/app.js once the bootstrap payload arrives. */
+
+body.secure-mode-hide-images img,
+body.secure-mode-hide-images canvas,
+body.secure-mode-hide-images video {
+  filter: grayscale(1) contrast(0) brightness(0.72) !important;
+  outline: 1px dashed rgba(148, 163, 184, 0.55);
+  outline-offset: -1px;
+}
+
+/* Images painted as a CSS background are dropped outright. */
+body.secure-mode-hide-images [style*="background-image"] {
+  background-image: none !important;
+}

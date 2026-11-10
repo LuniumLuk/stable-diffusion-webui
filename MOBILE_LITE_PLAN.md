@@ -213,7 +213,8 @@ GET  /mlite/api/result       → ring buffer (last 8 results) → survives a los
 GET  /mlite/api/gallery      → view/query/page/size → normalized JSON items + paging
 POST /mlite/api/gallery/action → endorse/unendorse/dislike/undislike/archive/unarchive/stage
 GET  /mlite/api/suggestions  → endorsed prompt/negative keywords (for chips)
-POST /mlite/api/options      → mobile_lite_mode and sd_model_checkpoint (validated, saved)
+POST /mlite/api/options      → mobile_lite_mode, secure_mode_hide_images and sd_model_checkpoint
+                               (validated, saved)
 POST /mlite/api/save-image   → dataURL → outputs/composition (+ sidecar), used by Compose
 POST /mlite/api/override-origin → dataURL + gallery path → rewrite the origin image in place
                                (backup kept), refresh the gallery row + thumbnails
