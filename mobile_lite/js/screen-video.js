@@ -16,7 +16,7 @@ const DEFAULTS = {
   animatediff: { width: 512, height: 512, frames: 16, fps: 8, steps: 4, guidance: 1.5 },
   cogvideox: { width: 720, height: 480, frames: 49, fps: 8, steps: 50, guidance: 6.0 },
   svd: { width: 1024, height: 576, frames: 25, fps: 7, steps: 25, guidance: 1.0 },
-  ltx: { width: 512, height: 768, frames: 49, fps: 12, steps: 30, guidance: 3.0 },
+  ltx: { width: 512, height: 768, frames: 49, fps: 24, steps: 50, guidance: 3.0 },
 };
 
 let engineButtons = {};
@@ -251,7 +251,7 @@ export function init(container) {
   widthInput = el('input', { type: 'number', min: 256, max: 1024, step: 8, value: store.width, onInput: () => { store.width = Number(widthInput.value); persist(); } });
   heightInput = el('input', { type: 'number', min: 256, max: 1024, step: 8, value: store.height, onInput: () => { store.height = Number(heightInput.value); persist(); } });
   framesInput = numberInput('frames', { min: 9, max: 49, label: 'Frames' });
-  fpsInput = numberInput('fps', { min: 1, max: 30, label: 'FPS' });
+  fpsInput = numberInput('fps', { min: 1, max: 30, label: 'FPS (playback)' });
   stepsInput = numberInput('steps', { min: 1, max: 60, label: 'Steps' });
   cfgInput = numberInput('guidance', { min: 1, max: 20, step: 0.5, label: 'CFG' });
   seedInput = numberInput('seed', { min: -1, max: 2147483647, label: 'Seed' });

@@ -85,7 +85,7 @@ def test_ltx_sizes_are_multiples_of_32():
 def test_ltx_defaults_and_optional_init_image():
     req = video_manager.parse_request({"engine": "ltx", "prompt": "x"})
     assert req.init_image == ""
-    assert req.steps == 30 and req.guidance == 3.0
+    assert req.steps == 50 and req.guidance == 3.0
     req = video_manager.parse_request({"engine": "ltx", "prompt": "x", "init_image": "x.png"})
     assert req.init_image == "x.png"
 
@@ -137,3 +137,35 @@ def test_lightning_choice_names_are_stable():
 def test_default_base_is_a_diffusers_folder_or_empty():
     base = video_manager.default_base()
     assert base == "" or os.path.isfile(os.path.join(base, "model_index.json"))
+
+
+def test_svd_default_motion_bucket_keeps_the_subject_together():
+    # 127 is the diffusers default and shreds anime faces within 25 frames
+    req = video_manager.parse_request({"engine": "svd", "init_image": "x.png"})
+    assert req.motion_bucket_id == video_manager.SVD_MOTION_BUCKET == 60
+
+
+def test_ltx_samples_at_the_trained_frame_rate(monkeypatch):
+    # frame_rate feeds the transformer's temporal RoPE scale: it must stay at the
+    # training rate, otherwise short/low fps values collapse the motion into a still.
+    captured = {}
+
+    class FakePipe:
+        def __call__(self, **kwargs):
+            captured.update(kwargs)
+
+            class _Out:
+                def __init__(self):
+                    self.frames = [[object()]]
+
+            return _Out()
+
+    engine = video_manager.LtxEngine()
+    engine.pipe = FakePipe()
+    monkeypatch.setattr(video_manager, "torch_generator", lambda seed: None)
+
+    req = video_manager.parse_request({"engine": "ltx", "prompt": "x", "frames": 25, "fps": 10})
+    engine.generate(req, lambda *args, **kwargs: None, lambda: False)
+
+    assert captured["frame_rate"] == video_manager.LTX_FRAME_RATE == 25
+    assert captured["num_frames"] == req.frames

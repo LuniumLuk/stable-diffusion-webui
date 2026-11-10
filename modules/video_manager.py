@@ -42,6 +42,16 @@ SVD_DIR = os.path.join(paths.models_path, "Video", "Stable-Video-Diffusion")
 LTX_DIR = os.path.join(paths.models_path, "Video", "LTX-Video")
 OUTPUT_DIR = os.path.join(paths.data_path, "outputs", "video")
 
+# LTX-Video 2B was trained at 25 fps.  The diffusers pipeline feeds ``frame_rate``
+# into the transformer's temporal RoPE scale, so it has to stay at the training
+# rate: anything lower (7-15 fps, as the UI used to send) collapses the motion and
+# the clip comes out as a still image.  The user's fps only sets playback speed.
+LTX_FRAME_RATE = 25
+
+# SVD's 127 (the diffusers default) wrenches anime faces apart within 25 frames:
+# eyes slide, lines smear.  60 still moves, but the subject survives the clip.
+SVD_MOTION_BUCKET = 60
+
 ENGINE_IDS = ("animatediff", "cogvideox", "svd", "ltx")
 
 ENGINE_INFO = {
@@ -62,7 +72,7 @@ ENGINE_INFO = {
     },
     "ltx": {
         "title": "LTX-Video 2B (image + prompt)",
-        "blurb": "One model for text→video and image+prompt→video: 2B, 30 steps, 512-768p. Needs CPU offload on 16 GB.",
+        "blurb": "One model for text→video and image+prompt→video: 2B, 50 steps, 512-768p. Needs CPU offload on 16 GB.",
         "modes": ("t2v", "i2v"),
     },
 }
@@ -71,7 +81,7 @@ DEFAULTS = {
     "animatediff": {"width": 512, "height": 512, "frames": 16, "fps": 8, "steps": 4, "guidance": 1.5},
     "cogvideox": {"width": 720, "height": 480, "frames": 49, "fps": 8, "steps": 50, "guidance": 6.0},
     "svd": {"width": 1024, "height": 576, "frames": 25, "fps": 7, "steps": 25, "guidance": 1.0},
-    "ltx": {"width": 512, "height": 768, "frames": 49, "fps": 12, "steps": 30, "guidance": 3.0},
+    "ltx": {"width": 512, "height": 768, "frames": 49, "fps": 24, "steps": 50, "guidance": 3.0},
 }
 
 
@@ -270,7 +280,7 @@ class VideoRequest:
     lightning: str = "auto"
     offload: str = "auto"
     decode_chunk: int = 8
-    motion_bucket_id: int = 127
+    motion_bucket_id: int = SVD_MOTION_BUCKET
     noise_aug_strength: float = 0.02
     init_image: str = ""
     refine: float = 0.25
@@ -319,7 +329,7 @@ def parse_request(payload: dict) -> VideoRequest:
     if req.offload not in ("auto", "on", "off"):
         req.offload = "auto"
     req.decode_chunk = _clamp(payload.get("decode_chunk", 8), 1, 24)
-    req.motion_bucket_id = _clamp(payload.get("motion_bucket_id", 127), 1, 255)
+    req.motion_bucket_id = _clamp(payload.get("motion_bucket_id", SVD_MOTION_BUCKET), 1, 255)
     try:
         req.noise_aug_strength = max(0.0, min(1.0, float(payload.get("noise_aug_strength", 0.02))))
     except (TypeError, ValueError):
@@ -750,7 +760,7 @@ class LtxEngine(_Engine):
             height=req.height,
             width=req.width,
             num_frames=req.frames,
-            frame_rate=req.fps,
+            frame_rate=LTX_FRAME_RATE,
             num_inference_steps=steps,
             guidance_scale=req.guidance,
             generator=generator,

@@ -6150,6 +6150,95 @@ body.resizing .resize-handle {
     opacity: 0.65;
 }
 
+/* ==== Video tab (scripts/video_tab.py, javascript/videoTab.js) ==== */
+
+#video_engine_status .video-engines {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+#video_engine_status .video-engine {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 180px;
+    padding: 7px 10px;
+    border: 1px solid var(--block-border-color, #334155);
+    border-left: 3px solid var(--block-border-color, #334155);
+    border-radius: 8px;
+    font-size: 12px;
+}
+
+#video_engine_status .video-engine.ok {
+    border-left-color: #22c55e;
+}
+
+#video_engine_status .video-engine.err {
+    border-left-color: #f87171;
+}
+
+#video_engine_status .video-engine small {
+    opacity: 0.65;
+}
+
+#video_engine_status .video-vram {
+    margin: 6px 0 0;
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+#video_progress .muted,
+#video_preview .muted,
+.video-live-progress .muted {
+    opacity: 0.65;
+}
+
+.video-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0;
+    font-size: 12px;
+    opacity: 0.92;
+}
+
+.video-progress-bar {
+    height: 8px;
+    border-radius: 5px;
+    background: rgba(148, 163, 184, 0.25);
+    overflow: hidden;
+}
+
+.video-progress-bar > div {
+    height: 100%;
+    background: #38bdf8;
+    transition: width 0.3s ease;
+}
+
+.video-error {
+    color: #f87171;
+    font-size: 12px;
+}
+
+.video-done {
+    color: #22c55e;
+    font-size: 12px;
+}
+
+.video-result img {
+    max-width: 100%;
+    border-radius: 10px;
+    background: #000;
+}
+
+.video-links {
+    display: flex;
+    gap: 10px;
+    margin-top: 6px;
+    font-size: 12px;
+}
+
 /* ===== Gallery v2 (galleryV2.js) ===== */
 
 .gv2-root {

@@ -11,7 +11,6 @@ the shared prompt editor (javascript/promptEditor.js) attaches there.
 from __future__ import annotations
 
 import html
-import threading
 import time
 from urllib.parse import quote
 
@@ -79,9 +78,9 @@ def _progress_html(job: dict) -> str:
 def _result_view(result: dict) -> tuple:
     if not result or not result.get("ok"):
         message = (result or {}).get("error") or ""
-        return "<p class='muted'>No clip yet.</p>", "", f"**Failed:** {message}" if message else "_Ready._"
+        return "<p class='muted'>No clip yet.</p>", None, f"**Failed:** {message}" if message else "_Ready._"
     gif = result.get("gif") or ""
-    mp4 = result.get("mp4") or ""
+    mp4 = result.get("mp4") or None
     preview = ""
     if gif:
         src = "/file=" + quote(gif.replace("\\", "/"))
@@ -130,7 +129,7 @@ def _engine_update(engine_title: str):
         gr.update(visible=engine == "animatediff", choices=lightning, value="4step" if "4step" in lightning else (lightning[0] if lightning else None)),
         gr.update(visible=takes_image, label=init_label),
         gr.update(visible=engine == "svd", value=0.25),
-        gr.update(visible=engine == "svd", value=127),
+        gr.update(visible=engine == "svd", value=video_manager.SVD_MOTION_BUCKET),
         gr.update(visible=engine == "svd", value=0.02),
         gr.update(placeholder=placeholder),
         defaults["width"],
@@ -142,6 +141,20 @@ def _engine_update(engine_title: str):
         _status_html(),
         _progress_html(video_manager.job_status()),
     )
+
+
+def _preset_updates(engine_title: str, count: int):
+    """Button updates for the size presets.  Buttons take their caption in
+    ``value`` - ``label`` is not a Button keyword and gradio rejects it."""
+    engine_id = _engine_id(engine_title)
+    sizes = SIZES.get(engine_id) or SIZES["animatediff"]
+    updates = []
+    for index in range(count):
+        if index < len(sizes):
+            updates.append(gr.update(value=sizes[index][0], visible=True))
+        else:
+            updates.append(gr.update(visible=False))
+    return updates, engine_id
 
 
 def _collect(
@@ -179,38 +192,24 @@ def _collect(
     }
 
 
-def _run(job_args):
-    """Generator: start the job in a worker and stream the progress bar."""
+def _run(*job_args):
+    """Run one clip. gradio's generator streaming needs the queue (this fork runs
+    with --no-gradio-queue), so the callback blocks and javascript/videoTab.js
+    polls /mlite/api/video/job to draw the live progress line."""
     payload = _collect(*job_args)
     try:
         request = video_manager.parse_request(payload)
     except Exception as error:
-        yield "<p class='muted'>No clip yet.</p>", "", f"**Cannot start:** {error}", payload.get("seed", -1), _progress_html({"phase": "failed", "error": str(error)})
-        return
+        return "<p class='muted'>No clip yet.</p>", None, f"**Cannot start:** {error}", payload.get("seed", -1), _progress_html({"phase": "failed", "error": str(error)})
 
-    box = {}
+    try:
+        result = video_manager.generate(request)
+    except Exception as error:
+        result = {"ok": False, "error": str(error)}
 
-    def work():
-        try:
-            box.update(video_manager.generate(request))
-        except Exception as error:  # parse/queue errors surface here too
-            box.update({"ok": False, "error": str(error)})
-
-    worker = threading.Thread(target=work, name="video-job", daemon=True)
-    worker.start()
-
-    last = None
-    while worker.is_alive():
-        job = video_manager.job_status()
-        last = _progress_html(job)
-        yield "<p class='muted'>Rendering…</p>", "", "**Rendering…**", payload.get("seed", -1), last
-        time.sleep(0.6)
-
-    worker.join()
-    result = box
     preview, mp4, summary = _result_view(result)
     seed = result.get("seed", payload.get("seed", -1))
-    yield preview, mp4, summary, seed, _progress_html(video_manager.job_status())
+    return preview, mp4, summary, seed, _progress_html(video_manager.job_status())
 
 
 def _cancel():
@@ -276,7 +275,7 @@ def on_ui_tabs():
 
                 with gr.Row():
                     frames = gr.Slider(minimum=9, maximum=49, step=1, value=16, label="Frames", elem_id="video_frames")
-                    fps = gr.Slider(minimum=1, maximum=30, step=1, value=8, label="FPS", elem_id="video_fps")
+                    fps = gr.Slider(minimum=1, maximum=30, step=1, value=8, label="FPS (playback)", info="Playback speed only - LTX always samples at 25 fps.", elem_id="video_fps")
                     steps = gr.Slider(minimum=1, maximum=60, step=1, value=4, label="Steps", elem_id="video_steps")
 
                 with gr.Row():
@@ -292,7 +291,7 @@ def on_ui_tabs():
 
                 with gr.Row():
                     refine = gr.Slider(minimum=0.0, maximum=0.8, step=0.05, value=0.25, label="Prompt guidance (SVD img2img refine)", visible=False, elem_id="video_refine")
-                    motion_bucket = gr.Slider(minimum=1, maximum=255, step=1, value=127, label="Motion bucket (SVD)", visible=False, elem_id="video_motion")
+                    motion_bucket = gr.Slider(minimum=1, maximum=255, step=1, value=video_manager.SVD_MOTION_BUCKET, label="Motion bucket (SVD)", visible=False, elem_id="video_motion")
                     noise_aug = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, value=0.02, label="Noise augment (SVD)", visible=False, elem_id="video_noise")
 
                 with gr.Row():
@@ -328,6 +327,7 @@ def on_ui_tabs():
             fn=_run,
             inputs=[engine, prompt, negative, base, lightning, init_image, width, height, frames, fps, steps, guidance, seed, random_seed, offload, refine, motion_bucket, noise_aug, pingpong, save_mp4],
             outputs=[preview_html, video_player, result_status, seed, progress_html],
+            show_progress=False,
         )
         cancel_btn.click(fn=_cancel, inputs=[], outputs=[progress_html], show_progress=False)
         unload_btn.click(fn=_unload, inputs=[], outputs=[engines_html, progress_html], show_progress=False)
@@ -337,14 +337,7 @@ def on_ui_tabs():
         preset_state = gr.State("animatediff")
 
         def _sync_presets(engine_title):
-            engine_id = _engine_id(engine_title)
-            sizes = SIZES.get(engine_id) or SIZES["animatediff"]
-            updates = []
-            for index in range(len(preset_buttons)):
-                if index < len(sizes):
-                    updates.append(gr.update(label=sizes[index][0], visible=True))
-                else:
-                    updates.append(gr.update(visible=False))
+            updates, engine_id = _preset_updates(engine_title, len(preset_buttons))
             return updates + [engine_id]
 
         engine.change(fn=_sync_presets, inputs=[engine], outputs=preset_buttons + [preset_state], show_progress=False)
