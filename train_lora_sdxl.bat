@@ -36,6 +36,14 @@ REM --- HuggingFace mirror for model downloads ---
 set HF_ENDPOINT=https://hf-mirror.com
 set HUGGINGFACE_HUB_VERBOSITY=warning
 
+REM  sd-scripts pulls the two SDXL CLIP tokenizers from the Hub on every start.
+REM  hf-mirror answers those HEAD requests with a redirect that is often dropped
+REM  ("RemoteDisconnected", "Retrying in 1s [Retry 1/5]"), which stalls start-up
+REM  for ~15s per tokenizer and fails outright when all retries are exhausted.
+REM  Keeping a local copy and passing --tokenizer_cache_dir removes the Hub from
+REM  the start-up path; sd-scripts fills the folder on the first (online) run.
+set TOKENIZER_CACHE=%SCRIPT_DIR%models\.tokenizers
+
 REM --- Parse arguments ---
 if "%~1"=="" (
     echo ERROR: Missing dataset_dir argument.
@@ -142,6 +150,11 @@ if not defined HAS_SUBDATA (
     exit /b 1
 )
 
+REM --- Tokenizer preflight ---
+REM  Both tokenizers already on disk -> force the Hub offline so no HEAD
+REM  revalidation request is sent at all.
+if exist "%TOKENIZER_CACHE%\openai_clip-vit-large-patch14\tokenizer_config.json" if exist "%TOKENIZER_CACHE%\laion_CLIP-ViT-bigG-14-laion2B-39B-b160k\tokenizer_config.json" set HF_HUB_OFFLINE=1
+
 "%SCRIPT_DIR%.venv\Scripts\accelerate.exe" launch ^
     --num_processes=1 ^
     --num_machines=1 ^
@@ -157,6 +170,7 @@ if not defined HAS_SUBDATA (
     --network_dim=%NETWORK_DIM% ^
     --network_alpha=%NETWORK_ALPHA% ^
     --caption_extension=.txt ^
+    --tokenizer_cache_dir="%TOKENIZER_CACHE%" ^
     --resolution=%RESOLUTION% ^
     --train_batch_size=%BATCH_SIZE% ^
     --max_train_epochs=%MAX_TRAIN_EPOCHS% ^
