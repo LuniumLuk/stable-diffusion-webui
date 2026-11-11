@@ -1,6 +1,7 @@
 /* Generation engine: submits jobs, polls progress, drives the job strip. */
 
 import { api_ } from './api.js';
+import { blocked } from './lightweight.js';
 import { addResult, emit, pushMruKeywords, pushParamHistory, setParam, state } from './state.js';
 import { formatBytes, formatElapsed, openViewer, toast, updateViewer } from './ui.js';
 
@@ -205,6 +206,8 @@ export function registerResult(result, kind, payload = null, store = state.param
 }
 
 export async function runJob(kind, payload, { label = 'generating', store = state.params, history = null } = {}) {
+  if (blocked()) return null;
+
   if (job.active) {
     toast('another job is already running', 'warn');
     return null;

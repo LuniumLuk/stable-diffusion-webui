@@ -41,6 +41,11 @@ Further variety:
   * reproducible with --seed N.
   * reference roles -- first ref = FACE, last ref (fullbody) = OUTFIT.
   * on failure the pipeline resamples styles/scenes/panels and retries.
+  * --desc TEXT adds a high-priority USER REQUIREMENTS section to every sheet
+    prompt (repeat the flag or use newlines for several points); it wins over
+    the default style/background wording but never over the grid layout, the
+    one-character rule or the reference identity.
+  * --num N repeats the whole plan N times (alias: --variations N).
 
 MAIN STYLE reference (optional, --main-style):
   --main-style IMG [IMG ...]  one or more ART-STYLE reference images, usually
@@ -543,6 +548,25 @@ def main_style_entry() -> dict:
     return {"tag": MAIN_STYLE_TAG, "text": MAIN_STYLE_TEXT}
 
 
+def normalize_desc(desc) -> str:
+    """Join the --desc argument(s) into one multi-line requirement text.
+
+    A literal ``\\n`` becomes a line break so one single-line command can still
+    express several bullets - a real embedded newline does not survive .bat /
+    cmd argument passing (it splits the command line, dropping later flags).
+    """
+    if not desc:
+        return ""
+    items = desc if isinstance(desc, (list, tuple)) else [desc]
+    lines = []
+    for item in items:
+        for ln in str(item).replace("\\n", "\n").splitlines():
+            ln = ln.strip()
+            if ln:
+                lines.append(ln)
+    return "\n".join(lines)
+
+
 def main_style_panel_count(cells: int, main_perc) -> int:
     """How many of `cells` panels follow the main style (0..cells)."""
     cells = max(0, int(cells))
@@ -654,11 +678,12 @@ def reference_guide(base: str, refs, roles=None) -> str:
 
 
 def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
-                   light: str, refs, roles=None):
+                   light: str, refs, roles=None, desc: str = ""):
     """Assemble one sheet prompt for `grid` ([cols, rows]): one panel per
     cell sampled from the stage's pool, each panel carrying its own art
     style and background scene (lists sized cols*rows or empty), plus the
-    reference-image roles (face / outfit / main style).
+    reference-image roles (face / outfit / main style) and the optional
+    user-supplied requirement/supplement text (--desc).
 
     Returns (prompt, panel_map) where panel_map[(r, c)] =
     (caption tags, style tag, scene tag), 1-based."""
@@ -677,9 +702,9 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
     panels = rng.sample(pool, cells) if len(pool) >= cells \
         else rng.choices(pool, k=cells)
     lines, panel_map = [], {}
-    for idx, (tags, desc) in enumerate(panels):
+    for idx, (tags, panel_desc) in enumerate(panels):
         r, c = divmod(idx, cols)
-        line = f"* R{r + 1}C{c + 1}: {tags} :: {desc}"
+        line = f"* R{r + 1}C{c + 1}: {tags} :: {panel_desc}"
         st = styles[idx] if idx < len(styles) else None
         sc = scenes[idx] if idx < len(scenes) else None
         if st:
@@ -735,6 +760,19 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
                      "poses from the MAIN STYLE reference, NO multi-character "
                      "panels.")
 
+    desc_lines = [ln.strip() for ln in str(desc or "").splitlines() if ln.strip()]
+    desc_block = ""
+    if desc_lines:
+        bullets = "\n".join(f"* {ln}" for ln in desc_lines)
+        desc_block = (
+            "USER REQUIREMENTS (highest priority for this whole sheet - apply "
+            "them to every panel and follow them strictly; where they conflict "
+            "with the default art-style or background wording below, the USER "
+            "REQUIREMENTS win, but they never override the grid layout, the "
+            "exactly-one-character rule or the identity from the reference "
+            "images):\n"
+            f"{bullets}\n\n")
+
     if has_scene:
         sheet_line = (f"A character {base} reference sheet drawn as a clean "
                       f"{cols}-column by {rows}-row matrix of {cells} "
@@ -746,13 +784,22 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
                    "themselves show their declared scene. Never leave a "
                    "panel empty or white.")
     else:
+        bg_line = ("pure white background" if not desc_block else
+                   "clean uniform background - pure white #FFFFFF unless the "
+                   "USER REQUIREMENTS above specify a background")
         sheet_line = (f"A character {base} reference sheet drawn as a clean "
                       f"{cols}-column by {rows}-row matrix of {cells} "
-                      f"separate square panels on a pure white background, "
+                      f"separate square panels on a {bg_line}, "
                       f"with wide uniform white gutters between every panel.")
-        end_neg = (" Pure white background only - flat #FFFFFF white, no "
-                   "gradient, no texture, no vignette, no scenery, no props, "
-                   "no floor, no horizon.")
+        if desc_block:
+            end_neg = (" Pure white #FFFFFF background, flat and untextured, "
+                       "no gradient, no vignette - unless the USER "
+                       "REQUIREMENTS above describe a background, in which "
+                       "case follow those.")
+        else:
+            end_neg = (" Pure white background only - flat #FFFFFF white, no "
+                       "gradient, no texture, no vignette, no scenery, no "
+                       "props, no floor, no horizon.")
 
     style_bullet = ""
     if has_style:
@@ -770,7 +817,7 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
     return f"""GRID: {cols}x{rows}
 {sheet_line}
 
-{subject}
+{desc_block}{subject}
 
 {ref_guide}
 
@@ -845,6 +892,7 @@ def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
     cells = cols * rows
     main_style = getattr(args, "main_style", None)
     main_perc = getattr(args, "main_style_perc", DEFAULT_MAIN_STYLE_PERC)
+    desc = normalize_desc(getattr(args, "desc", None))
     record = {"stage": stage, "task": task_no, "grid": [cols, rows],
               "aspect": task.get("aspect", ""), "size": task.get("size", ""),
               "variations": args.variations, "sheets": [],
@@ -856,7 +904,7 @@ def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
         scenes = sample_scenes(rng, cells)
         light = rng.choice(LIGHTING)
         prompt, panel_map = assemble_sheet(stage, rng, task["grid"], styles,
-                                           scenes, light, refs, roles)
+                                           scenes, light, refs, roles, desc)
         sheet_path = os.path.join(raw_dir, f"{stage}_p{task_no:02d}_v{v:02d}.png")
         aspect = args.aspect_ratio or task.get("aspect", "") or "3:4"
         size = args.image_size or task.get("size", "") or "2K"
@@ -870,7 +918,7 @@ def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
                 light = rng.choice(LIGHTING)
                 prompt, panel_map = assemble_sheet(stage, rng, task["grid"],
                                                    styles, scenes, light,
-                                                   refs, roles)
+                                                   refs, roles, desc)
             n_style = len({s["tag"] for s in styles if s})
             shown_s = (", ".join(s["tag"] for s in styles[:3] if s)
                        if styles else "none")
@@ -1001,6 +1049,33 @@ def selftest() -> int:
             "white-background hardening missing"
         print("[selftest] pure white background enforced by default OK")
 
+        # --desc: custom requirement section (repeatable, multi-line).
+        assert normalize_desc(None) == "", "empty desc must normalize to ''"
+        assert normalize_desc(["a", " b \n c "]) == "a\nb\nc", \
+            "desc lines must be stripped and joined"
+        assert normalize_desc(["a\\nb"]) == "a\nb", \
+            "a literal \\n must act as a line break"
+        rng = random.Random(17)
+        prompt, _pm = assemble_sheet(
+            "face", rng, (3, 3), sample_styles("", rng, 9), [],
+            LIGHTING[0], ["avatar.png"], ["face"],
+            "she wears a navy sailor uniform\nkeep her hair ribbon on the left")
+        assert "USER REQUIREMENTS (highest priority for this whole sheet" in prompt, \
+            "user requirement header missing"
+        assert "* she wears a navy sailor uniform" in prompt, "desc line 1 missing"
+        assert "* keep her hair ribbon on the left" in prompt, "desc line 2 missing"
+        assert "unless the USER REQUIREMENTS above describe a background" in prompt, \
+            "desc must be allowed to override the pure white background"
+        assert "no scenery, no props, no floor, no horizon" not in prompt, \
+            "hard white-scenery negatives must relax when --desc is used"
+        rng = random.Random(17)
+        prompt, _pm = assemble_sheet("face", rng, (3, 3),
+                                     sample_styles("", rng, 9), [],
+                                     LIGHTING[0], ["avatar.png"], ["face"])
+        assert "USER REQUIREMENTS" not in prompt, \
+            "desc block must not appear without --desc"
+        print("[selftest] --desc custom requirement section OK")
+
         # Scene randomization ON (with the weighted white scene in the pool).
         CFG["randomize_panel_scene"] = True
         try:
@@ -1100,6 +1175,16 @@ def selftest() -> int:
             "default plan must contain only the avatar/portrait stage"
         print("[selftest] seed determinism + pinning + weighting + config OK")
 
+        # --num N is an alias of --variations N (repeat the whole plan N times).
+        p = build_parser()
+        assert p.parse_args(["--num", "4"]).variations == 4, "--num alias"
+        assert p.parse_args(["--variations", "3"]).variations == 3, \
+            "--variations must stay supported"
+        assert p.parse_args([]).variations == 1, "variations default"
+        assert not hasattr(p.parse_args([]), "num"), \
+            "--num must write into args.variations"
+        print("[selftest] --num N variation alias OK")
+
         # No-overwrite regression: config tasks that share a stage name
         # (two face grids, two upper grids, ...) must get unique paths.
         CFG["avatar_tasks"] = [
@@ -1148,7 +1233,7 @@ def selftest() -> int:
                 style="", variations=1, aspect_ratio=None, image_size=None,
                 prefix="seles", trigger="seles_v3", captions=True,
                 image_model="test-model", grid_padding=8, retries=1,
-                main_style=None, main_style_perc=75)
+                main_style=None, main_style_perc=75, desc=None)
             raw = os.path.join(work, "raw")
             res = os.path.join(work, "res")
             os.makedirs(raw, exist_ok=True)
@@ -1181,7 +1266,8 @@ def selftest() -> int:
 
             # Same pipeline with a main-style reference image attached.
             sargs_ms = argparse.Namespace(
-                **dict(vars(sargs), main_style=["style_sheet.png"]))
+                **dict(vars(sargs), main_style=["style_sheet.png"],
+                       desc=["she holds a small notebook"]))
             raw_ms = os.path.join(work, "raw_ms")
             res_ms = os.path.join(work, "res_ms")
             os.makedirs(raw_ms, exist_ok=True)
@@ -1198,6 +1284,9 @@ def selftest() -> int:
             assert n_ms == 9, f"expected 9/12 main-style panels, got {n_ms}"
             assert "MAIN STYLE reference image(s) 'style_sheet.png'" in \
                 captured[-1], "main-style block missing from the prompt"
+            assert "USER REQUIREMENTS" in captured[-1] and \
+                "* she holds a small notebook" in captured[-1], \
+                "--desc text missing from the generated prompt"
             print("[selftest] run_stage end-to-end (stubbed generator) OK")
         finally:
             if real_gen is not None:
@@ -1215,7 +1304,8 @@ def selftest() -> int:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """CLI parser, kept separate so the self test can assert flag aliases."""
     parser = argparse.ArgumentParser(
         description="LoRA dataset maker: avatar/outfit sheet schemes, "
                     "per-panel art style + scene randomization and weights "
@@ -1233,9 +1323,12 @@ def main() -> int:
     parser.add_argument("--out", default="",
                         help="Result folder (default: "
                              "training_data/lora_<trigger>/).")
-    parser.add_argument("--variations", type=int, default=1,
-                        help="Sheets per plan entry (default: 1; each sheet "
-                             "yields cols x rows images).")
+    parser.add_argument("--num", "--variations", type=int, default=1,
+                        dest="variations", metavar="N",
+                        help="Number of variations: generate the whole plan N "
+                             "times, so each scheme yields N sheets (cols x "
+                             "rows images each). Default: 1. --variations is "
+                             "kept as an alias.")
     parser.add_argument("--style", default="",
                         help="Pin one art style for all panels of every "
                              "sheet instead of per-panel randomization. "
@@ -1251,6 +1344,14 @@ def main() -> int:
                              "the --main-style reference (default: "
                              f"{DEFAULT_MAIN_STYLE_PERC}). The remaining "
                              "panels keep the random/pinned styles.")
+    parser.add_argument("--desc", action="append", metavar="TEXT",
+                        default=None,
+                        help="Custom requirement/supplement text injected into "
+                             "every sheet prompt as a high-priority USER "
+                             "REQUIREMENTS section (e.g. clothing details, "
+                             "expression rules, a background you want). Repeat "
+                             "the flag for several points, or write a literal "
+                             "\\n between them on one line.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for style/scene/panel sampling "
                              "(default: random every run).")
@@ -1289,6 +1390,11 @@ def main() -> int:
                              "counts) without calling the API.")
     parser.add_argument("--selftest", action="store_true",
                         help="Run the offline self test and exit.")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.selftest:
@@ -1296,7 +1402,7 @@ def main() -> int:
     if not args.avatar:
         parser.error("--avatar is required (the character's portrait picture)")
     if args.variations < 1:
-        parser.error("--variations must be >= 1")
+        parser.error("--num must be >= 1")
     if args.grid_padding < 0:
         parser.error("--grid-padding must be >= 0")
     if not 0 <= args.main_style_perc <= 100:
@@ -1324,6 +1430,7 @@ def main() -> int:
                   flush=True)
             main_styles = []
         args.main_style = main_styles
+        args.desc = normalize_desc(args.desc)
         all_refs = avatars + fullbodies
         args.trigger = (args.trigger or "").strip() or infer_trigger(all_refs)
         if args.trigger == "chara" and all_refs:
@@ -1358,6 +1465,10 @@ def main() -> int:
                       f"{[os.path.basename(r) for r in main_styles]} "
                       f"-> {args.main_style_perc}% of every sheet",
                       flush=True)
+            if args.desc:
+                print("  user requirements (--desc):", flush=True)
+                for ln in args.desc.splitlines():
+                    print(f"    * {ln}", flush=True)
             for p in plan:
                 task = p["task"]
                 cols, rows = task["grid"]
@@ -1367,7 +1478,7 @@ def main() -> int:
                 scenes = sample_scenes(rng, cells)
                 _, panel_map = assemble_sheet(p["stage"], rng, task["grid"],
                                               styles, scenes, LIGHTING[0],
-                                              p["refs"], p["roles"])
+                                              p["refs"], p["roles"], args.desc)
                 refs = [os.path.basename(r) for r in p["refs"]]
                 tags, style_tag, scene_tag = panel_map.get((1, 1),
                                                            ("", "", ""))
@@ -1401,6 +1512,7 @@ def main() -> int:
                 "randomize_panel_scene": CFG["randomize_panel_scene"],
                 "main_style": [os.path.basename(r) for r in main_styles],
                 "main_style_perc": args.main_style_perc,
+                "desc": args.desc,
                 "stages": [{"stage": p["stage"], "grid": list(p["task"]["grid"]),
                             "cells": task_cells(p["task"]) * args.variations}
                            for p in plan],
@@ -1441,6 +1553,7 @@ def main() -> int:
             "image_model": args.image_model,
             "main_style": [os.path.basename(r) for r in main_styles],
             "main_style_perc": args.main_style_perc,
+            "desc": args.desc,
             "output_dir": raw_dir,
             "result_dir": result_dir,
             "summary": summary,

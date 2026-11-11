@@ -1013,8 +1013,10 @@ def cancel() -> dict:
 
 def generate(req: VideoRequest, progress=None) -> dict:
     """Run one video job.  Serialised with A1111 through ``queue_lock``."""
-    from modules import vram
+    from modules import lightweight_mode, vram
     from modules.call_queue import queue_lock
+
+    lightweight_mode.require()
 
     if busy():
         raise VideoError("a video job is already running")

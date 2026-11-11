@@ -8929,3 +8929,47 @@ html.secure-mode-hide-images video {
 html.secure-mode-hide-images [style*="background-image"] {
     background-image: none !important;
 }
+
+/* ---------------------------------------------------------------- lightweight mode */
+
+/* Setting: "Lightweight mode". The server unloads every model and refuses to generate;
+   javascript/lightweightMode.js turns the generate buttons into a hint instead of a request. */
+
+#lightweight_mode_hint {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translate(-50%, 1em);
+    z-index: 2000;
+    max-width: min(560px, 90vw);
+    padding: 12px 18px;
+    border: 1px solid var(--block-border-color);
+    border-radius: 10px;
+    background: var(--background-fill-secondary);
+    color: var(--body-text-color);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    font-size: 14px;
+    line-height: 1.4;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+#lightweight_mode_hint.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+html.lightweight-mode #txt2img_generate,
+html.lightweight-mode #txt2img_quick_generate,
+html.lightweight-mode #img2img_generate,
+html.lightweight-mode #img2img_quick_generate,
+html.lightweight-mode #extras_generate,
+html.lightweight-mode #qwen_generate_btn,
+html.lightweight-mode #krea2_generate_btn,
+html.lightweight-mode #video_generate_btn,
+html.lightweight-mode #train_train_embedding,
+html.lightweight-mode #train_train_hypernetwork {
+    cursor: not-allowed;
+    opacity: 0.55;
+}

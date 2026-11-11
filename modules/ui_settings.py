@@ -9,6 +9,14 @@ from modules.ui_gradio_extensions import reload_javascript
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
+def _reload_sd_model():
+    """Load the checkpoint back onto the compute device (Settings -> System button)."""
+    from modules import lightweight_mode
+
+    lightweight_mode.require()
+    sd_models.send_model_to_device(shared.sd_model)
+
+
 def get_value_for_setting(key):
     value = getattr(opts, key)
 
@@ -226,7 +234,7 @@ class UiSettings:
             )
 
             reload_sd_model.click(
-                fn=call_func_and_return_text(lambda: sd_models.send_model_to_device(shared.sd_model), 'Loaded the checkpoint'),
+                fn=call_func_and_return_text(_reload_sd_model, 'Loaded the checkpoint'),
                 inputs=[],
                 outputs=[self.result]
             )

@@ -38,6 +38,10 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
     def refresh(self):
         networks.list_available_networks()
 
+        from modules import lora_previews
+
+        lora_previews.reset_attempts()
+
     def _grouped_network_names(self):
         groups = {}
         for name in networks.available_networks:
@@ -108,6 +112,17 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
 
         return group_item
 
+    def fill_missing_preview(self, filename, path, metadata):
+        """Late-fill the training-dataset thumbnail for a LoRA that has none."""
+        from modules import lora_previews
+
+        created = lora_previews.ensure_preview(filename, metadata)
+        if not created:
+            return None
+
+        self.lister.update_file_entry(created)
+        return self.find_preview(path)
+
     def _create_single_item(self, name, index=None, enable_filter=True):
         lora_on_disk = networks.available_networks.get(name)
         if lora_on_disk is None:
@@ -120,11 +135,16 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
         search_terms = [self.search_terms_from_path(lora_on_disk.filename)]
         if lora_on_disk.hash:
             search_terms.append(lora_on_disk.hash)
+
+        preview = self.find_preview(path) or self.find_embedded_preview(path, name, lora_on_disk.metadata)
+        if not preview:
+            preview = self.fill_missing_preview(lora_on_disk.filename, path, lora_on_disk.metadata)
+
         item = {
             "name": name,
             "filename": lora_on_disk.filename,
             "shorthash": lora_on_disk.shorthash,
-            "preview": self.find_preview(path) or self.find_embedded_preview(path, name, lora_on_disk.metadata),
+            "preview": preview,
             "description": self.find_description(path),
             "search_terms": search_terms,
             "local_preview": f"{path}.{shared.opts.samples_format}",

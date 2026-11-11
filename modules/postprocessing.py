@@ -7,6 +7,10 @@ from modules.shared import opts
 
 
 def run_postprocessing(extras_mode, image, image_folder, input_dir, output_dir, show_extras_results, *args, save_output: bool = True):
+    from modules import lightweight_mode
+
+    lightweight_mode.require()
+
     devices.torch_gc()
 
     shared.state.begin(job="extras")

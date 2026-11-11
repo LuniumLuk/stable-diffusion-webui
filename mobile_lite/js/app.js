@@ -169,6 +169,25 @@ function openSettingsSheet() {
     },
   }));
 
+  const lightweightOptions = [
+    { value: true, label: 'On' },
+    { value: false, label: 'Off' },
+  ];
+  const lightweightButtons = lightweightOptions.map((option) => el('button', {
+    type: 'button',
+    class: !!state.boot.lightweight_mode === option.value ? 'on' : '',
+    text: option.label,
+    onClick: () => {
+      lightweightButtons.forEach((button, index) => button.classList.toggle('on', lightweightOptions[index].value === option.value));
+      api_.options({ lightweight_mode: option.value })
+        .then(() => {
+          state.boot.lightweight_mode = option.value;
+          toast(`lightweight mode: ${option.label}`, 'ok', 2000);
+        })
+        .catch((error) => toast(`could not save: ${error.message}`, 'err'));
+    },
+  }));
+
   const statusLine = el('div', { class: 'small muted', text: 'checking server…' });
   api_.status().then((info) => {
     statusLine.textContent = info.active
@@ -188,6 +207,11 @@ function openSettingsSheet() {
         el('label', { text: 'Global secure mode' }),
         el('div', { class: 'segmented' }, secureButtons),
         el('div', { class: 'small muted', text: 'Blanks every image (results, gallery thumbnails, previews, editor canvases) with a placeholder. Shared with the desktop UI.' }),
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { text: 'Lightweight mode' }),
+        el('div', { class: 'segmented' }, lightweightButtons),
+        el('div', { class: 'small muted', text: 'Unloads every model from VRAM and RAM and turns every generate action into a no-op. Shared with the desktop UI.' }),
       ]),
       statusLine,
       el('div', { class: 'option-list' }, [

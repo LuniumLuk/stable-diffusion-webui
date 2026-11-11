@@ -151,7 +151,11 @@ class EmbeddingDatabase:
 
     def get_expected_shape(self):
         devices.torch_npu_set_device()
-        vec = shared.sd_model.cond_stage_model.encode_embedding_init_text(",", 1)
+        model = shared.sd_model
+        if model is None:
+            # lightweight mode keeps no checkpoint in memory; -1 accepts every embedding
+            return -1
+        vec = model.cond_stage_model.encode_embedding_init_text(",", 1)
         return vec.shape[1]
 
     def load_from_file(self, path, filename):
@@ -223,6 +227,11 @@ class EmbeddingDatabase:
         self.ids_lookup.clear()
         self.word_embeddings.clear()
         self.skipped_embeddings.clear()
+
+        if shared.sd_model is None:
+            # no checkpoint loaded (lightweight mode): registering needs the CLIP tokenizer
+            return
+
         self.expected_shape = self.get_expected_shape()
 
         for embdir in self.embedding_dirs.values():

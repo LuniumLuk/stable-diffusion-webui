@@ -15,6 +15,10 @@ def create_hypernetwork(name, enable_sizes, overwrite_old, layer_structure=None,
 
 
 def train_hypernetwork(*args):
+    from modules import lightweight_mode
+
+    lightweight_mode.require()
+
     shared.loaded_hypernetworks = []
 
     assert not shared.cmd_opts.lowvram, 'Training models with lowvram is not possible'

@@ -115,7 +115,15 @@ options_templates.update(options_section(('face-restoration', "Face restoration"
     "face_restoration_unload": OptionInfo(False, "Move face restoration model from VRAM into RAM after processing"),
 }))
 
+
+def lightweight_mode_changed():
+    from modules import lightweight_mode
+
+    lightweight_mode.sync()
+
+
 options_templates.update(options_section(('system', "System", "system"), {
+    "lightweight_mode": OptionInfo(False, "Lightweight mode", onchange=lightweight_mode_changed).info("unloads every model from VRAM and RAM and turns every generate action into a no-op; turn it off to load models again"),
     "auto_launch_browser": OptionInfo("Local", "Automatically open webui in browser on startup", gr.Radio, lambda: {"choices": ["Disable", "Local", "Remote"]}),
     "enable_console_prompts": OptionInfo(shared.cmd_opts.enable_console_prompts, "Print prompts to console when generating with txt2img and img2img."),
     "show_warnings": OptionInfo(False, "Show warnings in console.").needs_reload_ui(),

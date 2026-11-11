@@ -40,6 +40,13 @@ def script_name_to_index(name, scripts):
         raise HTTPException(status_code=422, detail=f"Script '{name}' not found") from e
 
 
+def check_lightweight_mode():
+    from modules import lightweight_mode
+
+    if lightweight_mode.enabled():
+        raise HTTPException(status_code=503, detail=lightweight_mode.MESSAGE)
+
+
 def validate_sampler_name(name):
     config = sd_samplers.all_samplers_map.get(name, None)
     if config is None:
@@ -430,6 +437,8 @@ class Api:
         return params
 
     def text2imgapi(self, txt2imgreq: models.StableDiffusionTxt2ImgProcessingAPI):
+        check_lightweight_mode()
+
         task_id = txt2imgreq.force_task_id or create_task_id("txt2img")
 
         script_runner = scripts.scripts_txt2img
@@ -490,6 +499,8 @@ class Api:
         return models.TextToImageResponse(images=b64images, parameters=vars(txt2imgreq), info=processed.js())
 
     def img2imgapi(self, img2imgreq: models.StableDiffusionImg2ImgProcessingAPI):
+        check_lightweight_mode()
+
         task_id = img2imgreq.force_task_id or create_task_id("img2img")
 
         init_images = img2imgreq.init_images
@@ -565,6 +576,8 @@ class Api:
         return models.ImageToImageResponse(images=b64images, parameters=vars(img2imgreq), info=processed.js())
 
     def extras_single_image_api(self, req: models.ExtrasSingleImageRequest):
+        check_lightweight_mode()
+
         reqDict = setUpscalers(req)
 
         reqDict['image'] = decode_base64_to_image(reqDict['image'])
@@ -575,6 +588,8 @@ class Api:
         return models.ExtrasSingleImageResponse(image=encode_pil_to_base64(result[0][0]), html_info=result[1])
 
     def extras_batch_images_api(self, req: models.ExtrasBatchImagesRequest):
+        check_lightweight_mode()
+
         reqDict = setUpscalers(req)
 
         image_list = reqDict.pop('imageList', [])
@@ -628,6 +643,8 @@ class Api:
         return models.ProgressResponse(progress=progress, eta_relative=eta_relative, state=shared.state.dict(), current_image=current_image, textinfo=shared.state.textinfo, current_task=current_task)
 
     def interrogateapi(self, interrogatereq: models.InterrogateRequest):
+        check_lightweight_mode()
+
         image_b64 = interrogatereq.image
         if image_b64 is None:
             raise HTTPException(status_code=404, detail="Image not found")
@@ -657,6 +674,7 @@ class Api:
         return {}
 
     def reloadapi(self):
+        check_lightweight_mode()
         sd_models.send_model_to_device(shared.sd_model)
 
         return {}
@@ -803,6 +821,8 @@ class Api:
             shared.state.end()
 
     def train_embedding(self, args: dict):
+        check_lightweight_mode()
+
         try:
             shared.state.begin(job="train_embedding")
             apply_optimizations = shared.opts.training_xattention_optimizations
@@ -824,6 +844,8 @@ class Api:
             shared.state.end()
 
     def train_hypernetwork(self, args: dict):
+        check_lightweight_mode()
+
         try:
             shared.state.begin(job="train_hypernetwork")
             shared.loaded_hypernetworks = []

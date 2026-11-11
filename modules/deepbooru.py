@@ -40,6 +40,10 @@ class DeepDanbooru:
             devices.torch_gc()
 
     def tag(self, pil_image):
+        from modules import lightweight_mode
+
+        lightweight_mode.require()
+
         self.start()
         res = self.tag_multi(pil_image)
         self.stop()

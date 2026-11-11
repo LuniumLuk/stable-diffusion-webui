@@ -724,8 +724,13 @@ def on_ui_tabs():
                     ld_trigger = gr.Textbox(label="Trigger word (opt.)", placeholder="e.g. rana")
                     ld_style = gr.Textbox(label="Pin one style tag (opt.)",
                                           placeholder="e.g. monochrome grayscale")
-                    ld_variations = gr.Slider(1, 3, value=1, step=1, label="Variations")
+                    ld_variations = gr.Slider(1, 10, value=1, step=1,
+                                              label="Variations (--num)")
                     ld_seed = gr.Number(value=0, precision=0, label="Seed (0 = random)")
+                ld_desc = gr.Textbox(
+                    label="Custom requirements (opt.) \u2014 one point per line",
+                    placeholder="e.g. she wears a navy sailor uniform\nkeep her red hair ribbon on the left side",
+                    lines=3)
                 with gr.Row():
                     ld_captions = gr.Checkbox(value=True, label="Write kohya .txt captions")
                     ld_dry = gr.Checkbox(value=False, label="Dry run (plan only \u2014 no API calls)")
@@ -734,9 +739,9 @@ def on_ui_tabs():
                 ld_status = gr.Markdown("_Ready._")
                 ld_preview = gr.Gallery(label="Raw sheets of this run", columns=6, height=280)
 
-                def _run_lora(avatar, fullbody, main_style, main_perc, trigger,
-                              style, variations, seed, captions, dry, model_id,
-                              key_val):
+                def _run_lora(avatar, fullbody, main_style, main_perc, desc,
+                              trigger, style, variations, seed, captions, dry,
+                              model_id, key_val):
                     try:
                         avatar = list(avatar or [])
                         if not avatar:
@@ -748,11 +753,15 @@ def on_ui_tabs():
                             args += ["--main-style"] + list(main_style)
                         args += ["--main-style-perc",
                                  int(main_perc if main_perc is not None else 75)]
+                        if desc and desc.strip():
+                            for line in desc.splitlines():
+                                if line.strip():
+                                    args += ["--desc", line.strip()]
                         if trigger and trigger.strip():
                             args += ["--trigger", trigger.strip()]
                         if style and style.strip():
                             args += ["--style", style.strip()]
-                        args += ["--variations", int(variations or 1)]
+                        args += ["--num", int(variations or 1)]
                         if seed and int(seed or 0) > 0:
                             args += ["--seed", int(seed)]
                         if captions:
@@ -780,7 +789,7 @@ def on_ui_tabs():
 
                 ld_run.click(_run_lora,
                              [ld_avatar, ld_fullbody, ld_main_style, ld_main_perc,
-                              ld_trigger, ld_style, ld_variations, ld_seed,
+                              ld_desc, ld_trigger, ld_style, ld_variations, ld_seed,
                               ld_captions, ld_dry, ld_model, api_key_box],
                              [ld_preview, ld_status])
 

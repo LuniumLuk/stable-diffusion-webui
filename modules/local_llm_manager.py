@@ -1,3 +1,4 @@
+import atexit
 import os
 import socket
 import subprocess
@@ -7,6 +8,8 @@ import time
 import urllib.error
 import urllib.request
 
+from modules import sidecar_process
+
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 _LOCAL_LLM_DIR = os.path.join(_ROOT_DIR, "local-llm")
@@ -14,6 +17,18 @@ _LOCAL_LLM_URL = os.environ.get("LOCAL_LLM_EMBED_URL", "http://127.0.0.1:27820/"
 
 _process = None
 _lock = threading.Lock()
+
+
+def _terminate_at_exit() -> None:
+    """Safety net for a clean exit; the kill-on-close job covers crashes."""
+    if _is_process_alive(_process):
+        try:
+            _process.terminate()
+        except Exception:
+            pass
+
+
+atexit.register(_terminate_at_exit)
 
 
 def get_local_llm_url() -> str:
@@ -92,6 +107,14 @@ def _wait_until_ready(timeout: float = 30.0) -> bool:
 def start_server() -> dict:
     global _process
 
+    from modules import lightweight_mode
+
+    if lightweight_mode.enabled():
+        status = get_status()
+        status["message"] = lightweight_mode.MESSAGE
+        status["action"] = "noop"
+        return status
+
     with _lock:
         if _is_process_alive(_process):
             status = get_status()
@@ -123,7 +146,7 @@ def start_server() -> dict:
     else:
         preexec_fn = os.setsid
 
-    proc = subprocess.Popen(
+    proc = sidecar_process.spawn(
         command,
         cwd=_LOCAL_LLM_DIR,
         stdout=subprocess.DEVNULL,

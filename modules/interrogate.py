@@ -183,6 +183,10 @@ class InterrogateModels:
         return caption[0]
 
     def interrogate(self, pil_image):
+        from modules import lightweight_mode
+
+        lightweight_mode.require()
+
         res = ""
         shared.state.begin(job="interrogate")
         try:

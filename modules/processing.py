@@ -1055,6 +1055,10 @@ def strip_prompt_comments(text: str) -> str:
 
 
 def process_images(p: StableDiffusionProcessing) -> Processed:
+    from modules import lightweight_mode
+
+    lightweight_mode.require()
+
     # DiT backends (Anima) own their whole pipeline. Dispatch before any script or
     # SD-loader code: extensions such as hypertile or ControlNet expect a loaded
     # SD model and would fail on a DiT job.

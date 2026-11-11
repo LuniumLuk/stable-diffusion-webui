@@ -276,6 +276,7 @@
     "profiling_profile_memory": true,
     "profiling_with_stack": true,
     "profiling_filename": "trace.json",
+    "lightweight_mode": false,
     "auto_launch_browser": "Local",
     "enable_console_prompts": false,
     "show_warnings": false,

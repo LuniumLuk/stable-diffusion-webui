@@ -9,6 +9,15 @@ REM   lora_data_maker.bat --avatar .\tmp\img_chara_rana.png
 REM
 REM   avatar alone        -> 3x4 face grid        -> 12 expression images
 REM
+REM VARIATIONS:
+REM   --num N               repeat the whole plan N times (default 1), so each
+REM                         scheme yields N sheets. --variations N still works
+REM                         as an alias. With the default config --num 3 gives
+REM                         3 x (12 + 9) = 63 images, every repeat resampling
+REM                         panels/styles.
+REM
+REM   lora_data_maker.bat --avatar .\tmp\img_chara_rana.png --num 3
+REM
 REM  OUTFIT (upper/fullbody) SHEETS ARE OFF BY DEFAULT: outfit_tasks in the
 REM  YAML config ships empty, so only the avatar -> portrait grids above are
 REM  generated and --fullbody is ignored (with a note). To re-enable, add
@@ -38,6 +47,19 @@ REM                                still sees some style variation.
 REM
 REM   lora_data_maker.bat --avatar .\tmp\img_chara_rana.png ^
 REM     --main-style .\tmp\style_ref.png --main-style-perc 75
+REM
+REM CUSTOM REQUIREMENTS (optional):
+REM   --desc "TEXT"        injects a high-priority USER REQUIREMENTS section
+REM                        into every sheet prompt (e.g. clothing details,
+REM                        expression rules, or a background you want instead
+REM                        of the pure white default). Repeat the flag for
+REM                        several points, or write a literal \n between them
+REM                        on one line. A REAL newline would break the .bat
+REM                        command line, so never paste one in.
+REM
+REM   lora_data_maker.bat --avatar .\tmp\img_chara_rana.png ^
+REM     --desc "she wears a navy sailor uniform" ^
+REM     --desc "keep her red hair ribbon on the left side"
 REM
 REM   lora_data_maker.bat --avatar ... --dry-run                     (plan only)
 REM   lora_data_maker.bat --selftest                                (offline check)

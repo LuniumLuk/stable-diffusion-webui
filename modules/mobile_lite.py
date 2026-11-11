@@ -591,7 +591,11 @@ def _common_args(payload: dict, tab: str) -> dict:
 def _run_job(payload: dict, tab: str) -> dict:
     """Run a txt2img/img2img job synchronously (called in a worker thread)."""
     import modules.shared as shared
+    from modules import lightweight_mode
     from modules import progress as progress_module
+
+    lightweight_mode.require()
+
     from modules.call_queue import queue_lock
     from modules.processing import (
         StableDiffusionProcessingImg2Img,
@@ -693,6 +697,7 @@ def _run_job(payload: dict, tab: str) -> dict:
             shared.state.end()
             shared.total_tqdm.clear()
             progress_module.finish_task(task_id)
+            lightweight_mode.release_if_pending()
 
     # The optional pose-inpaint intermediate is a gallery artifact, not a result tile.
     # A batch can be up to 64 images, so the scan window has to grow with it.
@@ -1281,7 +1286,10 @@ def _run_qwen_job(payload: dict) -> dict:
     status; the whole job holds the A1111 queue lock so the single GPU stays serial.
     """
     from fastapi import HTTPException
+    from modules import lightweight_mode
     from modules.call_queue import queue_lock
+
+    lightweight_mode.require()
 
     if _qwen_job_active():
         raise HTTPException(status_code=409, detail="a qwen job is already running")
@@ -1781,7 +1789,10 @@ def _run_krea2_job(payload: dict) -> dict:
     status; the whole job holds the A1111 queue lock so the single GPU stays serial.
     """
     from fastapi import HTTPException
+    from modules import lightweight_mode
     from modules.call_queue import queue_lock
+
+    lightweight_mode.require()
 
     if _krea2_job_active():
         raise HTTPException(status_code=409, detail="a krea2 job is already running")
@@ -2616,6 +2627,12 @@ def register_routes(app):
     html_headers = dict(_NO_STORE)
     html_headers["Content-Type"] = "text/html; charset=utf-8"
 
+    def require_lightweight():
+        from modules import lightweight_mode
+
+        if lightweight_mode.enabled():
+            raise HTTPException(status_code=503, detail=lightweight_mode.MESSAGE)
+
     @app.get("/mlite")
     async def mlite_root_redirect():
         return RedirectResponse(url="mlite/", status_code=302, headers=dict(_NO_STORE))
@@ -2674,6 +2691,7 @@ def register_routes(app):
             },
             "live_preview": bool(shared.opts.live_previews_enable),
             "secure_mode_hide_images": bool(getattr(shared.opts, "secure_mode_hide_images", False)),
+            "lightweight_mode": bool(getattr(shared.opts, "lightweight_mode", False)),
             "page_size": 48,
             "qwen": _qwen_status_payload(),
         }
@@ -2757,10 +2775,12 @@ def register_routes(app):
 
     @app.post("/mlite/api/txt2img")
     def mlite_txt2img(payload: dict = Body(default={})):
+        require_lightweight()
         return _run_job(payload, "txt2img")
 
     @app.post("/mlite/api/img2img")
     def mlite_img2img(payload: dict = Body(default={})):
+        require_lightweight()
         if not payload.get("init_image"):
             raise HTTPException(status_code=422, detail="init_image is required")
         return _run_job(payload, "img2img")
@@ -2804,6 +2824,8 @@ def register_routes(app):
     @app.post("/mlite/api/video")
     def mlite_video(payload: dict = Body(default={})):
         from modules import video_manager
+
+        require_lightweight()
 
         try:
             request = video_manager.parse_request(payload)
@@ -2863,12 +2885,14 @@ def register_routes(app):
 
     @app.post("/mlite/api/qwen")
     def mlite_qwen(payload: dict = Body(default={})):
+        require_lightweight()
         if not str(payload.get("prompt") or "").strip():
             raise HTTPException(status_code=422, detail="prompt is required")
         return _run_qwen_job(payload)
 
     @app.post("/mlite/api/krea2")
     def mlite_krea2(payload: dict = Body(default={})):
+        require_lightweight()
         if not str(payload.get("prompt") or "").strip():
             raise HTTPException(status_code=422, detail="prompt is required")
         return _run_krea2_job(payload)
@@ -2970,6 +2994,9 @@ def register_routes(app):
         if "secure_mode_hide_images" in payload:
             shared.opts.set("secure_mode_hide_images", _as_bool(payload["secure_mode_hide_images"]))
             applied.append("secure_mode_hide_images")
+        if "lightweight_mode" in payload:
+            shared.opts.set("lightweight_mode", _as_bool(payload["lightweight_mode"]))
+            applied.append("lightweight_mode")
         if payload.get("sd_model_checkpoint"):
             title = str(payload["sd_model_checkpoint"])
             if not sd_models.checkpoint_is_available(title):

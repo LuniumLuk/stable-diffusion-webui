@@ -802,6 +802,11 @@ class SdModelData:
         self.lock = threading.Lock()
 
     def get_sd_model(self):
+        from modules import lightweight_mode
+
+        if lightweight_mode.enabled():
+            return self.sd_model
+
         if self.was_loaded_at_least_once:
             return self.sd_model
 
@@ -927,7 +932,11 @@ def get_obj_from_str(string, reload=False):
 
 
 def load_model(checkpoint_info=None, already_loaded_state_dict=None):
-    from modules import sd_hijack
+    from modules import lightweight_mode, sd_hijack
+
+    if lightweight_mode.enabled():
+        return None
+
     checkpoint_info = checkpoint_info or select_checkpoint()
     if checkpoint_info is None:
         # DiT selection: the SD loader has nothing to do.
@@ -1084,6 +1093,11 @@ def reuse_model_from_already_loaded(sd_model, checkpoint_info, timer):
 
 
 def reload_model_weights(sd_model=None, info=None, forced_reload=False):
+    from modules import lightweight_mode
+
+    if lightweight_mode.enabled():
+        return sd_model if sd_model is not None else model_data.sd_model
+
     if info is None:
         from modules import model_registry
 

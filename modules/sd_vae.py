@@ -249,6 +249,11 @@ unspecified = object()
 
 
 def reload_vae_weights(sd_model=None, vae_file=unspecified):
+    from modules import lightweight_mode
+
+    if lightweight_mode.enabled():
+        return
+
     if not sd_model:
         sd_model = shared.sd_model
 

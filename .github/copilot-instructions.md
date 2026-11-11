@@ -32,6 +32,26 @@ When a request does not name a UI, do not assume PC only: check both front-ends,
 - Never launch an external browser (Chrome/Edge/Firefox) and never open a URL with `Start-Process`, `start`, `explorer`, `Invoke-Item`, or Python's `webbrowser` - a stray window on the developer's desktop is disruptive.
 - Server-safety rules for runtime verification live in [sd-webui-feature-dev.agent.md](agents/sd-webui-feature-dev.agent.md): never drive or restart the developer's live instance on `7860`.
 
+## Testing UI / generation-config changes: use lightweight mode
+
+When testing a UI or generation-config feature that does **not** actually need model inference
+(layout, settings, option plumbing, prompt editors, gallery browsing, mobile/desktop parity,
+parameter round-trips), you MUST enable **Lightweight mode** before verifying.
+
+- Toggle: `Settings -> System -> Lightweight mode` (config key `lightweight_mode`).
+- It unloads every model from VRAM and RAM (SD checkpoint and VAE cache, Qwen / Krea 2 / Anima
+  sidecars, video pipeline, local LLM, interrogate/deepbooru models) and turns every generate
+  action into a no-op with a hint, so verification costs no GPU time.
+- Enable it from the toggle, via `POST /sdapi/v1/options` with `{"lightweight_mode": true}`, or
+  from the Lite settings sheet at `/mlite/`. The value persists in `config.json`; set it back to
+  `false` before handing the instance back to the developer.
+- Do not "just run one small generation" to smoke-test layout or settings work. In lightweight
+  mode a Generate click must show the hint and touch no engine at all.
+
+Only leave lightweight mode off when the feature under test genuinely needs inference: model
+output quality, sampler/scheduler behaviour, VRAM hand-over between engines, timing, or a real
+sidecar job.
+
 ## Always report: server restart vs browser refresh
 
 Every finished job - from any agent, including sub-agents and background agents - must end its

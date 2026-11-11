@@ -15,6 +15,9 @@ def create_embedding(name, initialization_text, nvpt, overwrite_old):
 
 
 def train_embedding(*args):
+    from modules import lightweight_mode
+
+    lightweight_mode.require()
 
     assert not shared.cmd_opts.lowvram, 'Training models with lowvram not possible'
 

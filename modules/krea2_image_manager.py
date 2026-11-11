@@ -20,6 +20,7 @@ references are passed through the Qwen3-VL vision projector
 KREA2_REF_PRESET (krea2_ostris_edit for other community edit LoRAs, "auto" for
 sd.cpp's default, "off" to disable reference support).
 """
+import atexit
 import json
 import os
 import socket
@@ -27,6 +28,8 @@ import subprocess
 import threading
 import time
 import urllib.request
+
+from modules import sidecar_process
 
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -136,6 +139,18 @@ _lock = threading.Lock()
 _no_proxy_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def _terminate_at_exit() -> None:
+    """Safety net for a clean exit; the kill-on-close job covers crashes."""
+    if _is_process_alive(_process):
+        try:
+            _process.terminate()
+        except Exception:
+            pass
+
+
+atexit.register(_terminate_at_exit)
+
+
 def get_server_url() -> str:
     return _SERVER_URL
 
@@ -223,6 +238,14 @@ def _wait_until_ready(proc, timeout: float = 300.0) -> bool:
 def start_server() -> dict:
     global _process
 
+    from modules import lightweight_mode
+
+    if lightweight_mode.enabled():
+        status = get_status()
+        status["message"] = lightweight_mode.MESSAGE
+        status["action"] = "noop"
+        return status
+
     with _lock:
         if _is_process_alive(_process):
             status = get_status()
@@ -253,7 +276,7 @@ def start_server() -> dict:
 
     log_file = open(_LOG_PATH, "ab", buffering=0)
     try:
-        proc = subprocess.Popen(
+        proc = sidecar_process.spawn(
             command,
             cwd=_SD_CPP_DIR,
             stdout=log_file,

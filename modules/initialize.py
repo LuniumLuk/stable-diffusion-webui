@@ -59,6 +59,11 @@ def initialize():
     initialize_util.configure_sigint_handler()
     initialize_util.configure_opts_onchange()
 
+    # sidecars from a previous run (crash / force-kill) would otherwise keep their VRAM
+    from modules import sidecar_process
+
+    sidecar_process.sweep_orphans()
+
     from modules import sd_models
     sd_models.setup_model()
     startup_timer.record("setup SD model")
@@ -146,7 +151,12 @@ def initialize_rest(*, reload_script_modules=False):
         its optimization may be None because the list of optimizers has not been filled
         by that time, so we apply optimization again.
         """
-        from modules import devices
+        from modules import devices, lightweight_mode
+
+        if lightweight_mode.enabled():
+            print("lightweight mode: skipping the startup model load")
+            return
+
         devices.torch_npu_set_device()
 
         shared.sd_model  # noqa: B018

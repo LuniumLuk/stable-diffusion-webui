@@ -2,6 +2,7 @@
 
 import { api_, blobToDataUrl, fileUrl, imageSize, randomTaskId } from './api.js';
 import { isJobActive, runJob } from './job.js';
+import { blocked } from './lightweight.js';
 import { persist, videoParams } from './state.js';
 import { el, toast } from './ui.js';
 
@@ -178,6 +179,7 @@ function renderResult(response) {
 }
 
 async function generate() {
+  if (blocked()) return;
   if (isJobActive()) {
     toast('another job is running', 'warn');
     return;

@@ -90,6 +90,10 @@ def wrap_gradio_call_no_job(func, extra_outputs=None, add_stats=False):
 
         devices.torch_gc()
 
+        from modules import lightweight_mode
+
+        lightweight_mode.release_if_pending()
+
         if not add_stats:
             return tuple(res)
 

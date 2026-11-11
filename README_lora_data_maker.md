@@ -24,10 +24,21 @@ plus one fullbody grid (12) = 24 images.
 Add extra `avatar_tasks` entries (e.g. a 3x3 face grid) to get more portrait
 images per run; counts always follow your config.
 
+Repeat the whole plan N times with `--num N` (alias `--variations N`):
+
+```bat
+.\lora_data_maker.bat --avatar .\tmp\img_chara_rana.png --num 3
+```
+
+With the default config that is 3 × (12 + 9) = **63 images**: each scheme is
+generated three times, and every repeat samples new panels/styles, so you get
+genuinely different expressions instead of duplicates. `--seed N` still makes
+the whole run reproducible.
+
 ## Variety (no two sheets are prompted alike)
 
 Each generated sheet samples from built-in pools, so every outfit (and every
-`--variations` repeat) gets a different prompt:
+`--num` repeat) gets a different prompt:
 
 | element | pool |
 |---------|------|
@@ -70,6 +81,38 @@ rendering but none of the people.
   picture can never be mistaken for the face or the outfit.
 - With `--captions`, main-style panels carry the `main style` tag, so you can
   separate them from the random-style panels during training.
+
+## Custom requirements (`--desc`)
+
+When the built-in pools are not enough, add your own instructions — a clothing
+detail, an expression rule, a prop, or a background you want instead of the
+pure white default:
+
+```bat
+.\lora_data_maker.bat --avatar .\tmp\img_chara_rana.png ^
+  --desc "she wears a navy sailor uniform" ^
+  --desc "keep her red hair ribbon on the left side"
+```
+
+- Each `--desc` (or each line of a multi-line value) becomes a bullet in a
+  `USER REQUIREMENTS` section placed right after the sheet geometry, above
+  every other instruction, with the wording *"highest priority for this whole
+  sheet … follow them strictly"*.
+- Repeat the flag for several points, or put a literal `\n` between them on one
+  line: `--desc "she wears a navy sailor uniform\nkeep her ribbon on the left"`.
+  Do **not** paste a real newline into a `.bat` command line — cmd splits the
+  line there and the flags after it (including `--dry-run`) are lost.
+- Precedence is explicit: user requirements win over the default art-style and
+  background wording, but **never** over the grid layout, the
+  exactly-one-character rule, or the identity taken from the reference images —
+  so a `--desc` cannot silently break the dataset structure.
+- Because a description may legitimately describe a scene, passing `--desc`
+  relaxes the hard white-background negatives: instead of "no scenery, no
+  props, no floor, no horizon", the prompt says the background stays pure white
+  *unless the user requirements describe a background*. Without `--desc` the
+  strict pure-white rule is unchanged.
+- The text is stored in the dry-run JSON (`"desc"`) and the run manifest, so a
+  dataset can be reproduced exactly.
 
 ## YAML config
 
@@ -159,7 +202,7 @@ light negative reminders (no merged / missing / extra panels, no uneven
 rows, no crooked grid). Art-style variety is expressed compactly inside each
 panel line ("Panel art style: ...") so it does not bloat the framing text.
 If a sheet still comes back misaligned occasionally, re-roll it
-(`--variations 2`) and keep the good sheet, or raise `--grid-padding`.
+(`--num 2`) and keep the good sheet, or raise `--grid-padding`.
 
 ## Output
 
@@ -186,10 +229,11 @@ Raw sheets/tiles/manifest stay in `outputs/lora_data_maker/<timestamp>/`.
 | `--avatar A [A2 ...]` | required | avatar picture(s) = identity refs |
 | `--fullbody B C D ...` | none | outfit pictures; only used when `outfit_tasks` is configured (empty by default) |
 | `--out DIR` | `training_data/lora_<trigger>/` | result folder |
-| `--variations N` | 1 | sheets per plan entry (each sheet = cols x rows images) |
+| `--num N` | 1 | number of variations: run the whole plan N times (each sheet = cols x rows images). `--variations N` is an alias |
 | `--style TAG` | per config | pin one art style for every panel (see YAML config) |
 | `--main-style IMG ...` | none | art-style reference image(s), usually multi-character illustrations; their characters are never copied |
 | `--main-style-perc N` | 75 | % of panels that follow the main-style reference (0 disables it) |
+| `--desc TEXT` | none | custom requirement/supplement injected as a high-priority `USER REQUIREMENTS` section into every sheet prompt (repeatable / multi-line) |
 | `--config PATH` | `config_states/lora_data_maker.yaml` | YAML config file |
 | `--seed N` | random | reproducible style/scene/panel sampling |
 | `--grid-padding P` | 8 | trim P px from each cell border |

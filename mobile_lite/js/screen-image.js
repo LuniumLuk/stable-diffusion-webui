@@ -2,6 +2,7 @@
 
 import { api, randomTaskId, ROOT } from './api.js';
 import { isJobActive, runJob } from './job.js';
+import { blocked } from './lightweight.js';
 import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
 import { poseInpaintArgs, poseInpaintSummary, poseMaskRequest } from './pose.js';
@@ -1228,6 +1229,7 @@ async function poseAvailable() {
 // ------------------------------------------------------------------ generate
 
 async function generate() {
+  if (blocked()) return;
   if (isJobActive()) {
     toast('wait for the current job to finish', 'warn');
     return;

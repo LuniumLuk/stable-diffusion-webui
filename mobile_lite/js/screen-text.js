@@ -4,6 +4,7 @@ import { randomTaskId } from './api.js';
 import { hrFinalSize } from './hires.js';
 import { historyControls } from './history.js';
 import { isJobActive, runJob } from './job.js';
+import { blocked } from './lightweight.js';
 import { openParamsSheet } from './params.js';
 import { poseInpaintArgs, poseInpaintSummary } from './pose.js';
 import { createPromptEditor } from './prompt.js';
@@ -126,6 +127,7 @@ function applyMeta(meta) {
 }
 
 async function generate() {
+  if (blocked()) return;
   if (isJobActive()) {
     toast('wait for the current job to finish', 'warn');
     return;

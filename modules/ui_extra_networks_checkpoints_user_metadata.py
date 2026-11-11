@@ -19,7 +19,8 @@ class CheckpointUserMetadataEditor(ui_extra_networks_user_metadata.UserMetadataE
         self.write_user_metadata(name, user_metadata)
 
     def update_vae(self, name):
-        if name == shared.sd_model.sd_checkpoint_info.name_for_extra:
+        model = shared.sd_model
+        if model is not None and name == model.sd_checkpoint_info.name_for_extra:
             sd_vae.reload_vae_weights()
 
     def put_values_into_components(self, name):

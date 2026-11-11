@@ -331,6 +331,10 @@ class StableDiffusionModelHijack:
         return token_count, self.clip.get_target_prompt_token_count(token_count)
 
     def redo_hijack(self, m):
+        if m is None:
+            # lightweight mode keeps no checkpoint in memory; the next load hijacks it again
+            return
+
         self.undo_hijack(m)
         self.hijack(m)
 

@@ -3,6 +3,7 @@
 import { api_, blobToDataUrl, fetchImageData, imageSize, randomTaskId } from './api.js';
 import { openCollectionPicker } from './collection.js';
 import { isJobActive, runJob } from './job.js';
+import { blocked } from './lightweight.js';
 import { historyControls } from './history.js';
 import { openParamsSheet } from './params.js';
 import { createPromptEditor } from './prompt.js';
@@ -254,6 +255,7 @@ function renderResults() {
 /* ---------------------------------------------------------------- generate */
 
 async function generate() {
+  if (blocked()) return;
   if (isJobActive()) {
     toast('wait for the current job to finish', 'warn');
     return;

@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.request
 
-from modules import model_registry, shared
+from modules import model_registry, shared, sidecar_process
 
 SD_CPP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "sd_cpp")
 SERVER_EXE = os.path.join(SD_CPP_DIR, "sd-server.exe")
@@ -291,7 +291,7 @@ class SdcppServer:
 
             log = open(LOG_PATH, "wb")
             try:
-                self._proc = subprocess.Popen(
+                self._proc = sidecar_process.spawn(
                     self._args(model, text_encoder, vae, port, config[-1]),
                     cwd=SD_CPP_DIR,
                     stdout=log,
