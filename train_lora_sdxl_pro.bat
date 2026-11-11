@@ -57,6 +57,16 @@ REM  shuffling/dropout. Default 2 = "series, character name" layout.
 set KEEP_TOKENS=2
 if not "%~4"=="" set KEEP_TOKENS=%~4
 
+REM  Optional per-epoch validation grid. If data\sample_prompts_<output_name>.txt
+REM  exists, sample every SAMPLE_EVERY_N_EPOCHS epochs (and once before training)
+REM  into output_dir\sample\. avr_loss is an epoch-cumulative mean of a single
+REM  noised minibatch, so it cannot show character convergence - these grids can.
+set SAMPLE_EVERY_N_EPOCHS=2
+set SAMPLE_ARGS=
+if exist "%SCRIPT_DIR%data\sample_prompts_%OUTPUT_NAME%.txt" (
+    set SAMPLE_ARGS=--sample_prompts="%SCRIPT_DIR%data\sample_prompts_%OUTPUT_NAME%.txt" --sample_every_n_epochs=%SAMPLE_EVERY_N_EPOCHS% --sample_sampler=euler_a --sample_at_first
+)
+
 for %%I in ("%DATASET_DIR%") do set DATASET_DIR=%%~fI
 for %%I in ("%BASE_MODEL%") do set BASE_MODEL=%%~fI
 if "%DATASET_DIR:~-1%"=="\" set DATASET_DIR=%DATASET_DIR:~0,-1%
@@ -211,6 +221,7 @@ if exist "%TOKENIZER_CACHE%\openai_clip-vit-large-patch14\tokenizer_config.json"
     --keep_tokens=%KEEP_TOKENS% ^
     --caption_tag_dropout_rate=%CAPTION_TAG_DROPOUT_RATE% ^
     --network_dropout=%NETWORK_DROPOUT% ^
+    %SAMPLE_ARGS% ^
     %REG_FLAGS% ^
     --sdpa ^
     --cache_latents ^

@@ -132,6 +132,35 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   "2 selected" and select-shown, staged badges appear on the selected cards then unstage clears them,
   shift-range (6), Escape exit — plus the full albums/views/groups/trash suite.
 
+## Batch Img2Img (select mode)
+
+- **Batch Img2Img** (`data-batch="batch-img2img"`, next to "Compare window") queues ONE img2img job
+  per selected item — no clicking through the img2img tab per image. It reuses the **detail panel's
+  remembered To Image default** (`sendDefaults.img2img`, the same value a plain click on "Image" uses)
+  and the detail panel's **Source / Compiled** prompt toggle for every job:
+  - `Image only` (the built-in default) — inject the image, keep the current prompt + settings;
+  - `Prompt + negative only` — write the prompt + negative, keep the current image + settings;
+  - `Image + prompt` — inject the image and write the prompt + negative;
+  - `Image + prompt + settings` — paste the item's infotext through the existing send bridge, then
+    force its `Batch count` / `Batch size` onto the sliders (the paste bridge does not carry the count)
+    and inject the image.
+- **Confirm dialog first**: the button only opens a modal — nothing is queued until "Queue N job(s)".
+  It shows the selected/job counts, the resulting image count (`jobs x batch count x batch size`,
+  summed per item, with the per-item batch values listed when they differ), the To Image action in
+  effect, the prompt version, a warning for items with no compiled prompt (they fall back to source)
+  and the skipped items (trashed with no media, or no prompt when one is needed). The Sampler script's
+  "Batch steps (queue)" list multiplies the count and is shown as `xN per job`, because one Queue click
+  then creates one job per step value.
+- **Queueing loop**: switch to the img2img tab + the plain img2img sub-tab once (the Queue click
+  snapshots the sub-tab index), then per item write the payload, wait for the Gradio image upload to
+  land (poll the preview `<img>` signature), click `#img2img_queue_btn`, and move on. Progress is
+  shown in the dialog (bar + current file); Cancel becomes Stop and aborts after the current item; a
+  failing item is reported and skipped instead of aborting the batch. The selection is kept.
+- Gallery hotkeys are ignored while the dialog is open (`S`, `Esc`, …), Esc cancels.
+- Tests: jsdom harness driving `javascript/galleryV2.js` (24 checks) — dialog counts for all four send
+  actions, item batch-count override, batch-steps multiplier, compiled/source payload, skip notes,
+  queue-click and image-injection counts, cancel + hotkey suppression.
+
 ## Detail fullscreen split viewer
 
 - Clicking the detail drawer preview opens the app-wide lightbox as before. On viewports

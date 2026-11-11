@@ -469,6 +469,399 @@
     }).catch(function (err) { toast('Item lookup failed: ' + err.message, true); });
   }
 
+  // ---------------------------------------------------------------- batch img2img
+  //
+  // Queue one img2img job per selected item without touching the mouse. The
+  // payload of every job follows the detail panel: the remembered "To Image"
+  // default variation decides whether the image, the prompt and/or the item's
+  // settings are sent, and the source / compiled toggle decides which prompt is
+  // written. Nothing is queued before a confirm dialog spells out the job count,
+  // the resulting image count and both of those choices.
+
+  var BATCH_IMG2IMG_NEEDS = {
+    '': { image: true, prompt: false, settings: false },
+    'prompt': { image: false, prompt: true, settings: false },
+    'image_prompt': { image: true, prompt: true, settings: false },
+    'all': { image: true, prompt: true, settings: true }
+  };
+
+  function batchImg2ImgNeeds(only) {
+    return BATCH_IMG2IMG_NEEDS[only] || BATCH_IMG2IMG_NEEDS[''];
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function gradioHost(id) {
+    return gradioApp().querySelector('#' + id);
+  }
+
+  /** Current value of a Gradio slider component (falls back when absent). */
+  function uiNumber(id, fallback) {
+    var host = gradioHost(id);
+    var input = host ? host.querySelector('input[type="number"]') : null;
+    var value = input ? parseInt(input.value, 10) : NaN;
+    return isNaN(value) ? fallback : value;
+  }
+
+  function setGradioSlider(id, value) {
+    var host = gradioHost(id);
+    if (!host) return false;
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    var written = false;
+    ['input[type="number"]', 'input[type="range"]'].forEach(function (selector) {
+      var input = host.querySelector(selector);
+      if (!input) return;
+      setter.call(input, String(value));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      written = true;
+    });
+    return written;
+  }
+
+  /** One Queue click becomes one job per value of the Sampler script's
+   *  "Batch steps (queue)" box, so an active list multiplies the image count. */
+  function uiBatchStepsMultiplier() {
+    var host = gradioHost('img2img_batch_steps');
+    var input = host ? host.querySelector('textarea, input') : null;
+    var raw = input ? String(input.value || '') : '';
+    var values = raw.split(',').map(function (part) { return parseInt(part.trim(), 10); })
+      .filter(function (n) { return !isNaN(n) && n >= 1 && n <= 150; });
+    return values.length > 1 ? values.length : 1;
+  }
+
+  function itemBatchFromInfotext(item) {
+    var text = String((item && item.infotext) || '');
+    // A1111 writes these into the parameter line: "Steps: 20, ..., Batch count: 2, Batch size: 2"
+    var count = /(?:^|[\n,])\s*Batch count:\s*(\d+)/.exec(text);
+    var size = /(?:^|[\n,])\s*Batch size:\s*(\d+)/.exec(text);
+    return {
+      count: count ? parseInt(count[1], 10) : null,
+      size: size ? parseInt(size[1], 10) : null
+    };
+  }
+
+  function itemHasPrompt(item) {
+    return !!(item && ((item.prompt || item.compiled_prompt) || (item.negative_prompt || item.compiled_negative_prompt)));
+  }
+
+  /**
+   * What the batch will do: one row per item that can be sent, plus the items
+   * that are skipped and the image count each job will produce. When the To
+   * Image action sends the item's settings ("all"), the item's own batch count /
+   * size win over the ones currently in the img2img tab, so they are counted.
+   */
+  function batchImg2ImgPlan(items, only) {
+    var needs = batchImg2ImgNeeds(only);
+    var uiCount = Math.max(1, uiNumber('img2img_batch_count', 1));
+    var uiSize = Math.max(1, uiNumber('img2img_batch_size', 1));
+    var stepsMul = uiBatchStepsMultiplier();
+    var rows = [];
+    var skipped = [];
+    items.forEach(function (item) {
+      if (needs.image && item.state === 'trashed') {
+        skipped.push({ item: item, why: 'trashed, no media left' });
+        return;
+      }
+      if (needs.prompt && !itemHasPrompt(item)) {
+        skipped.push({ item: item, why: 'no prompt recorded' });
+        return;
+      }
+      var perJob = uiCount * uiSize;
+      if (needs.settings) {
+        var own = itemBatchFromInfotext(item);
+        perJob = (own.count || uiCount) * (own.size || uiSize);
+      }
+      rows.push({ item: item, perJob: perJob * stepsMul });
+    });
+    var total = 0;
+    var perJobValues = {};
+    rows.forEach(function (row) {
+      total += row.perJob;
+      perJobValues[row.perJob] = true;
+    });
+    var compiledMissing = 0;
+    if (state.promptVariant === 'compiled') {
+      rows.forEach(function (row) { if (!hasCompiledPrompt(row.item)) compiledMissing++; });
+    }
+    return {
+      only: only,
+      rows: rows,
+      skipped: skipped,
+      stepsMul: stepsMul,
+      perJobValues: Object.keys(perJobValues).map(Number),
+      total: total,
+      compiledMissing: compiledMissing,
+      aborted: false
+    };
+  }
+
+  var BATCH_IMG2IMG_NOTE = {
+    '': 'Only the image is sent; the img2img prompt and settings stay as they are.',
+    'prompt': 'Only the prompt + negative prompt are sent; the image and settings stay as they are.',
+    'image_prompt': 'The image and the prompt + negative prompt are sent; the other settings stay as they are.',
+    'all': 'The image, the prompt and the item\'s saved parameters are sent.'
+  };
+
+  function fileNameOf(item) {
+    var path = (item && (item.path || item.alias_path)) || '';
+    return String(path).split(/[\\/]/).pop() || (item && item.uid) || 'item';
+  }
+
+  function openBatchImg2ImgConfirm() {
+    if (!state.selected.size) { toast('Select items first', true); return; }
+    var only = sendDefaultOnly('img2img');
+    var keys = Array.from(state.selected);
+    toast('Batch Img2Img: reading ' + keys.length + ' item(s)\u2026');
+    Promise.all(keys.map(function (uid) {
+      return api('/gallery/api/item?id=' + encodeURIComponent(uid)).catch(function () { return null; });
+    })).then(function (items) {
+      var plan = batchImg2ImgPlan(items.filter(Boolean), only);
+      if (!plan.rows.length) {
+        toast('Batch Img2Img: nothing to queue (' + plan.skipped.length + ' skipped)', true);
+        return;
+      }
+      renderBatchImg2ImgConfirm(plan);
+    }).catch(function (err) { toast('Batch Img2Img failed: ' + err.message, true); });
+  }
+
+  function closeBatchImg2ImgConfirm() {
+    var host = el('gv2-batch-confirm');
+    if (host && host.parentNode) host.parentNode.removeChild(host);
+  }
+
+  function batchImg2ImgRow(label, value) {
+    return '<div class="gv2-modal-row"><span>' + esc(label) + '</span><b>' + esc(value) + '</b></div>';
+  }
+
+  function renderBatchImg2ImgConfirm(plan) {
+    closeBatchImg2ImgConfirm();
+    var root = el(ROOT_ID);
+    if (!root) return;
+    var uniform = plan.perJobValues.length === 1;
+    var perJob = uniform ? plan.perJobValues[0] : Math.max.apply(null, plan.perJobValues);
+    var imageCount;
+    if (uniform) {
+      imageCount = plan.rows.length + ' \u00d7 ' + perJob + ' = ' + plan.total + ' image(s)';
+    } else {
+      var perJobList = plan.rows.map(function (row) { return row.perJob; });
+      imageCount = plan.total + ' image(s) (' +
+        perJobList.slice(0, 6).join(', ') + (perJobList.length > 6 ? ', \u2026' : '') + ' per job)';
+    }
+    var variant = state.promptVariant === 'compiled' ? 'Compiled' : 'Source';
+    var html = '<div class="gv2-modal-card" role="dialog" aria-modal="true" aria-label="Batch Img2Img">' +
+      '<div class="gv2-modal-head">' +
+        '<span>Batch Img2Img</span>' +
+        '<button type="button" class="gv2-modal-close" data-modal="cancel" title="Cancel (Esc)">\u00d7</button>' +
+      '</div>' +
+      '<div class="gv2-modal-body">' +
+        batchImg2ImgRow('Selected images', plan.rows.length + ' item(s)') +
+        batchImg2ImgRow('Jobs to queue', plan.rows.length + ' job(s)') +
+        batchImg2ImgRow('Images to generate', imageCount) +
+        batchImg2ImgRow('To Image action', sendOptionName(plan.only) + ' (detail panel default)') +
+        batchImg2ImgRow('Prompt version', variant) +
+        (plan.stepsMul > 1
+          ? batchImg2ImgRow('Batch steps (queue)', 'x' + plan.stepsMul + ' per job')
+          : '') +
+        '<div class="gv2-modal-note">' + esc(BATCH_IMG2IMG_NOTE[plan.only] || '') + '</div>' +
+        (plan.compiledMissing
+          ? '<div class="gv2-modal-note gv2-modal-warn">' + plan.compiledMissing +
+            ' item(s) have no compiled prompt and will send the source prompt instead.</div>'
+          : '') +
+        (plan.skipped.length
+          ? '<div class="gv2-modal-note gv2-modal-warn">' + plan.skipped.length + ' item(s) skipped: ' +
+            esc(plan.skipped.map(function (entry) { return fileNameOf(entry.item) + ' (' + entry.why + ')'; }).join(', ')) +
+            '</div>'
+          : '') +
+        '<div class="gv2-modal-progress gv2-modal-progress-hidden"><i></i></div>' +
+        '<div class="gv2-modal-status"></div>' +
+      '</div>' +
+      '<div class="gv2-modal-foot">' +
+        '<button type="button" class="gv2-btn gv2-btn-quiet" data-modal="cancel">Cancel</button>' +
+        '<button type="button" class="gv2-btn" data-modal="go">Queue ' + plan.rows.length + ' job(s)</button>' +
+      '</div>' +
+    '</div>';
+    var host = document.createElement('div');
+    host.id = 'gv2-batch-confirm';
+    host.className = 'gv2-modal';
+    host.innerHTML = html;
+    root.appendChild(host);
+
+    var statusEl = host.querySelector('.gv2-modal-status');
+    var barEl = host.querySelector('.gv2-modal-progress');
+    var fillEl = barEl.querySelector('i');
+    var goBtn = host.querySelector('[data-modal="go"]');
+    var phase = 'idle';
+
+    host.querySelectorAll('[data-modal="cancel"]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (phase === 'running') {
+          plan.aborted = true;
+          statusEl.textContent = 'Stopping after the current item\u2026';
+          return;
+        }
+        closeBatchImg2ImgConfirm();
+      });
+    });
+    host.addEventListener('click', function (ev) {
+      if (ev.target === host && phase !== 'running') closeBatchImg2ImgConfirm();
+    });
+    host.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Escape') return;
+      ev.stopPropagation();
+      if (phase !== 'running') closeBatchImg2ImgConfirm();
+      else plan.aborted = true;
+    });
+    goBtn.focus();
+
+    goBtn.addEventListener('click', function () {
+      if (phase === 'running') return;
+      if (phase !== 'idle') { closeBatchImg2ImgConfirm(); return; }
+      phase = 'running';
+      goBtn.disabled = true;
+      barEl.classList.remove('gv2-modal-progress-hidden');
+      runBatchImg2Img(plan, {
+        progress: function (index, total, item) {
+          fillEl.style.width = Math.round((index / total) * 100) + '%';
+          statusEl.textContent = 'Queuing ' + (index + 1) + ' / ' + total + ': ' + fileNameOf(item);
+        },
+        fail: function (message) {
+          phase = 'failed';
+          barEl.classList.add('gv2-modal-progress-hidden');
+          statusEl.textContent = message;
+          statusEl.classList.add('gv2-modal-warn');
+          goBtn.textContent = 'Close';
+          goBtn.disabled = false;
+        },
+        done: function (queued, failed) {
+          phase = 'done';
+          fillEl.style.width = '100%';
+          var skipped = plan.skipped.length + failed.length;
+          var stopped = plan.aborted && queued < plan.rows.length;
+          statusEl.textContent = (stopped ? 'Stopped \u2014 queued ' : 'Queued ') + queued + ' job(s)' +
+            (skipped ? ' \u2014 ' + skipped + ' item(s) skipped' : '') + '.';
+          goBtn.textContent = 'Done';
+          goBtn.disabled = false;
+          toast('Batch Img2Img: ' + (stopped ? 'stopped, ' : '') + 'queued ' + queued + ' job(s)' +
+            (skipped ? ', ' + skipped + ' skipped' : ''));
+          setTimeout(function () {
+            if (el('gv2-batch-confirm') === host) closeBatchImg2ImgConfirm();
+          }, 2500);
+        }
+      });
+    });
+  }
+
+  /** The img2img preview <img> src changes as soon as Gradio's upload lands,
+   *  which is the moment the component value the Queue click snapshots is fresh. */
+  function imageHostSignature(host) {
+    if (!host) return '';
+    var imgs = host.querySelectorAll('.image-container img, img');
+    if (!imgs.length) return '';
+    var last = imgs[imgs.length - 1];
+    return imgs.length + '|' + String(last.getAttribute('src') || '');
+  }
+
+  function waitForImageHost(host, before, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var started = Date.now();
+      (function poll() {
+        if (!host.isConnected) { reject(new Error('image input went away')); return; }
+        var signature = imageHostSignature(host);
+        if (signature && signature !== before) { resolve(signature); return; }
+        if (Date.now() - started >= timeoutMs) { reject(new Error('image upload timed out')); return; }
+        setTimeout(poll, 120);
+      })();
+    });
+  }
+
+  function injectImageIntoAsync(item, hostId) {
+    pinLineage(item.uid);
+    return fetchItemImageBlob(item).then(function (blob) {
+      var host = gradioHost(hostId);
+      var fileInput = host ? host.querySelector('input[type="file"]') : null;
+      if (!fileInput) throw new Error(hostId + ' image input not found');
+      var before = imageHostSignature(host);
+      var name = fileNameOf(item) || 'gallery-image.png';
+      var file = new File([blob], name, { type: blob.type || 'image/png' });
+      var data = new DataTransfer();
+      data.items.add(file);
+      fileInput.files = data.files;
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      return waitForImageHost(host, before, 10000);
+    });
+  }
+
+  /**
+   * Queue the planned jobs one after another: land on the img2img sub-tab once
+   * (the Queue button snapshots the mode index), then per item write the payload
+   * and wait for every async step to land before clicking Queue.
+   */
+  function runBatchImg2Img(plan, ui) {
+    var queueBtn = gradioApp().querySelector('#img2img_queue_btn');
+    if (!queueBtn) { ui.fail('img2img Queue button not found'); return; }
+    var needs = batchImg2ImgNeeds(plan.only);
+    var queued = 0;
+    var failed = [];
+
+    function prepareOne(item) {
+      var chain = Promise.resolve();
+      if (needs.settings) {
+        chain = chain.then(function () {
+          var text = variantInfotext(item);
+          if (!text) return null;
+          if (!setGradioTextbox('gv2_infotext_apply', text)) {
+            throw new Error('send bridge missing \u2014 restart the webui to enable it');
+          }
+          clickGradioBtn('gv2_apply_img2img_btn', 0);
+          return sleep(420).then(function () {
+            var own = itemBatchFromInfotext(item);
+            if (own.count) setGradioSlider('img2img_batch_count', own.count);
+            if (own.size) setGradioSlider('img2img_batch_size', own.size);
+          });
+        });
+      } else if (needs.prompt) {
+        chain = chain.then(function () {
+          var prompt = activePrompt(item);
+          var negative = activeNegativePrompt(item);
+          if (prompt) setGradioTextbox('img2img_prompt', prompt);
+          if (negative) setGradioTextbox('img2img_neg_prompt', negative);
+          return sleep(140);
+        });
+      }
+      if (needs.image) {
+        chain = chain.then(function () { return injectImageIntoAsync(item, 'img2img_image'); });
+      }
+      return chain;
+    }
+
+    function step(index) {
+      if (plan.aborted || index >= plan.rows.length) { ui.done(queued, failed); return; }
+      var item = plan.rows[index].item;
+      ui.progress(index, plan.rows.length, item);
+      if (typeof window.img2imgModeParamsBeginPaste === 'function') window.img2imgModeParamsBeginPaste();
+      prepareOne(item).then(function () {
+        queueBtn.click();
+        queued++;
+        return sleep(360);
+      }).catch(function (err) {
+        failed.push({ item: item, why: (err && err.message) || String(err) });
+      }).then(function () { step(index + 1); });
+    }
+
+    // The queue payload carries the active img2img sub-tab index, so make sure
+    // the plain img2img sub-tab (not inpaint / batch) is the one in front.
+    switchToTabByName('img2img');
+    setTimeout(function () {
+      if (typeof window.switch_to_img2img === 'function') window.switch_to_img2img();
+      // the per-mode parameter restore lands 50 ms after the switch; write the
+      // first payload only once it has settled, or it would be overwritten
+      setTimeout(function () { step(0); }, 270);
+    }, 220);
+  }
+
   // The txt2img/img2img result panel (javascript/outputPanelActions.js) reuses
   // this menu and the same remembered default, so both entry points send the
   // identical payloads.
@@ -836,6 +1229,8 @@
         '<button class="gv2-btn gv2-btn-quiet" data-batch="selectpage" title="Select all items currently loaded in the grid">Select shown</button>' +
         '<button class="gv2-btn" data-batch="compare" disabled ' +
           'title="Open the compare window for the selected images (drag the list to reorder)">\u2194 Compare window</button>' +
+        '<button class="gv2-btn" data-batch="batch-img2img" ' +
+          'title="Queue one img2img job per selected image using the detail panel\'s To Image default action and prompt mode">\u{1F5BC} Batch Img2Img</button>' +
         '<button class="gv2-btn" data-batch="endorse">Endorse</button>' +
         '<button class="gv2-btn" data-batch="dislike">Dislike</button>' +
         '<button class="gv2-btn" data-batch="archive">Archive</button>' +
@@ -948,6 +1343,7 @@
       if (action === 'exitselect') { setSelectMode(false); return; }
       if (action === 'selectpage') { selectPage(); return; }
       if (action === 'compare') { openCompareWindow(); return; }
+      if (action === 'batch-img2img') { openBatchImg2ImgConfirm(); return; }
       if (action === 'copy-censored') { copySelectedToCensored(); return; }
       if (action === 'album') {
         if (!state.selected.size) { toast('Select items first', true); return; }
@@ -1968,6 +2364,7 @@
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (window.gv2LightboxNav || ev._lightboxHandled) return;
     if (el('gv2-compare')) return;
+    if (el('gv2-batch-confirm')) return;
     if (isTypingTarget(ev.target)) return;
     var root = el(ROOT_ID);
     if (!root || !root.getClientRects().length) return;
