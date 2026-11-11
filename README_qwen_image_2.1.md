@@ -95,8 +95,9 @@ subprocess) and embeds the sd-server web UI in an iframe.
 
 All sizes are divisible by 32 (required by sd.cpp); the 2K sizes are the model's native
 2048-class training buckets. CLI: `qwen_image_txt2img.bat "prompt" 1k:2:3 [steps] [seed]`
-(preset name replaces width/height). In the server web UI set width/height to the pair
-directly — the Qwen-Image 2.1 tab shows this preset strip above the embedded UI.
+(preset name replaces width/height). In the server web UI type the pair directly, or use
+the shared preset row (512×512, 512×768, 768×512, 832×1216, 1024×1024, 1216×832) above the
+width/height inputs; any 32px multiple can also be typed.
 
 ## Notes / gotchas
 
@@ -122,7 +123,8 @@ directly — the Qwen-Image 2.1 tab shows this preset strip above the embedded U
 ## Mobile Lite bridge (SD Lite "Qwen" tab)
 
 The phone UI at `/mlite/` has a **Qwen** tab (round 18): prompt + up to 10 reference
-images (0 = text to image, 1+ = edit), steps / CFG / images / 32px size presets / seed.
+images (0 = text to image, 1+ = edit), steps / CFG / images / the shared size preset chips
+(512×512, 512×768, 768×512, 832×1216, 1024×1024, 1216×832) / seed.
 Results land in `outputs/qwen/<date>/<time>/<n>.png` (+ `.txt`); the seed/infotext come
 from the PNG parameters chunk.
 

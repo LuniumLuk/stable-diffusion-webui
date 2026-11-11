@@ -338,6 +338,8 @@ WORKFLOW_SCRIPTS = {
     "image_maker": os.path.join(WORKFLOW_DIR, "image_maker.py"),
     "comic_maker": os.path.join(WORKFLOW_DIR, "comic_maker.py"),
     "lora_data_maker": os.path.join(WORKFLOW_DIR, "lora_data_maker.py"),
+    "lora_dataset_builder": os.path.join(WORKFLOW_DIR,
+                                         "lora_dataset_builder.py"),
 }
 
 # outputs/<dir> -> gallery source id (source rows live in modules/gallery_db.py)
@@ -792,6 +794,135 @@ def on_ui_tabs():
                               ld_desc, ld_trigger, ld_style, ld_variations, ld_seed,
                               ld_captions, ld_dry, ld_model, api_key_box],
                              [ld_preview, ld_status])
+
+            # ------------------------------------------------- lora dataset
+            # A different job from the sheet-based LoRA Data Maker above: one
+            # full-resolution image per call, a fixed shot plan, automatic
+            # verification and plan-accurate captions. No manual selection.
+            with gr.Tab("\U0001F9EC LoRA Dataset"):
+                gr.Markdown(
+                    "Verified, kohya-ready character dataset: one full-resolution "
+                    "image per call from a fixed shot plan (face/upper/cowboy/full "
+                    "\u00d7 front/three-quarter/side/back, mixed backgrounds), then "
+                    "local QA + a vision-model judge decide what survives and the "
+                    "captions are written from the plan. Output goes to "
+                    "`<out>/<repeat>_lora_<trigger>` (the repeat comes from "
+                    "that folder name) with `genshin impact, <character>` as "
+                    "the first two caption tags, so train with "
+                    "`train_lora_sdxl_pro.bat <out> <trigger>`."
+                )
+                with gr.Row():
+                    ldb_profile = gr.Textbox(label="Profile", value="mika",
+                                             placeholder="mika (see config_states/lora_dataset_profiles.json)")
+                    ldb_trigger = gr.Textbox(label="Trigger override (opt.)",
+                                             placeholder="e.g. mika_v4")
+                with gr.Row():
+                    ldb_face = gr.Files(label="Face / identity reference(s) \u2014 required",
+                                        file_types=["image"])
+                    ldb_outfit = gr.Files(
+                        label="Outfit reference(s) \u2014 official art / in-game render",
+                        file_types=["image"])
+                with gr.Row():
+                    ldb_shots = gr.Textbox(label="Shot kinds", value="all",
+                                           placeholder="all or face,upper,cowboy,full")
+                    ldb_max_calls = gr.Slider(1, 64, value=32, step=1,
+                                              label="Hard cap on image calls (--max-calls)")
+                    ldb_size = gr.Dropdown(choices=["1K", "2K", "4K"], value="2K",
+                                           label="Generation size")
+                with gr.Row():
+                    ldb_out = gr.Textbox(label="Dataset folder (empty = default)", scale=3)
+                    ldb_resume = gr.Checkbox(value=False, label="Resume (reuse shots)")
+                with gr.Row():
+                    ldb_judge = gr.Checkbox(value=True, label="Vision-model judge")
+                    ldb_lenient = gr.Checkbox(value=False, label="Lenient (ignore ahoge/outfit warnings)")
+                    ldb_no_refs = gr.Checkbox(value=False, label="Keep the reference images out of the dataset")
+                    ldb_dry = gr.Checkbox(value=False, label="Dry run (plan only)")
+                ldb_desc = gr.Textbox(
+                    label="Extra requirement line(s) (opt.) \u2014 one point per line",
+                    lines=2)
+                ldb_run = gr.Button("\U0001F680 Build dataset", variant="primary")
+                ldb_status = gr.Markdown("_Ready._")
+                ldb_preview = gr.Gallery(label="Images in the dataset", columns=6,
+                                         height=280)
+
+                def _run_dataset_builder(profile, trigger, face, outfit, shots,
+                                         max_calls, size, out, resume, judge,
+                                         lenient, no_refs, desc, dry,
+                                         model_id, key_val):
+                    try:
+                        face = list(face or [])
+                        if not face:
+                            return [], "\u274C at least one face reference is required"
+                        args = ["--profile", (profile or "mika").strip()]
+                        args += ["--face"] + face
+                        if outfit:
+                            args += ["--outfit"] + list(outfit)
+                        if shots and shots.strip():
+                            args += ["--shots", shots.strip()]
+                        args += ["--max-calls", int(max_calls or 32)]
+                        args += ["--size", size or "2K"]
+                        if trigger and trigger.strip():
+                            args += ["--trigger", trigger.strip()]
+                        if out and out.strip():
+                            args += ["--out", out.strip()]
+                        if resume:
+                            args.append("--resume")
+                        if not judge:
+                            args.append("--no-judge")
+                        if lenient:
+                            args.append("--lenient")
+                        if no_refs:
+                            args.append("--no-include-refs")
+                        if desc and desc.strip():
+                            for line in desc.splitlines():
+                                if line.strip():
+                                    args += ["--desc", line.strip()]
+                        args += ["--image-model", model_id]
+                        if dry:
+                            args.append("--dry-run")
+                        result, log = _run_workflow(
+                            "lora_dataset_builder", args, key_val,
+                            timeout=7200)
+                        if not result.get("ok"):
+                            return [], _fail_message(result, log)
+                        if dry:
+                            return [], ("\u2705 Dry run ok \u2014 %s shot(s), "
+                                        "cap %s calls (no API calls made)."
+                                        % (result.get("shots"),
+                                           result.get("max_calls")))
+                        images = _iter_images([result.get("dataset_dir") or ""])[:30]
+                        msg = ("\u2705 %s kept \u00B7 %s rejected \u00B7 %s/%s "
+                               "image calls used"
+                               % (result.get("kept"), result.get("rejected"),
+                                  result.get("calls_used"), result.get("calls_max")))
+                        ds = result.get("dataset_dir") or ""
+                        if ds:
+                            try:
+                                msg += " \u00B7 `%s`" % os.path.relpath(
+                                    ds, _ROOT_DIR).replace("\\", "/")
+                            except ValueError:
+                                msg += " \u00B7 `%s`" % ds
+                        if result.get("train_cmd"):
+                            msg += " \u00B7 train: `%s`" % result["train_cmd"]
+                        if result.get("rejected_ids"):
+                            msg += " \u00B7 rejected: " + ", ".join(
+                                result["rejected_ids"])
+                        if result.get("generation_errors"):
+                            msg += " \u00B7 \u26A0\uFE0F some shots failed"
+                        review = result.get("review") or ""
+                        if review:
+                            msg += " \u00B7 review sheet: `%s`" % os.path.relpath(
+                                review, _ROOT_DIR).replace("\\", "/")
+                        return images, msg
+                    except Exception as exc:  # noqa: BLE001
+                        return [], "\u274C %s" % exc
+
+                ldb_run.click(_run_dataset_builder,
+                              [ldb_profile, ldb_trigger, ldb_face, ldb_outfit,
+                               ldb_shots, ldb_max_calls, ldb_size, ldb_out,
+                               ldb_resume, ldb_judge, ldb_lenient, ldb_no_refs,
+                               ldb_desc, ldb_dry, ld_model, api_key_box],
+                              [ldb_preview, ldb_status])
 
     return [(tab, "\U0001F34C Nano Banana", "nano_banana")]
 

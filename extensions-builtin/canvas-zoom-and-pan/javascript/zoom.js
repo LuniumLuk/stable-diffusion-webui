@@ -268,8 +268,8 @@ onUiLoaded(async() => {
     const rangeInputs = elements.rangeGroup ?
         Array.from(elements.rangeGroup.querySelectorAll("input")) :
         [
-            gradioApp().querySelector("#img2img_width input[type='range']"),
-            gradioApp().querySelector("#img2img_height input[type='range']")
+            gradioApp().querySelector("#img2img_width input[type='number']"),
+            gradioApp().querySelector("#img2img_height input[type='number']")
         ];
 
     for (const input of rangeInputs) {

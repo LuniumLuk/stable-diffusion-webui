@@ -92,8 +92,8 @@ onAfterUiUpdate(function() {
         if (inImg2img) {
             let inputs = gradioApp().querySelectorAll('input');
             inputs.forEach(function(e) {
-                var is_width = e.parentElement.id == "img2img_width";
-                var is_height = e.parentElement.id == "img2img_height";
+                var is_width = e.closest("#img2img_width") !== null;
+                var is_height = e.closest("#img2img_height") !== null;
 
                 if ((is_width || is_height) && !e.classList.contains('scrollwatch')) {
                     e.addEventListener('input', function(e) {

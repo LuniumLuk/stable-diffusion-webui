@@ -1,0 +1,38 @@
+{
+  "_comment": "Optional overrides for gemini_workflow/lora_dataset_builder.py. Every key under 'profiles' is a --profile name; values are merged over the built-in DEFAULT_PROFILES. Copy the '_example' block to add a new character. Fields: game (caption token + folder group), character (danbooru-style tag), trigger (dataset/trigger word), repeat (kohya repeat prefix), dataset_group (folder under data/train_data), gender/identity/outfit (caption tag lists), identity_prompt/outfit_prompt (generation wording), must_keep (identity rules the prompt must state), avoid (extra negative wording), require_ahoge (reject shots where the ahoge is missing).",
+  "profiles": {
+    "lohen": {
+      "game": "genshin impact",
+      "character": "lohen (genshin impact)",
+      "trigger": "lohen_v4",
+      "repeat": 3,
+      "dataset_group": "genshin",
+      "gender": ["1boy", "male focus"],
+      "identity": ["green hair", "short hair", "messy hair", "purple eyes", "earring"],
+      "identity_prompt": "short messy sage-green hair with soft spiky layered tufts and a long side-swept fringe over the forehead, striking magenta-purple eyes, a young-boy anime face with light skin",
+      "outfit": ["white shirt", "blue coat", "gold trim", "cape", "black gloves", "white pants", "thigh strap", "armored boots"],
+      "outfit_prompt": "a white high-collared shirt with a silver and pale-blue winged emblem on the chest, a pale-blue corset-like vest with small diamond details and a dark diagonal chest strap, a long dark-navy coat with gold trim and silver arrow-shaped clasps, a short dark-navy half-cape with a light-blue lining and silver-and-gold shoulder pauldrons, black gloves with blue fingertips and a dark-navy bracer with gold trim, white trousers with a dark-navy thigh strap and a silver cross emblem, and tall dark-navy boots with silver armored toe caps",
+      "must_keep": [
+        "the short dark-navy half-cape stays over the shoulders and never hides the chest emblem",
+        "the outfit keeps its white trousers and tall dark boots - never a skirt, shorts or bare legs"
+      ],
+      "avoid": ["long hair", "ponytail", "female body", "chibi", "skirt", "shorts", "hair covering the eyes"],
+      "require_ahoge": false
+    },
+    "_example": {
+      "game": "genshin impact",
+      "character": "klee (genshin impact)",
+      "trigger": "klee_v1",
+      "repeat": 3,
+      "dataset_group": "genshin",
+      "gender": ["1girl", "female focus"],
+      "identity": ["blonde hair", "long hair", "red eyes", "ahoge", "pointy ears", "elf"],
+      "identity_prompt": "long blonde hair in two pigtails with small pointed elf ears, red eyes, a child-like anime face",
+      "outfit": ["red hat", "red coat", "white gloves", "brown boots"],
+      "outfit_prompt": "a red hooded coat with a white collar, a broad red hat with a four-leaf clover ornament, white gloves and brown boots",
+      "must_keep": ["the big red hat stays on the head in every shot"],
+      "avoid": ["adult body", "realistic proportions"],
+      "require_ahoge": false
+    }
+  }
+}

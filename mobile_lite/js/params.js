@@ -9,10 +9,11 @@ import { emit, imageParams, krea2Params, on, qwenParams, resolveOutputSize, setP
 
 const SIZE_PRESETS = [
   [512, 512],
-  [768, 768],
+  [512, 768],
+  [768, 512],
   [832, 1216],
-  [1216, 832],
   [1024, 1024],
+  [1216, 832],
 ];
 
 // The slider pair (range + number) for one parameter of `store`. min/max/step are assigned
@@ -127,18 +128,12 @@ export async function applyModel(title) {
 }
 
 const SIDECAR_SIZES = [
-  [384, 384],
   [512, 512],
   [512, 768],
   [768, 512],
-  [384, 512],
-  [512, 384],
+  [832, 1216],
   [1024, 1024],
-  [1024, 1536],
-  [1536, 1024],
-  [2048, 2048],
-  [1696, 2528],
-  [2528, 1696],
+  [1216, 832],
 ];
 
 /** Seed input + dice + lock, shared by the SDXL sheet and the sidecar (Qwen / Krea 2) sheets. */

@@ -14,7 +14,9 @@ function onCalcResolutionHires(enable, width, height, hr_scale, hr_resize_x, hr_
     setInactive(hrResizeX, opts.use_old_hires_fix_width_height || hr_resize_x == 0);
     setInactive(hrResizeY, opts.use_old_hires_fix_width_height || hr_resize_y == 0);
 
-    return [enable, width, height, hr_scale, hr_resize_x, hr_resize_y];
+    // side effects only: this dependency declares no outputs, so returning values
+    // makes Gradio try to apply them to missing components and log an error.
+    return [];
 }
 
 (function() {

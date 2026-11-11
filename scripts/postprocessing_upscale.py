@@ -3,7 +3,7 @@ import re
 from PIL import Image
 import numpy as np
 
-from modules import scripts_postprocessing, shared
+from modules import scripts_postprocessing, shared, ui_size
 import gradio as gr
 
 from modules.ui_components import FormRow, ToolButton, InputAccordion
@@ -50,8 +50,9 @@ class ScriptPostprocessingUpscale(scripts_postprocessing.ScriptPostprocessing):
                     with gr.TabItem('Scale to', elem_id="extras_scale_to_tab") as tab_scale_to:
                         with FormRow():
                             with gr.Column(elem_id="upscaling_column_size", scale=4):
-                                upscaling_resize_w = gr.Slider(minimum=64, maximum=8192, step=8, label="Width", value=512, elem_id="extras_upscaling_resize_w")
-                                upscaling_resize_h = gr.Slider(minimum=64, maximum=8192, step=8, label="Height", value=512, elem_id="extras_upscaling_resize_h")
+                                upscaling_resize_w = ui_size.size_input(512, maximum=8192, elem_id="extras_upscaling_resize_w")
+                                upscaling_resize_h = ui_size.size_input(512, label="Height", maximum=8192, elem_id="extras_upscaling_resize_h")
+                                ui_size.size_preset_row(upscaling_resize_w, upscaling_resize_h, elem_id="extras_upscaling_size_presets", elem_prefix="extras_upscaling_size")
                             with gr.Column(elem_id="upscaling_dimensions_row", scale=1, elem_classes="dimensions-tools"):
                                 upscaling_res_switch_btn = ToolButton(value=switch_values_symbol, elem_id="upscaling_res_switch_btn", tooltip="Switch width/height")
                                 upscaling_crop = gr.Checkbox(label='Crop to fit', value=True, elem_id="extras_upscaling_crop")

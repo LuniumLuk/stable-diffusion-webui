@@ -16,23 +16,7 @@ import io
 import gradio as gr
 from PIL import Image
 
-from modules import krea2_image_manager, mobile_lite, script_callbacks
-
-KREA2_SIZES = [
-    ("384 1:1", 384, 384),
-    ("512 1:1", 512, 512),
-    ("512 2:3", 512, 768),
-    ("512 3:2", 768, 512),
-    ("384 3:4", 384, 512),
-    ("512 4:3", 512, 384),
-    ("1K 1:1", 1024, 1024),
-    ("1K 2:3", 1024, 1536),
-    ("1K 3:2", 1536, 1024),
-    ("1.5K 4:5", 1152, 1440),
-    ("1.5K 5:4", 1440, 1152),
-]
-# The low-res group renders on its own row (the strip wraps badly past ~6 buttons).
-KREA2_LOW_RES_COUNT = 6
+from modules import krea2_image_manager, mobile_lite, script_callbacks, ui_size
 
 # Reference-image editing (community edit LoRAs): 1 reference recommended,
 # a few allowed for composition; bigger references are downscaled before upload
@@ -125,13 +109,6 @@ def _collect_references(ref_files):
         else:
             skipped += 1
     return encoded, skipped, max(0, len(paths) - KREA2_REF_LIMIT)
-
-
-def _preset_callback(preset_width: int, preset_height: int):
-    def _apply_preset():
-        return gr.update(value=preset_width), gr.update(value=preset_height)
-
-    return _apply_preset
 
 
 def run_krea2_generation(prompt_text, negative_text, ref_files, steps, cfg, width, height, batch, seed_value, random_seed):
@@ -528,20 +505,9 @@ def on_ui_tabs():
                 negative = gr.Textbox(label="Negative prompt", lines=2, placeholder="things to avoid (optional)", elem_id="krea2_neg_prompt")
 
                 with gr.Row():
-                    preset_buttons_low = [
-                        gr.Button(label, size="sm", elem_id=f"krea2_size_{preset_width}x{preset_height}")
-                        for label, preset_width, preset_height in KREA2_SIZES[:KREA2_LOW_RES_COUNT]
-                    ]
-                with gr.Row():
-                    preset_buttons_high = [
-                        gr.Button(label, size="sm", elem_id=f"krea2_size_{preset_width}x{preset_height}")
-                        for label, preset_width, preset_height in KREA2_SIZES[KREA2_LOW_RES_COUNT:]
-                    ]
-                preset_buttons = preset_buttons_low + preset_buttons_high
-
-                with gr.Row():
-                    width = gr.Slider(minimum=64, maximum=2048, step=32, value=1024, label="Width", elem_id="krea2_width")
-                    height = gr.Slider(minimum=64, maximum=2048, step=32, value=1024, label="Height", elem_id="krea2_height")
+                    width = ui_size.size_input(1024, maximum=2048, step=32, elem_id="krea2_width")
+                    height = ui_size.size_input(1024, label="Height", maximum=2048, step=32, elem_id="krea2_height")
+                ui_size.size_preset_row(width, height, elem_id="krea2_size_presets", elem_prefix="krea2_size", form_row=False)
 
                 with gr.Row():
                     steps = gr.Slider(minimum=1, maximum=40, step=1, value=8, label="Steps (Turbo: 8)", elem_id="krea2_steps")
@@ -578,9 +544,6 @@ def on_ui_tabs():
         stop_btn.click(fn=stop_krea2_server, inputs=[], outputs=[status_md, status_signal], show_progress=False)
         restart_btn.click(fn=restart_krea2_server, inputs=[], outputs=[status_md, status_signal], show_progress=False)
         refresh_btn.click(fn=get_server_status, inputs=[], outputs=[status_md, status_signal], show_progress=False)
-
-        for button, (_label, preset_width, preset_height) in zip(preset_buttons, KREA2_SIZES):
-            button.click(fn=_preset_callback(preset_width, preset_height), inputs=[], outputs=[width, height], show_progress=False)
 
         generate_btn.click(
             fn=run_krea2_generation,

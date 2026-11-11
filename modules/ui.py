@@ -15,7 +15,7 @@ from PIL import Image, PngImagePlugin  # noqa: F401
 from modules.call_queue import wrap_gradio_gpu_call, wrap_queued_call, wrap_gradio_call, wrap_gradio_call_no_job # noqa: F401
 
 from modules import gradio_extensons, sd_schedulers  # noqa: F401
-from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, progress, ui_loadsave, shared_items, ui_settings, timer, sysinfo, ui_checkpoint_merger, scripts, sd_samplers, processing, ui_extra_networks, ui_toprow, launch_utils, errors, input_resize
+from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepbooru, extra_networks, ui_common, ui_postprocessing, progress, ui_loadsave, shared_items, ui_settings, timer, sysinfo, ui_checkpoint_merger, scripts, sd_samplers, processing, ui_extra_networks, ui_toprow, launch_utils, errors, input_resize, ui_size
 from modules.ui_components import FormRow, FormGroup, ToolButton, FormHTML, InputAccordion, ResizeHandleRow
 from modules.paths import script_path
 from modules.ui_common import create_refresh_button
@@ -100,10 +100,6 @@ def calc_resolution_hires(enable, width, height, hr_scale, hr_resize_x, hr_resiz
     p.calculate_target_resolution()
 
     return f"from <span class='resolution'>{p.width}x{p.height}</span> to <span class='resolution'>{p.hr_resize_x or p.hr_upscale_to_x}x{p.hr_resize_y or p.hr_upscale_to_y}</span>"
-
-
-def apply_size_preset(width, height):
-    return gr.update(value=width), gr.update(value=height)
 
 
 def resize_from_to_html(width, height, scale_by):
@@ -328,12 +324,9 @@ def create_ui():
                     elif category == "dimensions":
                         with FormRow():
                             with gr.Column(elem_id="txt2img_column_size", scale=4):
-                                width = gr.Slider(minimum=64, maximum=2048, step=8, label="Width", value=512, elem_id="txt2img_width")
-                                height = gr.Slider(minimum=64, maximum=2048, step=8, label="Height", value=512, elem_id="txt2img_height")
-                                with FormRow(elem_id="txt2img_size_presets"):
-                                    txt2img_preset_2_3 = gr.Button("832×1216 (2:3)", elem_id="txt2img_preset_2_3")
-                                    txt2img_preset_1_1 = gr.Button("1024×1024 (1:1)", elem_id="txt2img_preset_1_1")
-                                    txt2img_preset_3_2 = gr.Button("1216×832 (3:2)", elem_id="txt2img_preset_3_2")
+                                width = ui_size.size_input(512, elem_id="txt2img_width")
+                                height = ui_size.size_input(512, label="Height", elem_id="txt2img_height")
+                                ui_size.size_preset_row(width, height, elem_id="txt2img_size_presets", elem_prefix="txt2img_size")
 
                             with gr.Column(elem_id="txt2img_dimensions_row", scale=1, elem_classes="dimensions-tools"):
                                 res_switch_btn = ToolButton(value=switch_values_symbol, elem_id="txt2img_res_switch_btn", tooltip="Switch width/height")
@@ -364,8 +357,8 @@ def create_ui():
 
                                 with FormRow(elem_id="txt2img_hires_fix_row2", variant="compact"):
                                     hr_scale = gr.Slider(minimum=1.0, maximum=4.0, step=0.05, label="Upscale by", value=2.0, elem_id="txt2img_hr_scale")
-                                    hr_resize_x = gr.Slider(minimum=0, maximum=2048, step=8, label="Resize width to", value=0, elem_id="txt2img_hr_resize_x")
-                                    hr_resize_y = gr.Slider(minimum=0, maximum=2048, step=8, label="Resize height to", value=0, elem_id="txt2img_hr_resize_y")
+                                    hr_resize_x = ui_size.size_input(0, label="Resize width to", elem_id="txt2img_hr_resize_x", minimum=0)
+                                    hr_resize_y = ui_size.size_input(0, label="Resize height to", elem_id="txt2img_hr_resize_y", minimum=0)
 
                                 with FormRow(elem_id="txt2img_hires_fix_row_stage_config", variant="compact"):
                                     hr_stage_config = gr.Textbox(
@@ -500,9 +493,6 @@ def create_ui():
             )
 
             res_switch_btn.click(fn=None, _js="function(){switchWidthHeight('txt2img')}", inputs=None, outputs=None, show_progress=False)
-            txt2img_preset_2_3.click(fn=lambda: apply_size_preset(832, 1216), inputs=None, outputs=[width, height], show_progress=False)
-            txt2img_preset_1_1.click(fn=lambda: apply_size_preset(1024, 1024), inputs=None, outputs=[width, height], show_progress=False)
-            txt2img_preset_3_2.click(fn=lambda: apply_size_preset(1216, 832), inputs=None, outputs=[width, height], show_progress=False)
 
             toprow.restore_progress_button.click(
                 fn=progress.restore_progress,
@@ -713,12 +703,9 @@ def create_ui():
                                     with gr.Tab(label="Resize to", id="to", elem_id="img2img_tab_resize_to") as tab_scale_to:
                                         with FormRow():
                                             with gr.Column(elem_id="img2img_column_size", scale=4):
-                                                width = gr.Slider(minimum=64, maximum=2048, step=8, label="Width", value=512, elem_id="img2img_width")
-                                                height = gr.Slider(minimum=64, maximum=2048, step=8, label="Height", value=512, elem_id="img2img_height")
-                                                with FormRow(elem_id="img2img_size_presets"):
-                                                    img2img_preset_2_3 = gr.Button("832×1216 (2:3)", elem_id="img2img_preset_2_3")
-                                                    img2img_preset_1_1 = gr.Button("1024×1024 (1:1)", elem_id="img2img_preset_1_1")
-                                                    img2img_preset_3_2 = gr.Button("1216×832 (3:2)", elem_id="img2img_preset_3_2")
+                                                width = ui_size.size_input(512, elem_id="img2img_width")
+                                                height = ui_size.size_input(512, label="Height", elem_id="img2img_height")
+                                                ui_size.size_preset_row(width, height, elem_id="img2img_size_presets", elem_prefix="img2img_size")
                                             with gr.Column(elem_id="img2img_dimensions_row", scale=1, elem_classes="dimensions-tools"):
                                                 res_switch_btn = ToolButton(value=switch_values_symbol, elem_id="img2img_res_switch_btn", tooltip="Switch width/height")
                                                 detect_image_size_btn = ToolButton(value=detect_image_size_symbol, elem_id="img2img_detect_image_size_btn", tooltip="Auto detect size from img2img")
@@ -923,9 +910,6 @@ def create_ui():
             )
 
             res_switch_btn.click(fn=None, _js="function(){switchWidthHeight('img2img')}", inputs=None, outputs=None, show_progress=False)
-            img2img_preset_2_3.click(fn=lambda: apply_size_preset(832, 1216), inputs=None, outputs=[width, height], show_progress=False)
-            img2img_preset_1_1.click(fn=lambda: apply_size_preset(1024, 1024), inputs=None, outputs=[width, height], show_progress=False)
-            img2img_preset_3_2.click(fn=lambda: apply_size_preset(1216, 832), inputs=None, outputs=[width, height], show_progress=False)
 
             detect_image_size_btn.click(
                 fn=lambda w, h, _: (w or gr.update(), h or gr.update()),
@@ -1225,8 +1209,9 @@ def create_ui():
                         template_file = gr.Dropdown(label='Prompt template', value="style_filewords.txt", elem_id="train_template_file", choices=get_textual_inversion_template_names())
                         create_refresh_button(template_file, textual_inversion.list_textual_inversion_templates, lambda: {"choices": get_textual_inversion_template_names()}, "refrsh_train_template_file")
 
-                    training_width = gr.Slider(minimum=64, maximum=2048, step=8, label="Width", value=512, elem_id="train_training_width")
-                    training_height = gr.Slider(minimum=64, maximum=2048, step=8, label="Height", value=512, elem_id="train_training_height")
+                    training_width = ui_size.size_input(512, elem_id="train_training_width")
+                    training_height = ui_size.size_input(512, label="Height", elem_id="train_training_height")
+                    ui_size.size_preset_row(training_width, training_height, elem_id="train_size_presets", elem_prefix="train_size")
                     varsize = gr.Checkbox(label="Do not resize images", value=False, elem_id="train_varsize")
                     steps = gr.Number(label='Max steps', value=100000, precision=0, elem_id="train_steps")
 

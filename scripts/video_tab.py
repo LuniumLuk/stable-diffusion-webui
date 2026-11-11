@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import gradio as gr
 
-from modules import script_callbacks, shared, video_manager
+from modules import script_callbacks, shared, ui_size, video_manager
 
 SIZES = {
     "animatediff": [("512 square", 512, 512), ("512x768 portrait", 512, 768), ("768x512 landscape", 768, 512), ("384 draft", 384, 384)],
@@ -270,8 +270,8 @@ def on_ui_tabs():
                     ]
 
                 with gr.Row():
-                    width = gr.Slider(minimum=256, maximum=1024, step=8, value=512, label="Width", elem_id="video_width")
-                    height = gr.Slider(minimum=256, maximum=1024, step=8, value=512, label="Height", elem_id="video_height")
+                    width = ui_size.size_input(512, minimum=256, maximum=1024, elem_id="video_width")
+                    height = ui_size.size_input(512, label="Height", minimum=256, maximum=1024, elem_id="video_height")
 
                 with gr.Row():
                     frames = gr.Slider(minimum=9, maximum=49, step=1, value=16, label="Frames", elem_id="video_frames")

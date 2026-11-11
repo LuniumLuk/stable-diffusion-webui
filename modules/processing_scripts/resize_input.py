@@ -2,7 +2,7 @@
 
 import gradio as gr
 
-from modules import input_resize, scripts
+from modules import input_resize, scripts, ui_size
 from modules.infotext_utils import PasteField
 from modules.ui_components import InputAccordion
 
@@ -39,8 +39,15 @@ class ScriptResizeInput(scripts.ScriptBuiltinUI):
 
             with gr.Group(visible=False, elem_id=self.elem_id("resize_input_size_group")) as size_group:
                 with gr.Row():
-                    width = gr.Slider(64, 2048, value=512, step=8, label="Width", elem_id=self.elem_id("resize_input_width"))
-                    height = gr.Slider(64, 2048, value=512, step=8, label="Height", elem_id=self.elem_id("resize_input_height"))
+                    width = ui_size.size_input(512, elem_id=self.elem_id("resize_input_width"))
+                    height = ui_size.size_input(512, label="Height", elem_id=self.elem_id("resize_input_height"))
+                ui_size.size_preset_row(
+                    width,
+                    height,
+                    elem_id=self.elem_id("resize_input_size_presets"),
+                    elem_prefix=self.elem_id("resize_input_size"),
+                    form_row=False,
+                )
                 fit = gr.Radio(
                     choices=list(input_resize.FIT_LABELS),
                     value="Aspect fill",
@@ -74,10 +81,10 @@ class ScriptResizeInput(scripts.ScriptBuiltinUI):
         enable.change(**refresh_preview)
         mode.change(**refresh_preview)
         fit.change(**refresh_preview)
-        for slider in (scale, width, height):
-            # change catches typed values (no release event), release catches drag ends
-            slider.release(**refresh_preview)
-            slider.change(**refresh_preview)
+        # change catches typed values (no release event), release catches drag ends
+        scale.release(**refresh_preview)
+        for field in (scale, width, height):
+            field.change(**refresh_preview)
 
         self.infotext_fields = [
             PasteField(enable, lambda d: "Input resize" in d),

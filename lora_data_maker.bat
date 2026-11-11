@@ -4,6 +4,13 @@ REM  lora_data_maker.bat -- LoRA dataset maker (no prompt files)
 REM  Runs gemini_workflow\lora_data_maker.py on the workflow venv.
 REM ============================================================
 REM
+REM FOR CHARACTER LORAS USE lora_dataset_builder.bat INSTEAD:
+REM   it makes one full-resolution image per API call (no contact-sheet
+REM   cutting, so no ~580px tiles), covers full body / back / side views,
+REM   verifies every image automatically and writes the captions itself.
+REM   See README_lora_dataset_builder.md. This script still works and is
+REM   kept for sheet-style multi-image variation runs.
+REM
 REM USAGE:
 REM   lora_data_maker.bat --avatar .\tmp\img_chara_rana.png
 REM

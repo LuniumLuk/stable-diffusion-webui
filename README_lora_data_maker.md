@@ -1,5 +1,12 @@
 # LoRA Data Maker (no prompt files)
 
+> **Superseded for character LoRAs.** This sheet-based flow cuts 3x4 / 3x3
+> contact sheets into ~580px tiles, which trains blurry at SDXL sizes and
+> needs a manual delete pass. Use
+> [README_lora_dataset_builder.md](README_lora_dataset_builder.md)
+> (`lora_dataset_builder.bat`) instead: one full-resolution image per call, a
+> fixed shot plan, automatic verification and plan-accurate captions.
+
 `lora_data_maker.bat` + `gemini_workflow/lora_data_maker.py`. Prompts are
 curated and built in — the only inputs are your pictures.
 

@@ -1,5 +1,10 @@
 # LoRA Data Preparation Pipeline (merged)
 
+> **Superseded for character LoRAs.** Sheets are cut into tiles, so the
+> resulting images are far below SDXL training resolution. Use
+> [README_lora_dataset_builder.md](README_lora_dataset_builder.md)
+> (`lora_dataset_builder.bat`) for character datasets.
+
 One python script + one bat entry that takes your character's avatar picture
 and a few fullbody outfit pictures, and produces a collected, captioned,
 kohya-ready training set of **~20 images per outfit**.

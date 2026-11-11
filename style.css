@@ -1105,6 +1105,20 @@ div.dimensions-tools{
     place-content: center;
 }
 
+/* The shared width/height presets: six small buttons under the size inputs. */
+.size-preset-row{
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.25em;
+}
+
+.size-preset-row button{
+    min-width: 0 !important;
+    padding: 0.15em 0.3em;
+    font-size: 0.8em;
+    white-space: nowrap;
+}
+
 div#extras_scale_to_tab div.form{
     flex-direction: row;
 }
