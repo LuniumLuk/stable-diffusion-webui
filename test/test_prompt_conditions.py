@@ -121,12 +121,20 @@ def test_pose_part_enum():
     assert content("@IF POSE_INPAINT_PART == 0\nnone\n@ENDIF", "txt2img") == "none"
     assert content("@IF POSE_INPAINT_PART == NONE\nnone\n@ENDIF", "txt2img") == "none"
 
+    body = "@IF POSE_INPAINT_PART == BODY\nbody\n@ELSE\nother\n@ENDIF"
+    assert content(body, "pose_inpaint", pose_part="knees") == "body"
+    assert content(body, "pose_inpaint", pose_part="BODY") == "body"
+    assert content(body, "pose_inpaint", pose_part="face") == "other"
+
 
 def test_pose_inpaint_part_mapping():
     assert prompt_parser.pose_inpaint_part(None) == 0
     assert prompt_parser.pose_inpaint_part("Face") == "FACE"
     assert prompt_parser.pose_inpaint_part("hands") == "HANDS"
     assert prompt_parser.pose_inpaint_part("left_foot") == "FEET"
+    assert prompt_parser.pose_inpaint_part("Shoulders") == "BODY"
+    assert prompt_parser.pose_inpaint_part("knees") == "BODY"
+    assert prompt_parser.pose_inpaint_part("Custom nodes") == "BODY"
     assert prompt_parser.pose_inpaint_part("all") == 0
     assert prompt_parser.pose_inpaint_part("nonsense") == 0
 

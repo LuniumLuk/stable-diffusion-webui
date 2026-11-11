@@ -327,7 +327,8 @@ def strip_prompt_comments(text: str) -> str:
 # the HIRES_FIX branch.  Every macro is 1 while its stage runs and 0 otherwise;
 # HIRES_FIX is an img2img pass and POSE_INPAINT an inpaint pass, so the lower
 # stage is 1 as well.  POSE_INPAINT_PART is the enum of the pose inpaint pass:
-# 0 (none) during every other stage, FACE, FEET or HANDS inside a pose pass.
+# 0 (none) during every other stage, FACE, FEET, HANDS or BODY (the custom extra
+# skeleton nodes) inside a pose pass.
 #
 # Conditions are a small boolean expression: macro names, 0/1 values, the enum
 # names, ==, !=, !, && (and), || (or) and parentheses.  A block that is not
@@ -345,13 +346,20 @@ re_macro_definition = re.compile(
 re_macro_directive = re.compile(r"^[ \t]*@MACRO(?![A-Za-z0-9_])", re.IGNORECASE)
 
 PROMPT_MACROS = ("TXT2IMG", "HIRES_FIX", "IMG2IMG", "INPAINT", "POSE_INPAINT", "POSE_INPAINT_PART")
-POSE_INPAINT_PARTS = ("NONE", "FACE", "FEET", "HANDS")
+POSE_INPAINT_PARTS = ("NONE", "FACE", "FEET", "HANDS", "BODY")
 POSE_REGION_PARTS = {
     "face": "FACE",
     "left_hand": "HANDS",
     "right_hand": "HANDS",
     "left_foot": "FEET",
     "right_foot": "FEET",
+    # extra skeleton joint groups of the pose inpaint custom nodes
+    "shoulders": "BODY",
+    "elbows": "BODY",
+    "wrists": "BODY",
+    "hips": "BODY",
+    "knees": "BODY",
+    "ankles": "BODY",
 }
 
 # every stage and the macros that are 1 while it runs
@@ -489,15 +497,18 @@ def macros_for_prompts(stage=None, prompts=None, selected=None, **kwargs) -> dic
 
 
 def pose_inpaint_part(value) -> int | str:
-    """Normalises a pose part to the POSE_INPAINT_PART enum: 0, 'FACE', 'FEET' or 'HANDS'.
+    """Normalises a pose part to the POSE_INPAINT_PART enum: 0, 'FACE', 'FEET', 'HANDS' or 'BODY'.
 
-    Accepts the enum value itself, a pose mask region code ('left_hand') or the
-    part name the pose inpaint script uses ('Face').
+    Accepts the enum value itself, a pose mask region code ('left_hand', 'knees') or the
+    part name the pose inpaint script uses ('Face', 'Custom nodes').  The custom extra
+    skeleton nodes map to 'BODY'.
 
     >>> pose_inpaint_part("left_hand")
     'HANDS'
     >>> pose_inpaint_part("Face")
     'FACE'
+    >>> pose_inpaint_part("Knees")
+    'BODY'
     >>> pose_inpaint_part(None)
     0
     """
@@ -521,6 +532,8 @@ def pose_inpaint_part(value) -> int | str:
         return "FEET"
     if lowered == "face":
         return "FACE"
+    if lowered in ("body", "custom", "custom_nodes"):
+        return "BODY"
     return 0
 
 

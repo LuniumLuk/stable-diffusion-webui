@@ -38,7 +38,8 @@ export const state = {
     hrDenoise: 0.7, // hires denoising strength
     hrStageConfig: '', // multi-stage hires text (one 'scale: .., steps: ..' entry per line)
     poseInpaintEnabled: false, // txt2img: detect face/hand/foot points and inpaint them
-    poseInpaintParts: ['Face', 'Hands', 'Feet'], // selected point groups
+    poseInpaintParts: ['Face', 'Hands', 'Feet'], // selected point groups ('Custom nodes' adds poseInpaintCustomNodes)
+    poseInpaintCustomNodes: [], // extra skeleton joints of the 'Custom nodes' part
     poseInpaintRadiusMode: 'percent', // point size: 'px' = fixed radius, 'percent' = share of each skeleton
     poseInpaintRadius: 40, // fixed point radius in px (px mode)
     poseInpaintRadiusPercent: 5, // point radius as a percentage of each skeleton's longest side (percent mode)

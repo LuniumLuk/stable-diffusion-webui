@@ -4,11 +4,13 @@ gemini_workflow/lora_data_maker.py -- LoRA dataset maker (no prompt files).
 One bat entry (lora_data_maker.bat) + this script. Prompts are built in,
 so the only inputs are the pictures:
 
-    lora_data_maker.bat --avatar A --fullbody B C D
+    lora_data_maker.bat --avatar A
 
-  * avatar A alone            -> face grids   (avatar_tasks from config)
-  * A + fullbody B            -> upper + fullbody grids per outfit picture
-                                (outfit_tasks from config)
+  * avatar A alone            -> face/portrait grids (avatar_tasks from
+                                config). Outfit (upper/fullbody) sheets are
+                                DORMANT by default: outfit_tasks ships empty,
+                                so --fullbody is accepted but generates
+                                nothing until entries are added to the YAML.
 
 CONFIG (YAML, config_states/lora_data_maker.yaml, created on first run):
   randomize_panel_style   true/false - per-panel random art style
@@ -28,6 +30,8 @@ CONFIG (YAML, config_states/lora_data_maker.yaml, created on first run):
   outfit_tasks            list of sheet schemes for each outfit fullbody
                           picture: each {kind: upper|fullbody,
                           grid: [...], aspect: "...", size: "..."}.
+                          EMPTY by default -> only avatar/portrait grids.
+                          Add entries (or --fullbody does nothing).
   Override the file with: --config PATH
 
 Further variety:
@@ -37,6 +41,17 @@ Further variety:
   * reproducible with --seed N.
   * reference roles -- first ref = FACE, last ref (fullbody) = OUTFIT.
   * on failure the pipeline resamples styles/scenes/panels and retries.
+
+MAIN STYLE reference (optional, --main-style):
+  --main-style IMG [IMG ...]  one or more ART-STYLE reference images, usually
+                              multi-character illustrations. They are attached
+                              for the rendering only (linework, coloring,
+                              shading, finish); their characters, faces,
+                              outfits and poses are never copied.
+  --main-style-perc N         0-100, default 75: the share of generated panels
+                              that follow the main-style reference. The rest
+                              keep the per-panel random/pinned styles so the
+                              LoRA still sees some style variation.
 
 Final output: one flat folder of images (default
 training_data/lora_<trigger>/, trigger inferred from the avatar filename),
@@ -130,10 +145,10 @@ DEFAULT_SCENES = [
 DEFAULT_AVATAR_TASKS = [
     {"kind": "face", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
 ]
-DEFAULT_OUTFIT_TASKS = [
-    {"kind": "upper", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
-    {"kind": "fullbody", "grid": [3, 4], "aspect": "3:4", "size": "2K"},
-]
+# Outfit (upper/fullbody) sheets are OFF by default: only the avatar/portrait
+# grids are generated. Add entries here - or in the YAML config - to re-enable,
+# e.g. {"kind": "upper", "grid": [3, 4], "aspect": "3:4", "size": "2K"}.
+DEFAULT_OUTFIT_TASKS = []
 
 DEFAULT_CONFIG = {
     "randomize_panel_style": True,
@@ -155,6 +170,13 @@ CFG = {
 }
 
 STAGE_TAGS = {"face": "portrait", "upper": "upper body", "fullbody": "full body"}
+
+# Synthetic per-panel style used when --main-style reference images are given.
+MAIN_STYLE_TAG = "main style"
+MAIN_STYLE_TEXT = ("the exact art style of the attached MAIN STYLE reference "
+                   "image (same linework, coloring, shading, texture and "
+                   "finish)")
+DEFAULT_MAIN_STYLE_PERC = 75
 
 
 def use_default_config():
@@ -318,6 +340,8 @@ def _mini_scalar(val):
         return True
     if low in ("false", "no", "off", "0"):
         return False
+    if val in ("[]", "{}"):
+        return [] if val == "[]" else {}
     return val
 
 
@@ -363,17 +387,19 @@ def default_config_text() -> str:
           "    size: \"2K\"",
           "",
           "# Sheet schemes for EVERY outfit fullbody picture. 'kind' is",
-          "# upper or fullbody; add entries to also generate e.g. a 2x4",
-          "# fullbody turnaround or a 3x3 upper grid.",
-          "outfit_tasks:",
-          "  - kind: upper",
-          "    grid: [3, 4]",
-          "    aspect: \"3:4\"",
-          "    size: \"2K\"",
-          "  - kind: fullbody",
-          "    grid: [3, 4]",
-          "    aspect: \"3:4\"",
-          "    size: \"2K\""]
+          "# upper or fullbody. EMPTY by default: only the avatar/portrait",
+          "# grids above are generated. Add entries to re-enable outfit",
+          "# sheets, e.g. a 3x4 upper grid and a 3x4 fullbody grid:",
+          "# outfit_tasks:",
+          "#   - kind: upper",
+          "#     grid: [3, 4]",
+          "#     aspect: \"3:4\"",
+          "#     size: \"2K\"",
+          "#   - kind: fullbody",
+          "#     grid: [3, 4]",
+          "#     aspect: \"3:4\"",
+          "#     size: \"2K\"",
+          "outfit_tasks: []"]
     return "\n".join(y) + "\n"
 
 
@@ -501,8 +527,8 @@ def weighted_sample(items, k, rng):
     return out
 
 
-def sample_styles(style_arg: str, rng, cells: int) -> list:
-    """Per-panel art styles for one sheet of `cells` panels."""
+def base_styles(style_arg: str, rng, cells: int) -> list:
+    """Pinned/random per-panel art styles, without any main-style mixing."""
     if style_arg:
         pinned = lookup_style(style_arg)
         return [pinned] * cells
@@ -511,6 +537,42 @@ def sample_styles(style_arg: str, rng, cells: int) -> list:
     if not CFG["styles"]:
         return []
     return weighted_sample(CFG["styles"], cells, rng)
+
+
+def main_style_entry() -> dict:
+    return {"tag": MAIN_STYLE_TAG, "text": MAIN_STYLE_TEXT}
+
+
+def main_style_panel_count(cells: int, main_perc) -> int:
+    """How many of `cells` panels follow the main style (0..cells)."""
+    cells = max(0, int(cells))
+    try:
+        perc = float(main_perc)
+    except (TypeError, ValueError):
+        perc = float(DEFAULT_MAIN_STYLE_PERC)
+    perc = min(100.0, max(0.0, perc))
+    return min(cells, round(cells * perc / 100.0))
+
+
+def sample_styles(style_arg: str, rng, cells: int, main_style=None,
+                  main_perc=DEFAULT_MAIN_STYLE_PERC) -> list:
+    """Per-panel art styles for one sheet of `cells` panels.
+
+    When `main_style` (the --main-style reference images) is set, `main_perc`
+    percent of the panels - at random positions - follow that reference; the
+    remaining panels keep the pinned/random styles so the LoRA still learns
+    some style variation."""
+    cells = max(0, int(cells))
+    styles = base_styles(style_arg, rng, cells)
+    n_main = main_style_panel_count(cells, main_perc) if main_style else 0
+    if n_main <= 0:
+        return styles
+    if n_main >= cells:
+        return [main_style_entry() for _ in range(cells)]
+    picks = set(rng.sample(range(cells), n_main))
+    rest = list(styles) + [None] * (cells - len(styles))
+    return [main_style_entry() if i in picks else rest[i]
+            for i in range(cells)]
 
 
 def sample_scenes(rng, cells: int) -> list:
@@ -534,38 +596,83 @@ def lookup_style(style_arg: str):
 # ---------------------------------------------------------------------------
 # Prompt assembly
 # ---------------------------------------------------------------------------
-def reference_guide(base: str, refs) -> str:
-    if not refs:
+def resolve_ref_roles(base: str, refs, roles=None) -> dict:
+    """Group reference images by role: face / outfit / style.
+
+    Explicit `roles` (one per reference) win. Without them the legacy
+    convention applies: a face sheet treats every reference as the FACE, any
+    other sheet treats the first reference as the FACE and the rest as the
+    OUTFIT."""
+    refs = list(refs or [])
+    if roles is None:
+        if base == "face" or len(refs) < 2:
+            roles = ["face"] * len(refs)
+        else:
+            roles = ["face"] + ["outfit"] * (len(refs) - 1)
+    roles = list(roles)[:len(refs)]
+    roles += ["style"] * max(0, len(refs) - len(roles))
+    grouped = {"face": [], "outfit": [], "style": []}
+    for path, role in zip(refs, roles):
+        grouped[role if role in grouped else "style"].append(path)
+    return grouped
+
+
+def _named(paths) -> str:
+    return ", ".join(f"'{os.path.basename(p)}'" for p in paths)
+
+
+def reference_guide(base: str, refs, roles=None) -> str:
+    grouped = resolve_ref_roles(base, refs, roles)
+    if not any(grouped.values()):
         return ""
-    if base == "face" or len(refs) < 2:
-        names = ", ".join(f"'{os.path.basename(r)}'" for r in refs)
-        return (f"REFERENCE IMAGE ROLES: the attached reference image(s) "
-                f"{names} show the character's FACE. Copy this exact face, "
-                f"hairstyle, eye color and facial features into all panels; "
-                f"never change the character's identity.")
-    return (f"REFERENCE IMAGE ROLES: the FIRST attached reference image "
-            f"({os.path.basename(refs[0])}) is the character's FACE - copy "
-            f"this exact face, hairstyle and identity into all panels. "
-            f"The LAST attached reference image "
-            f"({os.path.basename(refs[-1])}) is the character's OUTFIT "
-            f"(fullbody clothing picture) - copy this exact outfit, its "
-            f"colors and details onto the character in all panels. Never "
-            f"take the face from the outfit picture and never take the "
-            f"outfit from the face picture.")
+    lines = []
+    if grouped["face"]:
+        lines.append(
+            f"FACE reference image(s) {_named(grouped['face'])}: the "
+            f"character's exact face, hairstyle, eye color and facial "
+            f"features - copy them into all panels and never change the "
+            f"character's identity.")
+    if grouped["outfit"] and base != "face":
+        lines.append(
+            f"OUTFIT reference image(s) {_named(grouped['outfit'])} (fullbody "
+            f"clothing picture): the character's exact outfit, colors and "
+            f"details - copy them onto the character in all panels.")
+        if grouped["face"]:
+            lines.append("Never take the face from an OUTFIT picture and "
+                         "never take the outfit from a FACE picture.")
+    if grouped["style"]:
+        lines.append(
+            f"MAIN STYLE reference image(s) {_named(grouped['style'])}: these "
+            f"are SEPARATE illustrations that usually show SEVERAL DIFFERENT "
+            f"characters. They define the ART STYLE ONLY - linework, "
+            f"coloring, shading, texture and finish. Do NOT copy their "
+            f"characters, faces, hairstyles, eye colors, outfits, poses or "
+            f"composition, and do NOT let them change the character count: "
+            f"every panel still shows exactly the ONE character defined by "
+            f"the FACE/OUTFIT references.")
+    return "REFERENCE IMAGE ROLES:\n" + "\n".join(f"* {line}" for line in lines)
 
 
 def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
-                   light: str, refs):
+                   light: str, refs, roles=None):
     """Assemble one sheet prompt for `grid` ([cols, rows]): one panel per
     cell sampled from the stage's pool, each panel carrying its own art
     style and background scene (lists sized cols*rows or empty), plus the
-    reference-image roles.
+    reference-image roles (face / outfit / main style).
 
     Returns (prompt, panel_map) where panel_map[(r, c)] =
     (caption tags, style tag, scene tag), 1-based."""
     base = "face" if stage == "face" else stage.split("_")[1]
     cols, rows = int(grid[0]), int(grid[1])
     cells = cols * rows
+    grouped = resolve_ref_roles(base, refs, roles)
+    face_ref = (f"the FACE reference image "
+                f"'{os.path.basename(grouped['face'][0])}'"
+                if grouped["face"] else "the FIRST reference image")
+    outfit_ref = (f"the OUTFIT reference image "
+                  f"'{os.path.basename(grouped['outfit'][-1])}'"
+                  if grouped["outfit"] else "the LAST reference image")
+    has_main_style = bool(grouped["style"])
     pool = _POOLS[base]
     panels = rng.sample(pool, cells) if len(pool) >= cells \
         else rng.choices(pool, k=cells)
@@ -590,9 +697,8 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
     has_scene = any(scenes)
 
     if base == "face":
-        subject = ("Character: the same face, hair and identity as the FIRST "
-                   "reference image, with identical features and colors in "
-                   f"all {cells} panels.")
+        subject = (f"Character: the same face, hair and identity as {face_ref}, "
+                   f"with identical features and colors in all {cells} panels.")
         geometry = ("* Geometry: every panel the same square size, head and "
                     "shoulders centered in each panel, no panel borders or "
                     "frames, only white gutters separate panels.")
@@ -601,9 +707,9 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
                     "merged panels, NO missing panels, NO extra panels, NO "
                     "uneven rows, NO crooked grid.")
     elif base == "upper":
-        subject = ("Character & outfit: the same face as the FIRST reference "
-                   "image and the same outfit as the LAST reference image, "
-                   f"identical in all {cells} panels.")
+        subject = (f"Character & outfit: the same face as {face_ref} and the "
+                   f"same outfit as {outfit_ref}, identical in all {cells} "
+                   f"panels.")
         geometry = ("* Geometry: equal panel sizes, consistent head-to-waist "
                     "scale, no panel borders or frames, only white gutters "
                     "separate panels.")
@@ -611,9 +717,9 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
                     "watermark, NO logos, NO merged panels, NO missing "
                     "panels, NO extra panels, NO uneven rows, NO crooked grid.")
     else:
-        subject = ("Character & outfit: the same face as the FIRST reference "
-                   "image and the same outfit as the LAST reference image, "
-                   f"identical in all {cells} panels.")
+        subject = (f"Character & outfit: the same face as {face_ref} and the "
+                   f"same outfit as {outfit_ref}, identical in all {cells} "
+                   f"panels.")
         geometry = ("* Geometry: every panel the same size, full body visible "
                     "head to toe with margin in each panel, no panel borders "
                     "or frames, only white gutters separate panels.")
@@ -621,6 +727,13 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
                     "grid lines, NO color swatches, NO watermark, NO merged "
                     "panels, NO missing panels, NO extra panels, NO uneven "
                     "rows, NO crooked grid.")
+
+    if has_main_style:
+        subject += (" Exactly ONE character per panel - ignore every "
+                    "character shown in the MAIN STYLE reference image(s).")
+        core_neg += (" NO extra characters, NO copying faces, outfits or "
+                     "poses from the MAIN STYLE reference, NO multi-character "
+                     "panels.")
 
     if has_scene:
         sheet_line = (f"A character {base} reference sheet drawn as a clean "
@@ -637,11 +750,13 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
                       f"{cols}-column by {rows}-row matrix of {cells} "
                       f"separate square panels on a pure white background, "
                       f"with wide uniform white gutters between every panel.")
-        end_neg = (" Plain solid white background only.")
+        end_neg = (" Pure white background only - flat #FFFFFF white, no "
+                   "gradient, no texture, no vignette, no scenery, no props, "
+                   "no floor, no horizon.")
 
     style_bullet = ""
     if has_style:
-        distinct = len({s["tag"] for s in styles})
+        distinct = len({s["tag"] for s in styles if s})
         if distinct > 1:
             style_bullet = ("* Art styles: every panel uses the art style "
                             "declared in its own panel description; the "
@@ -650,7 +765,7 @@ def assemble_sheet(stage: str, rng, grid, styles: list, scenes: list,
             style_bullet = ("* Art styles: all panels share the art style "
                             "declared in each panel description.\n")
 
-    ref_guide = reference_guide(base, refs)
+    ref_guide = reference_guide(base, refs, roles)
 
     return f"""GRID: {cols}x{rows}
 {sheet_line}
@@ -686,16 +801,27 @@ def make_caption(trigger: str, stage: str, panel_tags: str,
     return ", ".join(parts)
 
 
-def build_plan(avatars, fullbodies):
-    """One entry per avatar task and per outfit picture x outfit task."""
+def build_plan(avatars, fullbodies, main_styles=None):
+    """One entry per avatar task and per outfit picture x outfit task.
+
+    Each entry carries `refs` (the attached images, in order) and the matching
+    `roles` (face / outfit / style) so a main-style reference is never mistaken
+    for the character or the outfit."""
+    avatars = list(avatars)
+    main_styles = list(main_styles or [])
+    style_roles = ["style"] * len(main_styles)
+    face_roles = ["face"] * len(avatars)
     plan = []
     for at in CFG["avatar_tasks"]:
-        plan.append({"stage": "face", "task": at, "refs": list(avatars)})
+        plan.append({"stage": "face", "task": at,
+                     "refs": avatars + main_styles,
+                     "roles": face_roles + style_roles})
     for i, fb in enumerate(fullbodies, 1):
-        refs = list(avatars) + [fb]
+        refs = avatars + [fb] + main_styles
+        roles = face_roles + ["outfit"] + style_roles
         for ot in CFG["outfit_tasks"]:
             plan.append({"stage": f"o{i:02d}_{ot['kind']}", "task": ot,
-                         "refs": refs})
+                         "refs": refs, "roles": roles})
     return plan
 
 
@@ -704,7 +830,7 @@ def task_cells(task):
 
 
 def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
-              args, client, rng, raw_dir: str, result_dir):
+              args, client, rng, raw_dir: str, result_dir, roles=None):
     """Generate one sheet scheme's variations (per-panel styles/scenes per
     config), split into the task grid, and collect numbered images.
 
@@ -713,9 +839,12 @@ def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
     avatar grids, two upper grids, ...) never overwrite each other.
     counter_box['n'] is the RUN-WIDE image counter so collected filenames
     stay unique across tasks as well.
+    `roles` labels every entry of `refs` as face / outfit / style.
     Returns a stage record."""
     cols, rows = task["grid"]
     cells = cols * rows
+    main_style = getattr(args, "main_style", None)
+    main_perc = getattr(args, "main_style_perc", DEFAULT_MAIN_STYLE_PERC)
     record = {"stage": stage, "task": task_no, "grid": [cols, rows],
               "aspect": task.get("aspect", ""), "size": task.get("size", ""),
               "variations": args.variations, "sheets": [],
@@ -723,11 +852,11 @@ def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
     tile_dir = os.path.join(raw_dir, f"tiles_{stage}_p{task_no:02d}")
     os.makedirs(tile_dir, exist_ok=True)
     for v in range(1, args.variations + 1):
-        styles = sample_styles(args.style, rng, cells)
+        styles = sample_styles(args.style, rng, cells, main_style, main_perc)
         scenes = sample_scenes(rng, cells)
         light = rng.choice(LIGHTING)
         prompt, panel_map = assemble_sheet(stage, rng, task["grid"], styles,
-                                           scenes, light, refs)
+                                           scenes, light, refs, roles)
         sheet_path = os.path.join(raw_dir, f"{stage}_p{task_no:02d}_v{v:02d}.png")
         aspect = args.aspect_ratio or task.get("aspect", "") or "3:4"
         size = args.image_size or task.get("size", "") or "2K"
@@ -735,22 +864,26 @@ def run_stage(stage: str, refs, task, task_no: int, counter_box: dict,
         last_err = None
         for attempt in range(args.retries + 1):
             if attempt:
-                styles = sample_styles(args.style, rng, cells)
+                styles = sample_styles(args.style, rng, cells, main_style,
+                                       main_perc)
                 scenes = sample_scenes(rng, cells)
                 light = rng.choice(LIGHTING)
                 prompt, panel_map = assemble_sheet(stage, rng, task["grid"],
                                                    styles, scenes, light,
-                                                   refs)
-            n_style = len({s["tag"] for s in styles}) if styles else 0
-            shown_s = (", ".join(s["tag"] for s in styles[:3])
+                                                   refs, roles)
+            n_style = len({s["tag"] for s in styles if s})
+            shown_s = (", ".join(s["tag"] for s in styles[:3] if s)
                        if styles else "none")
+            n_main = (sum(1 for s in styles if s and
+                          s["tag"] == MAIN_STYLE_TAG))
             scenes_shown = (", ".join(s["tag"] for s in scenes[:3])
                             if scenes else "none")
+            main_note = f", main style {n_main}/{cells}" if main_style else ""
             print(f"[lora_data_maker] {stage} variation {v}/"
                   f"{args.variations} attempt {attempt + 1}/{args.retries + 1}: "
                   f"generating (grid {cols}x{rows} {aspect} {size}, "
                   f"refs {len(refs)}, light '{light}', "
-                  f"styles [{shown_s}] ({n_style} distinct), "
+                  f"styles [{shown_s}] ({n_style} distinct){main_note}, "
                   f"scenes [{scenes_shown}])", flush=True)
             try:
                 generate_image(client, args.image_model, prompt, refs,
@@ -853,6 +986,21 @@ def selftest() -> int:
             print(f"[selftest] grid {grid[0]}x{grid[1]}: {ncell} panels x "
                   f"{ncell} distinct styles OK")
 
+        # Default background: pure white in every panel (scene randomization off).
+        assert CFG["randomize_panel_scene"] is False, \
+            "scene randomization must be off by default"
+        rng = random.Random(9)
+        prompt, _pm = assemble_sheet("face", rng, (3, 4),
+                                     sample_styles("", rng, 12), [],
+                                     LIGHTING[0], ["avatar.png"])
+        assert "Background scene:" not in prompt, \
+            "no per-panel scene lines may appear by default"
+        assert "Pure white background only - flat #FFFFFF white" in prompt, \
+            "pure white background rule missing"
+        assert "no gradient, no texture, no vignette, no scenery" in prompt, \
+            "white-background hardening missing"
+        print("[selftest] pure white background enforced by default OK")
+
         # Scene randomization ON (with the weighted white scene in the pool).
         CFG["randomize_panel_scene"] = True
         try:
@@ -875,6 +1023,48 @@ def selftest() -> int:
             print("[selftest] scene randomization + weighted white scene OK")
         finally:
             CFG["randomize_panel_scene"] = False
+
+        # Main-style reference: share of panels + style-only role wording.
+        rng = random.Random(11)
+        mixed = sample_styles("", rng, 12, main_style=["style_sheet.png"],
+                              main_perc=75)
+        assert len(mixed) == 12, "main-style list must cover every panel"
+        n_main = sum(1 for s in mixed if s["tag"] == MAIN_STYLE_TAG)
+        assert n_main == 9, f"75% of 12 panels must be 9, got {n_main}"
+        assert len({s["tag"] for s in mixed if s["tag"] != MAIN_STYLE_TAG}) == 3, \
+            "non-main panels must keep distinct random styles"
+        assert all(s["tag"] == MAIN_STYLE_TAG for s in sample_styles(
+            "", rng, 9, main_style=["s.png"], main_perc=100))
+        assert not any(s["tag"] == MAIN_STYLE_TAG for s in sample_styles(
+            "", rng, 9, main_style=["s.png"], main_perc=0))
+        assert len(sample_styles("", rng, 10, main_style=["s.png"],
+                                 main_perc=33)) == 10
+        prompt, _pm = assemble_sheet(
+            "face", rng, (3, 4), mixed, [], LIGHTING[0],
+            ["avatar.png", "style_sheet.png"], roles=["face", "style"])
+        assert "MAIN STYLE reference image(s) 'style_sheet.png'" in prompt
+        assert "the ART STYLE ONLY" in prompt, "style-only rule missing"
+        assert "Exactly ONE character per panel" in prompt, "no 1-char rule"
+        assert "NO multi-character panels" in prompt, "no style-leak negative"
+        assert "FACE reference image(s) 'avatar.png'" in prompt, "face role"
+        plan_ms = build_plan(["avatar.png"], ["fb.png"], ["style_sheet.png"])
+        assert all(p["roles"] == ["face", "style"] for p in plan_ms
+                   if p["stage"] == "face"), "face-stage roles wrong"
+        saved_tasks = CFG["outfit_tasks"]
+        try:
+            CFG["outfit_tasks"] = [
+                {"kind": "fullbody", "grid": [3, 4], "aspect": "3:4",
+                 "size": "2K"}]
+            outfit_ms = next(p for p in build_plan(["avatar.png"], ["fb.png"],
+                                                   ["style_sheet.png"])
+                             if p["stage"].startswith("o"))
+            assert outfit_ms["roles"] == ["face", "outfit", "style"] and \
+                outfit_ms["refs"] == ["avatar.png", "fb.png",
+                                      "style_sheet.png"], \
+                "outfit-stage roles must keep the main style last"
+        finally:
+            CFG["outfit_tasks"] = saved_tasks
+        print("[selftest] main-style share + style-only role wording OK")
 
         # Determinism with a seed + variety without one.
         rng_a, rng_b = random.Random(7), random.Random(7)
@@ -900,7 +1090,14 @@ def selftest() -> int:
         assert len(cfg.get("styles", [])) == 20, "styles must be 20"
         assert len(cfg.get("scenes", [])) == 19, "scenes must be 19"
         assert len(cfg.get("avatar_tasks", [])) == 1, "avatar tasks"
-        assert len(cfg.get("outfit_tasks", [])) == 2, "outfit tasks"
+        assert cfg.get("outfit_tasks") == [], \
+            "outfit (upper/fullbody) sheets must default to off"
+        # Shipping only avatar/portrait grids is the intended default and the
+        # built-in defaults must agree with the generated template.
+        assert DEFAULT_OUTFIT_TASKS == [], "built-in outfit tasks must be off"
+        plan_default = build_plan(["avatar.png"], ["fb.png"])
+        assert [p["stage"] for p in plan_default] == ["face"], \
+            "default plan must contain only the avatar/portrait stage"
         print("[selftest] seed determinism + pinning + weighting + config OK")
 
         # No-overwrite regression: config tasks that share a stage name
@@ -933,8 +1130,11 @@ def selftest() -> int:
         # End-to-end run_stage with a stubbed generator (no API): proves the
         # full path (generate -> split -> caption -> collect) runs cleanly
         # and the run-wide counter keeps filenames unique across tasks.
+        captured = []
+
         def _fake_generate(_client, _model, _prompt, _refs, out_path, _aspect,
                            _size):
+            captured.append(_prompt)
             Image.new("RGB", (900, 1200), (235, 235, 235)).save(out_path)
         real_gen = globals().get("generate_image")
         try:
@@ -947,7 +1147,8 @@ def selftest() -> int:
             sargs = argparse.Namespace(
                 style="", variations=1, aspect_ratio=None, image_size=None,
                 prefix="seles", trigger="seles_v3", captions=True,
-                image_model="test-model", grid_padding=8, retries=1)
+                image_model="test-model", grid_padding=8, retries=1,
+                main_style=None, main_style_perc=75)
             raw = os.path.join(work, "raw")
             res = os.path.join(work, "res")
             os.makedirs(raw, exist_ok=True)
@@ -957,7 +1158,7 @@ def selftest() -> int:
             for p_no, p in enumerate(build_plan(["avatar.png"], []), 1):
                 recs.append(run_stage(p["stage"], p["refs"], p["task"], p_no,
                                      box, sargs, None, random.Random(1),
-                                     raw, res))
+                                     raw, res, roles=p["roles"]))
             assert all(not r["errors"] for r in recs), "run_stage errors"
             assert sum(len(r["images"]) for r in recs) == 21, \
                 "expected 21 collected images (12 + 9)"
@@ -975,6 +1176,28 @@ def selftest() -> int:
             assert os.path.isfile(os.path.join(res, "seles_face_001.png")) and \
                 os.path.isfile(os.path.join(res, "seles_face_021.png")), \
                 "run-wide image counter not applied"
+            assert not any("MAIN STYLE reference" in p for p in captured), \
+                "main-style block leaked without --main-style"
+
+            # Same pipeline with a main-style reference image attached.
+            sargs_ms = argparse.Namespace(
+                **dict(vars(sargs), main_style=["style_sheet.png"]))
+            raw_ms = os.path.join(work, "raw_ms")
+            res_ms = os.path.join(work, "res_ms")
+            os.makedirs(raw_ms, exist_ok=True)
+            os.makedirs(res_ms, exist_ok=True)
+            plan_ms = build_plan(["avatar.png"], [], ["style_sheet.png"])
+            rec_ms = run_stage(plan_ms[0]["stage"], plan_ms[0]["refs"],
+                               plan_ms[0]["task"], 1, {"n": 1}, sargs_ms,
+                               None, random.Random(2), raw_ms, res_ms,
+                               roles=plan_ms[0]["roles"])
+            assert not rec_ms["errors"], "main-style run_stage errors"
+            assert len(rec_ms["images"]) == 12, "expected 12 main-style tiles"
+            n_ms = sum(1 for img in rec_ms["images"]
+                       if img["style"] == MAIN_STYLE_TAG)
+            assert n_ms == 9, f"expected 9/12 main-style panels, got {n_ms}"
+            assert "MAIN STYLE reference image(s) 'style_sheet.png'" in \
+                captured[-1], "main-style block missing from the prompt"
             print("[selftest] run_stage end-to-end (stubbed generator) OK")
         finally:
             if real_gen is not None:
@@ -1004,7 +1227,9 @@ def main() -> int:
                              "to every outfit grid).")
     parser.add_argument("--fullbody", nargs="*", default=None,
                         help="Fullbody outfit picture(s); each one runs the "
-                             "outfit_tasks schemes (upper/fullbody).")
+                             "outfit_tasks schemes (upper/fullbody). Disabled "
+                             "while outfit_tasks is empty in the config, which "
+                             "is the default (avatar/portrait grids only).")
     parser.add_argument("--out", default="",
                         help="Result folder (default: "
                              "training_data/lora_<trigger>/).")
@@ -1015,6 +1240,17 @@ def main() -> int:
                         help="Pin one art style for all panels of every "
                              "sheet instead of per-panel randomization. "
                              "Available: " + ", ".join(s["tag"] for s in CFG["styles"]))
+    parser.add_argument("--main-style", nargs="+", default=None,
+                        help="One or more MAIN STYLE reference images (usually "
+                             "multi-character illustrations). They are attached "
+                             "for the ART STYLE only - their characters, faces "
+                             "and outfits are never copied into the dataset.")
+    parser.add_argument("--main-style-perc", type=int,
+                        default=DEFAULT_MAIN_STYLE_PERC,
+                        help="Percentage of the generated panels that follow "
+                             "the --main-style reference (default: "
+                             f"{DEFAULT_MAIN_STYLE_PERC}). The remaining "
+                             "panels keep the random/pinned styles.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for style/scene/panel sampling "
                              "(default: random every run).")
@@ -1063,6 +1299,8 @@ def main() -> int:
         parser.error("--variations must be >= 1")
     if args.grid_padding < 0:
         parser.error("--grid-padding must be >= 0")
+    if not 0 <= args.main_style_perc <= 100:
+        parser.error("--main-style-perc must be between 0 and 100")
     if not args.image_model:
         from models_config import load_model_config
         args.image_model = load_model_config()["image_model"]
@@ -1073,6 +1311,19 @@ def main() -> int:
 
         avatars = ref_images_from_args(args.avatar)
         fullbodies = ref_images_from_args(args.fullbody or [])
+        if fullbodies and not CFG["outfit_tasks"]:
+            print("[lora_data_maker] note: outfit (upper/fullbody) sheets are "
+                  "disabled because 'outfit_tasks' is empty in the config - "
+                  "the fullbody picture(s) will not be used. Add outfit_tasks "
+                  "entries to re-enable them.", flush=True)
+            fullbodies = []
+        main_styles = ref_images_from_args(args.main_style or [])
+        if main_styles and args.main_style_perc == 0:
+            print("[lora_data_maker] note: --main-style-perc 0 disables the "
+                  "main-style reference, so it will not be attached.",
+                  flush=True)
+            main_styles = []
+        args.main_style = main_styles
         all_refs = avatars + fullbodies
         args.trigger = (args.trigger or "").strip() or infer_trigger(all_refs)
         if args.trigger == "chara" and all_refs:
@@ -1089,7 +1340,7 @@ def main() -> int:
             datetime.datetime.now().strftime("%H%M%S"),
         )
 
-        plan = build_plan(avatars, fullbodies)
+        plan = build_plan(avatars, fullbodies, main_styles)
         total = sum(task_cells(p["task"]) * args.variations for p in plan)
         rng = random.Random(args.seed)
 
@@ -1102,22 +1353,30 @@ def main() -> int:
                   f"({len(CFG['styles'])} styles) | scene randomization = "
                   f"{CFG['randomize_panel_scene']} "
                   f"({len(CFG['scenes'])} scenes)", flush=True)
+            if main_styles:
+                print(f"  main style refs: "
+                      f"{[os.path.basename(r) for r in main_styles]} "
+                      f"-> {args.main_style_perc}% of every sheet",
+                      flush=True)
             for p in plan:
                 task = p["task"]
                 cols, rows = task["grid"]
                 cells = cols * rows
-                styles = sample_styles(args.style, rng, cells)
+                styles = sample_styles(args.style, rng, cells, main_styles,
+                                       args.main_style_perc)
                 scenes = sample_scenes(rng, cells)
                 _, panel_map = assemble_sheet(p["stage"], rng, task["grid"],
                                               styles, scenes, LIGHTING[0],
-                                              p["refs"])
+                                              p["refs"], p["roles"])
                 refs = [os.path.basename(r) for r in p["refs"]]
                 tags, style_tag, scene_tag = panel_map.get((1, 1),
                                                            ("", "", ""))
                 sample = make_caption(args.trigger, p["stage"], tags,
                                       style_tag, scene_tag)
-                n_style = len({s["tag"] for s in styles}) if styles else 0
-                shown_s = (", ".join(s["tag"] for s in styles[:3])
+                n_style = len({s["tag"] for s in styles if s})
+                n_main = sum(1 for s in styles if s and
+                             s["tag"] == MAIN_STYLE_TAG)
+                shown_s = (", ".join(s["tag"] for s in styles[:3] if s)
                            if styles else "uniform/off")
                 shown_c = (", ".join(s["tag"] for s in scenes[:3])
                            if scenes else "plain white")
@@ -1126,7 +1385,9 @@ def main() -> int:
                       f"refs {refs}  -> {cells * args.variations} images  "
                       f"light '{LIGHTING[0]}'", flush=True)
                 print(f"      panel styles: {shown_s} ... "
-                      f"({n_style} distinct)", flush=True)
+                      f"({n_style} distinct"
+                      f"{f', main style {n_main}/{cells}' if main_styles else ''})",
+                      flush=True)
                 print(f"      panel scenes: {shown_c} ...", flush=True)
                 print(f"      files: {args.prefix}_{p['stage']}_001.png ...",
                       flush=True)
@@ -1138,6 +1399,8 @@ def main() -> int:
                 "config": os.path.abspath(args.config or DEFAULT_CONFIG_PATH),
                 "randomize_panel_style": CFG["randomize_panel_style"],
                 "randomize_panel_scene": CFG["randomize_panel_scene"],
+                "main_style": [os.path.basename(r) for r in main_styles],
+                "main_style_perc": args.main_style_perc,
                 "stages": [{"stage": p["stage"], "grid": list(p["task"]["grid"]),
                             "cells": task_cells(p["task"]) * args.variations}
                            for p in plan],
@@ -1162,7 +1425,7 @@ def main() -> int:
         for p_no, p in enumerate(plan, 1):
             rec = run_stage(p["stage"], p["refs"], p["task"], p_no,
                             counter_box, args, client, rng, raw_dir,
-                            result_dir)
+                            result_dir, roles=p["roles"])
             stage_records.append(rec)
             errors.extend(rec["errors"])
 
@@ -1176,6 +1439,8 @@ def main() -> int:
             "trigger": args.trigger,
             "seed": args.seed,
             "image_model": args.image_model,
+            "main_style": [os.path.basename(r) for r in main_styles],
+            "main_style_perc": args.main_style_perc,
             "output_dir": raw_dir,
             "result_dir": result_dir,
             "summary": summary,

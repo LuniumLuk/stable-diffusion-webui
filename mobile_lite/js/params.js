@@ -2,7 +2,7 @@
 
 import { api_ } from './api.js';
 import { hrFinalSize, hrStagePlan } from './hires.js';
-import { POSE_PARTS } from './pose.js';
+import { POSE_CUSTOM_NODES, POSE_CUSTOM_PART, POSE_PART_OPTIONS, POSE_PARTS } from './pose.js';
 import { planInputResize, resolveInputSize, round8 } from './resize-plan.js';
 import { closeSheet, el, openSheet, toast } from './ui.js';
 import { emit, imageParams, krea2Params, on, qwenParams, resolveOutputSize, setParam, state } from './state.js';
@@ -270,7 +270,7 @@ function appendPoseInpaint(body, store, when) {
   const details = el('div');
   const note = el('div', { class: 'small muted' });
   const selectedParts = () => (Array.isArray(store.poseInpaintParts) ? store.poseInpaintParts : POSE_PARTS);
-  const partButtons = POSE_PARTS.map((part) => el('button', {
+  const partButtons = POSE_PART_OPTIONS.map((part) => el('button', {
     class: `chip ${selectedParts().includes(part) ? 'on' : ''}`,
     type: 'button',
     text: part,
@@ -278,10 +278,28 @@ function appendPoseInpaint(body, store, when) {
       const next = new Set(selectedParts());
       if (next.has(part)) next.delete(part);
       else next.add(part);
-      setParam('poseInpaintParts', POSE_PARTS.filter((item) => next.has(item)), store);
+      setParam('poseInpaintParts', POSE_PART_OPTIONS.filter((item) => next.has(item)), store);
       refresh();
     },
   }));
+
+  const selectedNodes = () => (Array.isArray(store.poseInpaintCustomNodes) ? store.poseInpaintCustomNodes : []);
+  const nodeButtons = POSE_CUSTOM_NODES.map((node) => el('button', {
+    class: `chip ${selectedNodes().includes(node) ? 'on' : ''}`,
+    type: 'button',
+    text: node,
+    onClick: () => {
+      const next = new Set(selectedNodes());
+      if (next.has(node)) next.delete(node);
+      else next.add(node);
+      setParam('poseInpaintCustomNodes', POSE_CUSTOM_NODES.filter((item) => next.has(item)), store);
+      refresh();
+    },
+  }));
+  const customNodeField = el('div', { class: 'field hidden' }, [
+    el('label', { text: 'Custom nodes' }),
+    el('div', { class: 'chips' }, nodeButtons),
+  ]);
 
   const radiusMode = () => (store.poseInpaintRadiusMode === 'px' ? 'px' : 'percent');
   const sizeMode = () => (store.poseInpaintSizeMode === 'px' ? 'px' : 'scale');
@@ -295,8 +313,12 @@ function appendPoseInpaint(body, store, when) {
   const refresh = () => {
     details.classList.toggle('hidden', !store.poseInpaintEnabled);
     partButtons.forEach((button, index) => {
-      button.classList.toggle('on', selectedParts().includes(POSE_PARTS[index]));
+      button.classList.toggle('on', selectedParts().includes(POSE_PART_OPTIONS[index]));
     });
+    nodeButtons.forEach((button, index) => {
+      button.classList.toggle('on', selectedNodes().includes(POSE_CUSTOM_NODES[index]));
+    });
+    customNodeField.classList.toggle('hidden', !selectedParts().includes(POSE_CUSTOM_PART));
     if (!store.poseInpaintEnabled) return;
 
     const pxRadius = radiusMode() === 'px';
@@ -306,11 +328,13 @@ function appendPoseInpaint(body, store, when) {
     sizePxRow.classList.toggle('hidden', !pxSize);
     sizeScaleRow.classList.toggle('hidden', pxSize);
 
-    // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right), per skeleton
+    // face -> 1 mask, hands -> 2 (left/right), feet -> 2 (left/right), custom -> 1 per node
     const parts = selectedParts();
+    const custom = parts.includes(POSE_CUSTOM_PART) ? selectedNodes().length : 0;
     const masks = (parts.includes('Face') ? 1 : 0)
       + (parts.includes('Hands') ? 2 : 0)
-      + (parts.includes('Feet') ? 2 : 0);
+      + (parts.includes('Feet') ? 2 : 0)
+      + custom;
     const passes = store.poseInpaintSeparate === false ? 1 : masks;
     const radius = pxRadius
       ? `${store.poseInpaintRadius}px`
@@ -319,7 +343,7 @@ function appendPoseInpaint(body, store, when) {
       ? `${store.poseInpaintSize}px long side`
       : `${Number(store.poseInpaintScale).toFixed(1)}\u00D7 the mask box`;
     note.textContent = !masks
-      ? 'Select at least one part, or the pass is skipped.'
+      ? (parts.includes(POSE_CUSTOM_PART) ? 'Select at least one custom node, or the pass is skipped.' : 'Select at least one part, or the pass is skipped.')
       : `${passes} only-masked pass${passes > 1 ? 'es' : ''}: r ${radius}, ext ${Number(store.poseInpaintExtend).toFixed(2)}, ${size}, \u2264${store.poseInpaintMaxPeople} skeleton(s).`;
   };
 
@@ -361,6 +385,7 @@ function appendPoseInpaint(body, store, when) {
       el('label', { text: 'Parts' }),
       el('div', { class: 'chips' }, partButtons),
     ]),
+    customNodeField,
     radiusModeToggle,
     radiusPxRow,
     radiusPercentRow,
@@ -386,7 +411,7 @@ function appendPoseInpaint(body, store, when) {
       setParam('poseInpaintSaveIntermediate', value === 'on', store);
     }),
     note,
-    el('div', { class: 'small muted', text: 'Every used skeleton gets its own masks. Relative inpaint size is the mask\'s pixel bounding box x the scale (2x by default). Hand/foot extend pushes the masks past the wrist/ankle. DWPose models give the best anime hands/feet.' }),
+    el('div', { class: 'small muted', text: 'Every used skeleton gets its own masks. Relative inpaint size is the mask\'s pixel bounding box x the scale (2x by default). Hand/foot extend pushes the masks past the wrist/ankle. Custom nodes add extra skeleton joints (shoulders, elbows, wrists, hips, knees, ankles), each group covering both sides. DWPose models give the best anime hands/feet.' }),
   );
 
   body.append(

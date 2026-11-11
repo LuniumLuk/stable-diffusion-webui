@@ -1,7 +1,9 @@
 """Local pose analysis for the img2img Inpaint tab.
 
 The inpaint pose panel uses a local network to find face/hand/foot keypoints and turns
-them into separate point-expanded masks for the batch-mask layer panel.
+them into separate point-expanded masks for the batch-mask layer panel.  The txt2img /
+img2img "Pose inpaint" tab uses the same points, and can additionally mask extra skeleton
+joint groups (shoulders, elbows, wrists, hips, knees, ankles) through its custom nodes.
 
 Two fully local backends are supported:
 
@@ -34,12 +36,36 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
 REGION_CODES = ("face", "hands", "feet")
+
+# Extra skeleton joints the "Custom nodes" part adds.  Each code collects the COCO body
+# indices of that joint group, so one mask covers both sides (shoulders = left + right).
+CUSTOM_NODE_CODES = ("shoulders", "elbows", "wrists", "hips", "knees", "ankles")
+CUSTOM_NODE_LABELS = {
+    "shoulders": "Shoulders",
+    "elbows": "Elbows",
+    "wrists": "Wrists",
+    "hips": "Hips",
+    "knees": "Knees",
+    "ankles": "Ankles",
+}
+CUSTOM_NODE_JOINTS = {
+    "shoulders": (5, 6),
+    "elbows": (7, 8),
+    "wrists": (9, 10),
+    "hips": (11, 12),
+    "knees": (13, 14),
+    "ankles": (15, 16),
+}
+
+# "custom" is the part code that expands into the chosen CUSTOM_NODE_CODES.
+SELECTION_CODES = REGION_CODES + ("custom",)
 REGION_LABELS = {
     "face": "Face",
     "left_hand": "Left hand",
     "right_hand": "Right hand",
     "left_foot": "Left foot",
     "right_foot": "Right foot",
+    **CUSTOM_NODE_LABELS,
 }
 SUPPORTED_BACKENDS = ("auto", "dwpose", "torchvision")
 BACKEND_LABELS = {
@@ -351,6 +377,12 @@ def _region_groups(person) -> dict[str, list]:
     }
 
 
+def _custom_region_groups(person) -> dict[str, list]:
+    """Points of every extra skeleton joint group, keyed by ``CUSTOM_NODE_CODES``."""
+    body = person.body
+    return {code: [body[index] for index in indices if index < len(body)] for code, indices in CUSTOM_NODE_JOINTS.items()}
+
+
 def _valid_points(points) -> list:
     return [pt for pt in (points or []) if pt is not None and len(pt) >= 3 and float(pt[2]) >= SCORE_THRESHOLD]
 
@@ -390,6 +422,26 @@ def canonical_backend(backend) -> str:
     if text in ("torchvision", "coco", "coco 17", "keypoint r-cnn", "keypointrcnn"):
         return "torchvision"
     return "auto"
+
+
+def canonical_custom_nodes(nodes) -> list[str]:
+    """Normalize the custom node selection to ``CUSTOM_NODE_CODES`` order.
+
+    Accepts the region codes ('knees'), the UI labels ('Knees') and comma separated text.
+
+    >>> canonical_custom_nodes(["Knees", "shoulders"])
+    ['shoulders', 'knees']
+    >>> canonical_custom_nodes(None)
+    []
+    """
+    if isinstance(nodes, str):
+        nodes = nodes.replace(";", ",").split(",")
+    selected = set()
+    for node in nodes or []:
+        text = str(node or "").strip().lower().replace(" ", "_")
+        if text in CUSTOM_NODE_JOINTS:
+            selected.add(text)
+    return [code for code in CUSTOM_NODE_CODES if code in selected]
 
 
 def _point(x, y, score):
@@ -718,11 +770,14 @@ def _draw_point_mask(size, points, radius: int) -> Image.Image:
     return colored
 
 
-def _expand_region_codes(regions) -> set[str]:
+def _expand_region_codes(regions, custom_nodes=None) -> set[str]:
+    """Mask region codes of the selection; ``custom`` expands into the chosen extra nodes."""
     expanded = {
         "face": {"face"},
         "hands": {"left_hand", "right_hand"},
         "feet": {"left_foot", "right_foot"},
+        "custom": set(canonical_custom_nodes(custom_nodes)),
+        **{code: {code} for code in CUSTOM_NODE_CODES},
     }
     allowed = set()
     for code in regions or REGION_CODES:
@@ -731,7 +786,14 @@ def _expand_region_codes(regions) -> set[str]:
     return allowed
 
 
-def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0, people=None) -> dict[str, list]:
+def collect_region_points(
+    pose: DetectedPose,
+    regions=None,
+    radius: int = 40,
+    extend: float = 0.0,
+    people=None,
+    custom_nodes=None,
+) -> dict[str, list]:
     """Group the usable points of the requested parts by mask region.
 
     Points too close to the frame edge are dropped: pose models often hallucinate
@@ -743,8 +805,9 @@ def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, ex
     overlapping circles, so the mask becomes a continuous capsule that only ever grows.
 
     ``people`` restricts the collection to a subset of the detected skeletons.
+    ``custom_nodes`` picks the extra skeleton joints the ``custom`` region expands into.
     """
-    allowed = _expand_region_codes(regions)
+    allowed = _expand_region_codes(regions, custom_nodes)
     border = max(3.0, float(radius) * 0.25)
     collected: dict[str, list] = {}
 
@@ -752,7 +815,9 @@ def collect_region_points(pose: DetectedPose, regions=None, radius: int = 40, ex
         return border <= point[0] <= pose.width - border and border <= point[1] <= pose.height - border
 
     for person in pose.people if people is None else people:
-        for code, points in _region_groups(person).items():
+        groups = _region_groups(person)
+        groups.update(_custom_region_groups(person))
+        for code, points in groups.items():
             if code not in allowed:
                 continue
             filtered = [point for point in _valid_points(points) if inside(point)]
@@ -806,13 +871,13 @@ def _walk(point, offset, radius: int) -> list:
     return [_point(x + dx * step / steps, y + dy * step / steps, score) for step in range(1, steps + 1)]
 
 
-def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0):
-    """Single binary mask covering every selected face/hand/foot point.
+def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40, extend: float = 0.0, custom_nodes=None):
+    """Single binary mask covering every selected face/hand/foot/custom point.
 
     Returns ``(mask, point_count)``; ``mask`` is None when no usable points exist.
     """
     radius = max(1, min(1024, int(radius)))
-    collected = collect_region_points(pose, regions=regions, radius=radius, extend=extend)
+    collected = collect_region_points(pose, regions=regions, radius=radius, extend=extend, custom_nodes=custom_nodes)
     if not collected:
         return None, 0
 
@@ -821,7 +886,7 @@ def build_region_mask(pose: DetectedPose, regions=None, radius: int = 40, extend
     return mask, len(points)
 
 
-REGION_MASK_ORDER = ("face", "left_hand", "right_hand", "left_foot", "right_foot")
+REGION_MASK_ORDER = ("face", "left_hand", "right_hand", "left_foot", "right_foot") + CUSTOM_NODE_CODES
 
 
 class RegionPoints(NamedTuple):
@@ -852,6 +917,7 @@ def collect_person_region_points(
     extend: float = 0.0,
     radius_percent: float = 0.0,
     radius_mode=None,
+    custom_nodes=None,
 ) -> list[RegionPoints]:
     """Points of every body part of every used skeleton, one entry per part and person.
 
@@ -866,7 +932,14 @@ def collect_person_region_points(
     collected = []
     for index, person in enumerate(pose.people, start=1):
         person_radius = resolve_person_radius(person, fixed, percent)
-        groups = collect_region_points(pose, regions=regions, radius=person_radius, extend=extend, people=[person])
+        groups = collect_region_points(
+            pose,
+            regions=regions,
+            radius=person_radius,
+            extend=extend,
+            people=[person],
+            custom_nodes=custom_nodes,
+        )
         for code in REGION_MASK_ORDER:
             points = groups.get(code)
             if not points:
@@ -883,6 +956,7 @@ def build_region_masks(
     extend: float = 0.0,
     radius_percent: float = 0.0,
     radius_mode=None,
+    custom_nodes=None,
 ) -> list[RegionMask]:
     """One mask per body part *and per person*, so separate skeletons never share a mask."""
     return [
@@ -894,7 +968,7 @@ def build_region_masks(
             len(item.points),
             item.radius,
         )
-        for item in collect_person_region_points(pose, regions, radius, extend, radius_percent, radius_mode)
+        for item in collect_person_region_points(pose, regions, radius, extend, radius_percent, radius_mode, custom_nodes)
     ]
 
 
@@ -1112,9 +1186,11 @@ def detect_inpaint_regions(
     radius_percent: float = 0.0,
     radius_mode=None,
     max_people=DEFAULT_MAX_PEOPLE,
+    custom_nodes=None,
 ) -> dict:
     started = time.time()
-    requested = [code for code in (REGION_CODES if regions is None else regions) if code in REGION_CODES]
+    selected = REGION_CODES if regions is None else regions
+    requested = [code for code in selected if code in SELECTION_CODES or code in CUSTOM_NODE_CODES]
     if not requested:
         raise ValueError("no pose region selected")
 
@@ -1122,6 +1198,7 @@ def detect_inpaint_regions(
     detected_people = len(detected.people)
     pose = detected.limit_people(max_people)
     percent = 0.0 if canonical_radius_mode(radius_mode) == "px" else radius_percent
+    nodes = canonical_custom_nodes(custom_nodes)
 
     masks = []
     for item in collect_person_region_points(
@@ -1131,6 +1208,7 @@ def detect_inpaint_regions(
         extend=extend,
         radius_percent=percent,
         radius_mode=radius_mode,
+        custom_nodes=nodes,
     ):
         masks.append(
             {
@@ -1155,12 +1233,14 @@ def detect_inpaint_regions(
 
     if masks:
         message = f"{len(masks)} mask(s) from {people} person(s)" if not limited else f"{len(masks)} mask(s) from {people} of {detected_people} person(s)"
-    elif people:
-        message = "No face/hand/foot points found"
-    elif detected_people:
-        message = "No face/hand/foot points found in the used skeletons"
     else:
-        message = "No person detected"
+        part = "pose" if nodes else "face/hand/foot"
+        if people:
+            message = f"No {part} points found"
+        elif detected_people:
+            message = f"No {part} points found in the used skeletons"
+        else:
+            message = "No person detected"
 
     return {
         "backend": pose.backend,

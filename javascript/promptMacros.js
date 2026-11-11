@@ -18,7 +18,7 @@
   'use strict';
 
   const SYSTEM_MACROS = ['TXT2IMG', 'HIRES_FIX', 'IMG2IMG', 'INPAINT', 'POSE_INPAINT', 'POSE_INPAINT_PART'];
-  const PART_VALUES = ['0', 'FACE', 'FEET', 'HANDS'];
+  const PART_VALUES = ['0', 'FACE', 'FEET', 'HANDS', 'BODY'];
   const STORE_PREFIX = 'pedit.macros.';
 
   let syntax = null;

@@ -53,8 +53,9 @@ styles:
 
 # Randomize background scene per panel?
 #   true  -> each panel gets its own random scene (weighted).
-#   false -> panels stay on the plain white sheet.
-randomize_panel_scene: true
+#   false -> PURE WHITE background (#FFFFFF) in every panel (the default,
+#           so the dataset is clean and easy to train on).
+randomize_panel_scene: false
 
 # Scene entries may carry weight too. 'plain white background' is
 # pre-configured with a raised weight so sheets stay mostly clean.
@@ -113,22 +114,16 @@ avatar_tasks:
     size: "2K"
 
 # Sheet schemes for EVERY outfit fullbody picture. 'kind' is
-# upper or fullbody; add entries to also generate e.g. a 2x4
-# fullbody turnaround or a 3x3 upper grid.
-outfit_tasks:
-  - kind: upper
-    grid: [3, 4]
-    aspect: "3:4"
-    size: "2K"
-  - kind: upper
-    grid: [3, 3]
-    aspect: "2:3"
-    size: "2K"
-  - kind: fullbody
-    grid: [3, 4]
-    aspect: "3:4"
-    size: "2K"
-  - kind: fullbody
-    grid: [3, 3]
-    aspect: "2:3"
-    size: "2K"
+# upper or fullbody.
+# EMPTY by default: only the avatar -> portrait grids above are generated,
+# so --fullbody is ignored. Add entries to re-enable outfit sheets, e.g.
+#   outfit_tasks:
+#     - kind: upper
+#       grid: [3, 4]
+#       aspect: "3:4"
+#       size: "2K"
+#     - kind: fullbody
+#       grid: [3, 4]
+#       aspect: "3:4"
+#       size: "2K"
+outfit_tasks: []

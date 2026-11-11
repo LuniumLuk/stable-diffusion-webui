@@ -15,6 +15,7 @@ PART_LABELS = {
     "Face": "face",
     "Hands": "hands",
     "Feet": "feet",
+    "Custom nodes": "custom",
 }
 _PART_CODES = set(PART_LABELS.values())
 
@@ -86,7 +87,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             with gr.Row():
                 pose_parts = gr.CheckboxGroup(
                     choices=list(PART_LABELS.keys()),
-                    value=list(PART_LABELS.keys()),
+                    value=["Face", "Hands", "Feet"],
                     label="Parts",
                     elem_id=self.elem_id("pose_inpaint_parts"),
                 )
@@ -113,6 +114,15 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                     elem_id=self.elem_id("pose_inpaint_max_people"),
                     tooltip="Keep only the most confident and largest skeletons; each one gets its own masks",
                 )
+
+            pose_custom_nodes = gr.CheckboxGroup(
+                choices=list(inpaint_pose.CUSTOM_NODE_LABELS.values()),
+                value=[],
+                label="Custom nodes",
+                elem_id=self.elem_id("pose_inpaint_custom_nodes"),
+                visible=False,
+                tooltip="Extra skeleton joints masked when Parts includes 'Custom nodes'; each joint group covers both sides of the body",
+            )
 
             with gr.Row():
                 pose_radius = gr.Slider(
@@ -205,8 +215,10 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             )
             gr.Markdown(
                 "Each part of every used skeleton is inpainted with its own mask, original masked content, "
-                "only-masked area and latent upscale. DWPose models from the Inpaint tab's Pose masks panel "
-                "give the best anime face/hand/foot points.",
+                "only-masked area and latent upscale. Custom nodes adds extra skeleton joints "
+                "(shoulders, elbows, wrists, hips, knees or ankles), one mask per joint group and skeleton, "
+                "and resolves the prompt as POSE_INPAINT_PART BODY. DWPose models from the Inpaint tab's "
+                "Pose masks panel give the best anime face/hand/foot points.",
                 elem_id=self.elem_id("pose_inpaint_hint"),
             )
 
@@ -215,6 +227,12 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             return gr.update(visible=not percent), gr.update(visible=percent)
 
         pose_radius_mode.change(fn=switch_radius_mode, inputs=[pose_radius_mode], outputs=[pose_radius, pose_radius_percent], show_progress=False)
+
+        def switch_custom_nodes(selected):
+            codes = {PART_LABELS.get(part, part) for part in (selected or [])}
+            return gr.update(visible="custom" in codes)
+
+        pose_parts.change(fn=switch_custom_nodes, inputs=[pose_parts], outputs=[pose_custom_nodes], show_progress=False)
 
         def switch_inpaint_mode(selected):
             relative = inpaint_pose.canonical_inpaint_mode(selected) == "scale"
@@ -242,6 +260,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             pose_inpaint_scale,
             pose_max_people,
             pose_backend,
+            pose_custom_nodes,
         )
 
     def setup(
@@ -262,6 +281,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         inpaint_scale=None,
         max_people=None,
         backend=None,
+        custom_nodes=None,
     ):
         p.pose_inpaint_enabled = bool(enable)
         p.pose_inpaint_results = {}
@@ -296,6 +316,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             "inpaint_scale": max(1.0, min(4.0, scale_value)),
             "max_people": inpaint_pose.clamp_max_people(people_value),
             "backend": inpaint_pose.canonical_backend(backend),
+            "custom_nodes": inpaint_pose.canonical_custom_nodes(custom_nodes),
         }
         p.extra_generation_params["Pose inpaint"] = _pose_infotext_for_image
 
@@ -316,6 +337,9 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
 
         if not config.get("parts"):
             self._record(p, global_index, "skipped (no parts)")
+            return
+        if set(config.get("parts")) == {"custom"} and not config.get("custom_nodes"):
+            self._record(p, global_index, "skipped (no custom nodes)")
             return
         if _is_dit_job(p):
             self._record(p, global_index, "skipped (DiT backend)")
@@ -358,7 +382,8 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         pose = detected.limit_people(config.get("max_people"))
         passes, points, radius = self._plan_passes(image, pose, config)
         if not passes:
-            self._record(p, global_index, "skipped (no face/hand/foot points)")
+            part = "custom node" if set(config.get("parts")) == {"custom"} else "face/hand/foot"
+            self._record(p, global_index, f"skipped (no {part} points)")
             return
 
         if config.get("save_intermediate"):
@@ -411,6 +436,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
         mode = config.get("inpaint_mode", "px")
         scale = config.get("inpaint_scale", inpaint_pose.DEFAULT_INPAINT_SCALE)
         extend = config.get("extend", 0)
+        custom_nodes = config.get("custom_nodes")
 
         def pass_size(mask):
             return inpaint_pose.region_inpaint_size(mask, size, padding, mode=mode, scale=scale)
@@ -423,6 +449,7 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
                 extend=extend,
                 radius_percent=percent,
                 radius_mode=config.get("radius_mode"),
+                custom_nodes=custom_nodes,
             )
             passes = [
                 PosePass(prompt_parser.pose_inpaint_part(item.region), item.label, item.mask, *pass_size(item.mask))
@@ -432,7 +459,9 @@ class ScriptPoseInpaint(scripts.ScriptBuiltinUI):
             return passes, sum(item.points for item in built), radius
 
         radius = inpaint_pose.resolve_radius(pose, config["radius"], percent, mode=config.get("radius_mode"))
-        mask, points = inpaint_pose.build_region_mask(pose, regions=config["parts"], radius=radius, extend=extend)
+        mask, points = inpaint_pose.build_region_mask(
+            pose, regions=config["parts"], radius=radius, extend=extend, custom_nodes=custom_nodes
+        )
         if mask is None:
             return [], 0, radius
         if mode == "scale":

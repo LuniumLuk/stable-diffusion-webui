@@ -457,7 +457,7 @@ nestable) use the same module: `analyzeConditionLine()` checks one directive and
 `analyzeConditionLines()` the whole prompt, so a missing `@ENDIF` is reported on the `@IF` that
 opened it and a stray `@ELSE` on itself. Macros are `TXT2IMG`, `HIRES_FIX`, `IMG2IMG`, `INPAINT`,
 `POSE_INPAINT` (1 while that stage runs) and `POSE_INPAINT_PART` (`0` / `FACE` / `FEET` /
-`HANDS`); conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses.
+`HANDS` / `BODY`); conditions take `!`, `==`, `!=`, `&&`/`and`, `||`/`or` and parentheses.
 Custom macros are declared in the prompt as `@MACRO(FLAG)` (boolean, off by default) or
 `@MACRO(MOOD){happy, sad}` (enum, first alias by default). A name used in a condition without a
 declaration behaves as an off boolean. `prompt-syntax.js` parses the declarations, suggests the
@@ -494,7 +494,7 @@ autocomplete source return the `@IF` macros (with the "1 during …" detail) ins
 pool (`conditionCompletions()` in `prompt-syntax.js`). It stays quiet while the directive is
 still just `@IF` and opens on the space after `@IF` / `@ELSEIF`; right after `==` / `!=` / `&&`
 it waits for that operator's space too, and then `POSE_INPAINT_PART == ` lists the enum values
-(`FACE` / `FEET` / `HANDS` / `0` / `NONE`), a custom enum lists its aliases, and a boolean macro
+(`FACE` / `FEET` / `HANDS` / `BODY` / `0` / `NONE`), a custom enum lists its aliases, and a boolean macro
 lists `1` / `0`.
 
 ### 13.3 Gallery card quick actions

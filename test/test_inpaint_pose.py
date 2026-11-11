@@ -221,6 +221,74 @@ def test_build_region_masks_empty_without_points():
     assert inpaint_pose.build_region_masks(pose, regions=["face"], radius=10) == []
 
 
+def _custom_node_person():
+    body = [(100.0, 100.0, 0.9)] * 17
+    body[5] = (90.0, 120.0, 0.9)    # left shoulder
+    body[6] = (110.0, 120.0, 0.9)   # right shoulder
+    body[13] = (90.0, 200.0, 0.9)   # left knee
+    body[14] = (110.0, 200.0, 0.9)  # right knee
+    return inpaint_pose.PersonPose(body=body, face=[(100.0, 80.0, 0.9)])
+
+
+def test_custom_nodes_build_their_own_masks():
+    pose = inpaint_pose.DetectedPose("test", 300, 300, [_custom_node_person()])
+
+    masks = inpaint_pose.build_region_masks(pose, regions=["custom"], custom_nodes=["Shoulders", "Knees"], radius=10)
+    assert [item.region for item in masks] == ["shoulders", "knees"]
+    assert [item.label for item in masks] == ["Shoulders", "Knees"]
+    assert [item.points for item in masks] == [2, 2]
+    assert masks[0].mask.getpixel((90, 120)) == 255
+    assert masks[0].mask.getpixel((90, 200)) == 0
+    assert masks[1].mask.getpixel((90, 200)) == 255
+    assert masks[1].mask.getpixel((90, 120)) == 0
+
+
+def test_custom_nodes_need_the_custom_part():
+    pose = inpaint_pose.DetectedPose("test", 300, 300, [_custom_node_person()])
+
+    # the nodes only join the mask set through the "custom" part ...
+    assert [item.region for item in inpaint_pose.build_region_masks(pose, regions=["face"], custom_nodes=["knees"], radius=10)] == ["face"]
+    # ... or when their own region code is requested
+    assert [item.region for item in inpaint_pose.build_region_masks(pose, regions=["knees"], radius=10)] == ["knees"]
+
+
+def test_custom_nodes_join_a_combined_mask():
+    pose = inpaint_pose.DetectedPose("test", 300, 300, [_custom_node_person()])
+
+    mask, points = inpaint_pose.build_region_mask(pose, regions=["face", "custom"], custom_nodes=["Knees"], radius=10)
+    assert points == 3
+    assert mask.getpixel((100, 80)) == 255
+    assert mask.getpixel((90, 200)) == 255
+
+
+def test_custom_nodes_are_labelled_per_skeleton():
+    pose = inpaint_pose.DetectedPose("test", 600, 600, [_custom_node_person(), _custom_node_person()])
+
+    masks = inpaint_pose.build_region_masks(pose, regions=["custom"], custom_nodes=["knees"], radius=10)
+    assert [(item.person, item.label) for item in masks] == [(1, "Knees 1"), (2, "Knees 2")]
+
+
+def test_canonical_custom_nodes_accepts_labels_and_codes():
+    assert inpaint_pose.canonical_custom_nodes(["Knees", "shoulders"]) == ["shoulders", "knees"]
+    assert inpaint_pose.canonical_custom_nodes("hips, Ankles") == ["hips", "ankles"]
+    assert inpaint_pose.canonical_custom_nodes(["nose", "knees"]) == ["knees"]
+    assert inpaint_pose.canonical_custom_nodes(None) == []
+
+
+def test_detect_regions_reports_custom_masks(monkeypatch):
+    monkeypatch.setattr(
+        inpaint_pose,
+        "detect_pose",
+        lambda image, backend="auto": inpaint_pose.DetectedPose("test", 300, 300, [_custom_node_person()]),
+    )
+
+    result = inpaint_pose.detect_inpaint_regions(
+        Image.new("RGB", (300, 300)), regions=["custom"], custom_nodes=["Knees"], radius=10, include_skeleton=False
+    )
+    assert [(mask["region"], mask["name"]) for mask in result["masks"]] == [("knees", "Knees")]
+    assert result["msg"] == "1 mask(s) from 1 person(s)"
+
+
 def test_build_region_masks_separates_each_skeleton():
     first = inpaint_pose.PersonPose(body=[(100.0, 100.0, 0.9)] * 17, face=[(100.0, 80.0, 0.9)])
     second = inpaint_pose.PersonPose(body=[(300.0, 300.0, 0.9)] * 17, face=[(300.0, 280.0, 0.9)])

@@ -605,7 +605,7 @@ export const CONDITION_MACROS = {
   IMG2IMG: '1 during img2img, Hires. fix and inpaint',
   INPAINT: '1 during inpaint and pose inpaint',
   POSE_INPAINT: '1 during a pose inpaint pass (an inpaint pass, so INPAINT is 1 too)',
-  POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET or HANDS',
+  POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET, HANDS or BODY (custom nodes)',
 };
 export const CONDITION_MACRO_NAMES = Object.keys(CONDITION_MACROS);
 export const CONDITION_EXAMPLE = '@IF TXT2IMG … @ENDIF';
@@ -782,7 +782,7 @@ function macroDetail(name, definitions = {}) {
 }
 
 /** Enum values of POSE_INPAINT_PART, in the order the dropdown offers them. */
-export const CONDITION_PART_VALUES = ['FACE', 'FEET', 'HANDS', '0', 'NONE'];
+export const CONDITION_PART_VALUES = ['FACE', 'FEET', 'HANDS', 'BODY', '0', 'NONE'];
 
 const CONDITION_HEAD_RE = /^[ \t]*@(if|elif|elseif)(?![A-Za-z0-9_])(.*)$/i;
 // the enum / boolean values only show once the space after '==' / '!=' is typed
@@ -796,7 +796,7 @@ const CONDITION_OPERATOR_TAIL_RE = /(==|!=|&&|\|\|)$/;
  * `before` is the text of the current line up to the caret.  Returns null when the
  * line is not a condition, otherwise `{ from, options, macro }`:
  *   - after `POSE_INPAINT_PART == ` / `!= ` (space included): the enum values
- *     (FACE / FEET / HANDS / 0 / NONE), or `1` / `0` for the other macros;
+ *     (FACE / FEET / HANDS / BODY / 0 / NONE), or `1` / `0` for the other macros;
  *   - anywhere else in the expression: the macro names.
  * The list only opens once the space after `@IF` / `@ELSEIF` is typed, and it stays
  * quiet right after an operator until that operator's space arrives.  `from` is the

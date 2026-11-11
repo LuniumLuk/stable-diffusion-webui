@@ -1,2 +1,2 @@
 TEXT_MODEL=gemini-3.8-flash
-IMAGE_MODEL=gemini-nano-banana-2.1
+IMAGE_MODEL=gemini-3-pro-image

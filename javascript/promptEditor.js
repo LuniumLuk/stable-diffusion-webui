@@ -369,7 +369,7 @@
         IMG2IMG: '1 during img2img, Hires. fix and inpaint',
         INPAINT: '1 during inpaint and pose inpaint',
         POSE_INPAINT: '1 during a pose inpaint pass (an inpaint pass, so INPAINT is 1 too)',
-        POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET or HANDS',
+        POSE_INPAINT_PART: 'the pose pass part: 0 (none), FACE, FEET, HANDS or BODY (custom nodes)',
     };
     const CONDITION_MACRO_NAMES = Object.keys(CONDITION_MACROS);
     const CONDITION_EXAMPLE = '@IF TXT2IMG … @ENDIF';

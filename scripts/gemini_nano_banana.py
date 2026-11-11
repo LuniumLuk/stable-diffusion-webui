@@ -702,13 +702,24 @@ def on_ui_tabs():
             # ---------------------------------------------------- lora data maker
             with gr.Tab("\U0001F3A8 LoRA Data Maker"):
                 gr.Markdown(
-                    "Built-in randomized prompt pools (no prompt files): avatar \u2192 face "
-                    "sheets, avatar + outfit pictures \u2192 upper/fullbody sheets; panels + "
-                    "optional captions are collected into `training_data/lora_<trigger>`."
+                    "Built-in randomized prompt pools (no prompt files): avatar \u2192 "
+                    "portrait sheets by default; avatar + outfit pictures \u2192 upper/fullbody "
+                    "sheets once `outfit_tasks` is added to the YAML config. Panels + "
+                    "optional captions are collected into `training_data/lora_<trigger>`. "
+                    "Main-style reference images are attached for the art style only \u2014 "
+                    "their characters are never copied."
                 )
                 with gr.Row():
                     ld_avatar = gr.Files(label="Avatar image(s) \u2014 required", file_types=["image"])
-                    ld_fullbody = gr.Files(label="Outfit / fullbody image(s)", file_types=["image"])
+                    ld_fullbody = gr.Files(
+                        label="Outfit / fullbody image(s) \u2014 only if outfit_tasks is enabled",
+                        file_types=["image"])
+                with gr.Row():
+                    ld_main_style = gr.Files(
+                        label="Main style reference image(s) \u2014 art style only (opt.)",
+                        file_types=["image"])
+                    ld_main_perc = gr.Slider(0, 100, value=75, step=5,
+                                             label="Main style share of panels (%)")
                 with gr.Row():
                     ld_trigger = gr.Textbox(label="Trigger word (opt.)", placeholder="e.g. rana")
                     ld_style = gr.Textbox(label="Pin one style tag (opt.)",
@@ -723,8 +734,9 @@ def on_ui_tabs():
                 ld_status = gr.Markdown("_Ready._")
                 ld_preview = gr.Gallery(label="Raw sheets of this run", columns=6, height=280)
 
-                def _run_lora(avatar, fullbody, trigger, style, variations, seed,
-                              captions, dry, model_id, key_val):
+                def _run_lora(avatar, fullbody, main_style, main_perc, trigger,
+                              style, variations, seed, captions, dry, model_id,
+                              key_val):
                     try:
                         avatar = list(avatar or [])
                         if not avatar:
@@ -732,6 +744,10 @@ def on_ui_tabs():
                         args = ["--avatar"] + avatar
                         if fullbody:
                             args += ["--fullbody"] + list(fullbody)
+                        if main_style:
+                            args += ["--main-style"] + list(main_style)
+                        args += ["--main-style-perc",
+                                 int(main_perc if main_perc is not None else 75)]
                         if trigger and trigger.strip():
                             args += ["--trigger", trigger.strip()]
                         if style and style.strip():
@@ -763,7 +779,8 @@ def on_ui_tabs():
                         return [], "\u274C %s" % exc
 
                 ld_run.click(_run_lora,
-                             [ld_avatar, ld_fullbody, ld_trigger, ld_style, ld_variations, ld_seed,
+                             [ld_avatar, ld_fullbody, ld_main_style, ld_main_perc,
+                              ld_trigger, ld_style, ld_variations, ld_seed,
                               ld_captions, ld_dry, ld_model, api_key_box],
                              [ld_preview, ld_status])
 

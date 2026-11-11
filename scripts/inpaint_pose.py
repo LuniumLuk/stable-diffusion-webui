@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class InpaintPoseRequest(BaseModel):
     input_image: str
     regions: list[str] = Field(default_factory=lambda: ["face", "hands", "feet"])
+    custom_nodes: list[str] = Field(default_factory=list)
     radius: int = 40
     radius_mode: str = "percent"
     radius_percent: float = 0.0
@@ -57,6 +58,7 @@ def inpaint_pose_api(_: gr.Blocks, app):
                 max_people=payload.max_people,
                 backend=payload.backend,
                 include_skeleton=payload.include_skeleton,
+                custom_nodes=payload.custom_nodes,
             )
         except inpaint_pose.PoseModelUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
