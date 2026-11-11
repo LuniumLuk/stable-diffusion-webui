@@ -7644,14 +7644,81 @@ body.resizing .resize-handle {
     padding: 10px 16px 14px;
 }
 
-.gv2-modal-foot .gv2-btn[data-modal="go"] {
+.gv2-modal-foot .gv2-btn[data-modal="go"],
+.gv2-modal-foot .gv2-btn[data-var="go"] {
     color: #cffafe;
     border-color: rgba(34, 211, 238, 0.65);
     background: rgba(8, 145, 178, 0.3);
 }
 
-.gv2-modal-foot .gv2-btn[data-modal="go"]:hover:not(:disabled) {
+.gv2-modal-foot .gv2-btn[data-modal="go"]:hover:not(:disabled),
+.gv2-modal-foot .gv2-btn[data-var="go"]:hover:not(:disabled) {
     background: rgba(34, 211, 238, 0.28);
+}
+
+/* Number entry inside a modal row (e.g. the variation count). */
+.gv2-modal-numbox {
+    display: inline-flex;
+    flex: none;
+}
+
+.gv2-modal-numbox input {
+    width: 74px;
+    padding: 5px 8px;
+    border: 1px solid var(--gv2-line);
+    border-radius: 7px;
+    background: #0b1220;
+    color: #e2e8f0;
+    font-size: 12.5px;
+    text-align: right;
+}
+
+.gv2-modal-numbox input:focus {
+    outline: none;
+    border-color: rgba(34, 211, 238, 0.7);
+}
+
+.gv2-modal-hidden {
+    display: none;
+}
+
+/* Options fold: compact inline checkbox (e.g. "Multiple album filters"). */
+.gv2-opt-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px solid var(--gv2-line);
+    border-radius: 8px;
+    background: var(--gv2-panel);
+    color: var(--gv2-text);
+    font-size: 12.5px;
+    line-height: 1.5;
+    cursor: pointer;
+    user-select: none;
+}
+
+.gv2-opt-toggle:hover {
+    border-color: rgba(56, 189, 248, 0.55);
+}
+
+.gv2-opt-toggle input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #22d3ee;
+    cursor: pointer;
+}
+
+/* Album dialog controls (reuses .gv2-modal*). */
+.gv2-modal-pick {
+    flex: 0 1 260px;
+    min-width: 160px;
+}
+
+.gv2-modal-input {
+    flex: 0 1 200px;
+    width: 200px !important;
 }
 
 /* Compare window: selected-image list | preview | detail panel. */
@@ -8417,6 +8484,12 @@ html.gv2-compare-open body {
     color: #64748b;
     font-size: 11px;
     text-align: center;
+}
+
+.gv2-ctx-sep {
+    height: 1px;
+    margin: 3px 5px;
+    background: #334155;
 }
 
 .gv2-detail-tagadd {

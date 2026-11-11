@@ -161,6 +161,85 @@ Implements the plan in `GALLERY_V2_REFACTOR_PLAN.html` (see also
   actions, item batch-count override, batch-steps multiplier, compiled/source payload, skip notes,
   queue-click and image-injection counts, cancel + hotkey suppression.
 
+## Variations from the card right-click menu
+
+Two entries sit under a separator in the card context menu (`VARIATION_ACTIONS`), next to the
+"Send to" actions:
+
+- **🎲 Make variation** — re-generates the item once with a **random seed** (the seed component is
+  set to `-1`, so the run picks a different one), instantly, no dialog.
+- **🎲 Make N variations…** — opens a modal (`#gv2-var-modal`) with a number box (1–64, default 4)
+  and queues that many re-runs; the count is clamped, the confirm button label follows the input
+  (`Queue <N> variation(s)`) and shows a progress bar + `Queued i / N` while it works.
+
+Both re-run from the **compiled prompt** (`compiledInfotext()`: the compiled prompt / negative are
+swapped into the item's own infotext, so `Steps: …` and every other parameter are kept). Items
+without a compiled prompt fall back to the source prompt — the N-dialog warns, the single action
+toasts it.
+
+Where the payload goes is derived from how the item was made (`item.op`, falling back to the derived
+`op_label`):
+
+| item op | target |
+|---|---|
+| `txt2img`, `hires-fix` | txt2img tab: prompt + parameters pasted through `#gv2_apply_txt2img_btn`, new seed |
+| anything else (img2img, inpaint, engines, imported) | img2img tab: the item becomes the init image (`#img2img_image`), its parameters are pasted through `#gv2_apply_img2img_btn`, new seed |
+
+Details worth knowing:
+
+- The gallery tab is **kept visible** — no `switchToTabByName`, unlike the send-to actions. For the
+  img2img target the plain img2img sub-tab is selected by clicking its nav button (`ensureImg2ImgMode()`),
+  because the queue payload carries `get_tab_index('mode_img2img')`; calling `switch_to_img2img()`
+  would jump to the img2img tab and hide the progress dialog (a child of the gallery root).
+- `Batch count` / `Batch size` are forced to 1 × 1 so "N variations" really is N images (the paste
+  bridge only carries Batch size, and the item's own batch numbers would multiply the count).
+- The Sampler script's `Batch steps (queue)` list still multiplies the jobs per click
+  (`uiBatchStepsMultiplier(tab)` now takes the tab), so the dialog's label, the job count and the
+  progress total all include it.
+- One paste + one click per job: the payload is applied once (420 ms after the bridge click, then
+  seed/batch written) and the Queue button is clicked `N` times 320 ms apart — the queue snapshots
+  the component values per click, and `-1` gives each job its own seed.
+- Blocked cases: an img2img-target item that was trashed or has no media file, and an item with no
+  prompt at all — the N-dialog disables the confirm button and says why; the single action toasts.
+- Esc cancels, Enter queues, and `gv2Hotkeys` ignores keyboard shortcuts while the dialog is open.
+
+Tests: jsdom harness over the real file, 33 checks (menu entries + separator, txt2img and img2img
+routing, compiled-prompt payload, seed/batch overrides, gallery tab kept, batch-steps multiplier,
+count clamping, blocked item, Esc/hotkey handling) plus a 3-check regression run of the Batch
+Img2Img action after the shared-helper refactor.
+
+## Filter defaults, single-album albums and the Album dialog
+
+Three gallery UX changes (all in `javascript/galleryV2.js`, plus CSS):
+
+- **Default state filter is Active, not All.** `defaultFilters()` returns
+  `states: ['active']`, used for the initial `state.filters` and by `resetFiltersState()` (the
+  "Clear filters" button and the `R` hotkey). The All chip still means "every non-trashed state"
+  (`states: []`), and a saved filter stores whatever it was saved with, so applying an old
+  All view keeps showing all states.
+- **Album filter is single-select by default.** A new Options checkbox `#gv2-multi-album`
+  ("Multiple album filters", persisted as `gv2.prefs.v1.multiAlbum`, off by default) drives
+  `setMultiAlbum()`. While off, `toggleAlbumFilter()` replaces the current album instead of
+  appending (clicking the active album, or "No album", clears it); while on it appends/removes as
+  before. Turning the toggle off while several albums are filtered keeps the most recently picked
+  one (filters append, so that is the last entry) and toasts which album stayed.
+- **"Album…" opens a dialog.** The batch bar's `data-batch="album"` now calls `openAlbumDialog()`
+  (`#gv2-album-modal`, reusing `.gv2-modal*`) instead of growing the inline form at the top of the
+  Albums fold — that inline `#gv2-album-form` markup, its wiring and `applyAlbumForm` /
+  `removeAlbumForm` / `hideAlbumForm` are gone. The dialog shows the selection count, an album
+  `<select>` (name · count, 📦 for bundled; preselected when exactly one album filter is active) and
+  a "new album" name box ("a new name wins over the picked album"). "Add selected" posts
+  `{add: keys, album}` or `{add: keys, new_name}`; "Remove selected" is disabled until an album is
+  picked and posts `{album, add: [], remove: keys}`. Success closes the dialog, clears the selection
+  and re-queries; failures stay in the dialog as a status line. Enter in the name box adds, Esc and
+  the backdrop close (both blocked while a request is running), and `gv2Hotkeys` ignores shortcuts
+  while the dialog exists.
+
+Tests: jsdom harness over the real file — 29 checks (default Active + All/Active chips + clear,
+single-select replace/clear/`none`, multi-select append/remove, pref persistence, collapse on
+toggle-off, dialog contents/disabled states, add with album, add with a new name, remove, Esc,
+hotkey guard) plus a 3-check smoke run of the variations and Batch Img2Img actions.
+
 ## Detail fullscreen split viewer
 
 - Clicking the detail drawer preview opens the app-wide lightbox as before. On viewports

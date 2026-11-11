@@ -60,8 +60,14 @@
     unrated: '\u2B1C'
   };
 
+  // The gallery opens on the ACTIVE items; "All" is one click away on the state
+  // chips, and a saved filter may still store the empty list (= all states).
+  function defaultFilters() {
+    return { q: '', preset: 'all', states: ['active'], sources: [], albums: [], show_albumed: false, rating: '', tags: {} };
+  }
+
   var state = {
-    filters: { q: '', preset: 'all', states: [], sources: [], albums: [], show_albumed: false, rating: '', tags: {} },
+    filters: defaultFilters(),
     sort: 'time_desc',
     limit: PAGE,
     offset: 0,
@@ -76,6 +82,7 @@
     facets: null,
     views: [],
     albums: [],
+    multiAlbum: false, // album filter: several albums at once instead of only one
     selectMode: false,
     lastIndex: -1,
     detailKey: null,
@@ -144,6 +151,15 @@
     ['inpaint', '\u{1F3A8}  Inpaint', 'Send the image to inpaint (right-click for send variations)'],
     ['composer', '\u{1F9E9}  Composer', 'Open the image in the Composer tab'],
     ['censor', '\u{1F58A}\uFE0F  Censor', 'Open the image in the Censor panel']
+  ];
+
+  // Right-click extras: re-generate the item with a random seed instead of
+  // sending it somewhere.
+  var VARIATION_ACTIONS = [
+    ['one', '\u{1F3B2}  Make variation',
+      'Re-generate this image with the compiled prompt and a random seed'],
+    ['many', '\u{1F3B2}  Make N variations\u2026',
+      'Queue several variations, each re-run with its own random seed']
   ];
 
   // Variations of the bare send actions (img2img / inpaint). '' is "image only",
@@ -298,16 +314,30 @@
     return { prompt: prompt, negative: negative, params: params };
   }
 
+  /** The item's infotext with its prompt / negative prompt block replaced. */
+  function infotextWithPrompt(item, prompt, negative) {
+    var parts = splitInfotext((item && item.infotext) || '');
+    if (!parts.params) return prompt;
+    return prompt + (negative ? '\nNegative prompt: ' + negative : '') + '\n' + parts.params;
+  }
+
   /** The item's infotext with its prompt/negative replaced by the remembered variant. */
   function variantInfotext(item) {
     var infotext = item.infotext || '';
     if (state.promptVariant !== 'compiled' || !hasCompiledPrompt(item)) return infotext;
-    var parts = splitInfotext(infotext);
-    if (!parts.params) return activePrompt(item);
-    var negative = activeNegativePrompt(item);
-    return activePrompt(item)
-      + (negative ? '\nNegative prompt: ' + negative : '')
-      + '\n' + parts.params;
+    return infotextWithPrompt(item, activePrompt(item), activeNegativePrompt(item));
+  }
+
+  /** Infotext carrying the COMPILED prompt; variations always re-run from it. */
+  function compiledInfotext(item) {
+    if (hasCompiledPrompt(item)) {
+      return infotextWithPrompt(item, item.compiled_prompt || '', item.compiled_negative_prompt || '');
+    }
+    if (item && item.infotext) return item.infotext;
+    var prompt = (item && item.prompt) || '';
+    var negative = (item && item.negative_prompt) || '';
+    if (prompt && negative) return prompt + '\nNegative prompt: ' + negative;
+    return prompt;
   }
 
   // "Send prompt + negative only": write JUST the item's prompt / negative
@@ -523,8 +553,9 @@
 
   /** One Queue click becomes one job per value of the Sampler script's
    *  "Batch steps (queue)" box, so an active list multiplies the image count. */
-  function uiBatchStepsMultiplier() {
-    var host = gradioHost('img2img_batch_steps');
+  function uiBatchStepsMultiplier(tab) {
+    var prefix = tab === 'txt2img' ? 'txt2img' : 'img2img';
+    var host = gradioHost(prefix + '_batch_steps');
     var input = host ? host.querySelector('textarea, input') : null;
     var raw = input ? String(input.value || '') : '';
     var values = raw.split(',').map(function (part) { return parseInt(part.trim(), 10); })
@@ -557,7 +588,7 @@
     var needs = batchImg2ImgNeeds(only);
     var uiCount = Math.max(1, uiNumber('img2img_batch_count', 1));
     var uiSize = Math.max(1, uiNumber('img2img_batch_size', 1));
-    var stepsMul = uiBatchStepsMultiplier();
+    var stepsMul = uiBatchStepsMultiplier('img2img');
     var rows = [];
     var skipped = [];
     items.forEach(function (item) {
@@ -862,6 +893,275 @@
     }, 220);
   }
 
+  // ---------------------------------------------------------------- variations
+  //
+  // "Make variation" re-runs an item as a fresh generation: the COMPILED prompt
+  // (with the item's own parameters) is pasted into the tab the item came from,
+  // the seed is set to -1 so the run picks a different one, and the batch is
+  // forced to 1 x 1 so one variation is exactly one image. "Make N variations"
+  // queues that same payload N times.
+  //
+  // Tab choice: a txt2img / hires-fix item is re-generated in txt2img (same
+  // prompt + parameters, new seed); anything else (img2img, inpaint, engine
+  // outputs, imported files) is fed back into img2img as the init image, which
+  // keeps the transformation the item already carries.
+
+  var VARIATION_MAX = 64;
+  var VARIATION_DEFAULT = 4;
+
+  function variationTabFor(item) {
+    var op = String((item && item.op) || (item && item.op_label) || '').toLowerCase();
+    return op === 'txt2img' || op === 'hires-fix' ? 'txt2img' : 'img2img';
+  }
+
+  function variationBlocked(item, tab) {
+    if (tab !== 'img2img') return '';
+    if (!item || item.state === 'trashed') return 'this item was trashed, its image is gone';
+    if (!(item.path || item.alias_path)) return 'this item has no image file to re-run';
+    return '';
+  }
+
+  /** Write a value into a component that may render as a number input or a
+   *  textbox (the seed is a gr.Number, or a gr.Textbox with --use-textbox-seed). */
+  function setGradioField(id, value) {
+    var host = gradioHost(id);
+    var input = host ? host.querySelector('input[type="number"], input[type="text"], input:not([type]), textarea') : null;
+    if (!input) return false;
+    var proto = input.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(input, String(value));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  /** The queue payload carries the active img2img sub-tab index
+   *  (`get_tab_index('mode_img2img')`), so the plain img2img sub-tab has to be
+   *  the selected one. This clicks the nav button directly instead of calling
+   *  switch_to_img2img(), which would also jump away from the gallery tab. */
+  function ensureImg2ImgMode() {
+    var host = gradioApp().getElementById('mode_img2img');
+    var nav = host ? (host.querySelector('.tab-nav') || host.querySelector('div')) : null;
+    var buttons = nav ? nav.querySelectorAll('button') : [];
+    if (!buttons.length) return false;
+    if (!buttons[0].classList.contains('selected')) buttons[0].click();
+    return true;
+  }
+
+  /**
+   * Queue `count` variation jobs of `item`.
+   * ui.progress(done, jobs), ui.done(jobs), ui.fail(message).
+   */
+  function runVariations(item, count, ui) {
+    var tab = variationTabFor(item);
+    var blocked = variationBlocked(item, tab);
+    if (blocked) { ui.fail('Cannot make a variation: ' + blocked); return; }
+    var text = compiledInfotext(item);
+    if (!text) { ui.fail('Cannot make a variation: this item has no prompt'); return; }
+    var queueBtn = gradioApp().querySelector('#' + tab + '_queue_btn');
+    if (!queueBtn) { ui.fail('Cannot make a variation: the ' + tab + ' Queue button was not found'); return; }
+    var jobs = Math.max(1, Math.min(VARIATION_MAX, count)) * uiBatchStepsMultiplier(tab);
+    var queued = 0;
+
+    function queueNext() {
+      if (queued >= jobs) { ui.done(jobs); return; }
+      if (typeof window.img2imgModeParamsBeginPaste === 'function' && tab === 'img2img') {
+        window.img2imgModeParamsBeginPaste();
+      }
+      queueBtn.click();
+      queued += 1;
+      ui.progress(queued, jobs);
+      setTimeout(queueNext, 320);
+    }
+
+    if (tab === 'img2img') ensureImg2ImgMode();
+    // the img2img preview / mode switch may re-render the controls a frame after
+    // the click, so the payload is written once that has settled
+    setTimeout(function () {
+      if (!setGradioTextbox('gv2_infotext_apply', text)) {
+        ui.fail('Send bridge missing \u2014 restart the webui to enable it');
+        return;
+      }
+      clickGradioBtn('gv2_apply_' + tab + '_btn', 0);
+      setTimeout(function () {
+        setGradioField(tab + '_seed', -1);
+        setGradioSlider(tab + '_batch_count', 1);
+        setGradioSlider(tab + '_batch_size', 1);
+        setTimeout(function () {
+          var ready = tab === 'img2img'
+            ? injectImageIntoAsync(item, 'img2img_image')
+            : Promise.resolve();
+          ready.then(queueNext).catch(function (err) {
+            ui.fail('Image upload failed: ' + ((err && err.message) || err));
+          });
+        }, 180);
+      }, 420);
+    }, tab === 'img2img' ? 240 : 60);
+  }
+
+  function makeVariation(key) {
+    api('/gallery/api/item?id=' + encodeURIComponent(key)).then(function (item) {
+      var tab = variationTabFor(item);
+      toast('Making a variation in ' + tab +
+        (hasCompiledPrompt(item) ? '' : ' (source prompt \u2014 none compiled)') + '\u2026');
+      runVariations(item, 1, {
+        progress: function () {},
+        done: function (queued) {
+          toast('Variation queued (' + queued + ' job' + (queued === 1 ? '' : 's') + ')');
+        },
+        fail: function (message) { toast(message, true); },
+      });
+    }).catch(function (err) { toast('Variation failed: ' + err.message, true); });
+  }
+
+  function closeVariationDialog() {
+    var host = el('gv2-var-modal');
+    if (host && host.parentNode) host.parentNode.removeChild(host);
+  }
+
+  function openVariationDialog(key) {
+    closeVariationDialog();
+    var root = el(ROOT_ID);
+    if (!root) return;
+    var host = document.createElement('div');
+    host.id = 'gv2-var-modal';
+    host.className = 'gv2-modal';
+    host.innerHTML = '<div class="gv2-modal-card" role="dialog" aria-modal="true" aria-label="Make variations">' +
+      '<div class="gv2-modal-head"><span>Make variations</span>' +
+        '<button type="button" class="gv2-modal-close" data-var="cancel" title="Cancel (Esc)">\u00d7</button></div>' +
+      '<div class="gv2-modal-body">' +
+        '<div class="gv2-modal-row"><span>Item</span><b data-var="name">\u2026</b></div>' +
+        '<div class="gv2-modal-row"><span>Runs in</span><b data-var="tab">\u2026</b></div>' +
+        '<div class="gv2-modal-row"><span>Variations</span>' +
+          '<span class="gv2-modal-numbox"><input type="number" min="1" max="' + VARIATION_MAX +
+          '" step="1" value="' + VARIATION_DEFAULT + '" data-var="count" aria-label="Variation count"></span></div>' +
+        '<div class="gv2-modal-note">Each variation re-runs the compiled prompt with a random seed. ' +
+          'Batch count and batch size are set to 1 \u00d7 1, so one variation is one image.</div>' +
+        '<div class="gv2-modal-note" data-var="steps"></div>' +
+        '<div class="gv2-modal-note gv2-modal-warn" data-var="warn"></div>' +
+        '<div class="gv2-modal-progress gv2-modal-progress-hidden"><i></i></div>' +
+        '<div class="gv2-modal-status"></div>' +
+      '</div>' +
+      '<div class="gv2-modal-foot">' +
+        '<button type="button" class="gv2-btn gv2-btn-quiet" data-var="cancel">Cancel</button>' +
+        '<button type="button" class="gv2-btn" data-var="go" disabled>Queue variations</button>' +
+      '</div></div>';
+    root.appendChild(host);
+
+    var nameEl = host.querySelector('[data-var="name"]');
+    var tabEl = host.querySelector('[data-var="tab"]');
+    var input = host.querySelector('[data-var="count"]');
+    var stepsEl = host.querySelector('[data-var="steps"]');
+    var warnEl = host.querySelector('[data-var="warn"]');
+    var statusEl = host.querySelector('.gv2-modal-status');
+    var barEl = host.querySelector('.gv2-modal-progress');
+    var fillEl = barEl.querySelector('i');
+    var goBtn = host.querySelector('[data-var="go"]');
+    var item = null;
+    var phase = 'idle';
+
+    function countValue() {
+      var n = parseInt(input.value, 10);
+      if (isNaN(n)) return VARIATION_DEFAULT;
+      return Math.max(1, Math.min(VARIATION_MAX, n));
+    }
+
+    function refreshLabel() {
+      var n = countValue();
+      var mult = item ? uiBatchStepsMultiplier(variationTabFor(item)) : 1;
+      goBtn.textContent = 'Queue ' + (n * mult) + ' variation' + (n * mult === 1 ? '' : 's');
+    }
+
+    function setBusy(on) {
+      input.disabled = on;
+      goBtn.disabled = on || !item;
+    }
+
+    host.querySelectorAll('[data-var="cancel"]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (phase === 'running') { statusEl.textContent = 'Finishing the current job\u2026'; return; }
+        closeVariationDialog();
+      });
+    });
+    host.addEventListener('click', function (ev) {
+      if (ev.target === host && phase !== 'running') closeVariationDialog();
+    });
+    host.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') { ev.stopPropagation(); closeVariationDialog(); return; }
+      if (ev.key === 'Enter' && phase === 'idle' && item) goBtn.click();
+    });
+    input.addEventListener('input', refreshLabel);
+    input.addEventListener('change', function () {
+      input.value = String(countValue());
+      refreshLabel();
+    });
+    input.focus();
+    input.select();
+    refreshLabel();
+
+    api('/gallery/api/item?id=' + encodeURIComponent(key)).then(function (fetched) {
+      item = fetched;
+      var tab = variationTabFor(item);
+      var blocked = variationBlocked(item, tab);
+      nameEl.textContent = fileNameOf(item);
+      tabEl.textContent = tab === 'txt2img'
+        ? 'txt2img (prompt + settings, new seed)'
+        : 'img2img (image as init, compiled prompt, new seed)';
+      var mult = uiBatchStepsMultiplier(tab);
+      stepsEl.textContent = mult > 1
+        ? 'The Sampler "Batch steps (queue)" list is active: each variation queues ' + mult + ' jobs.'
+        : '';
+      var warnings = [];
+      if (blocked) warnings.push('Cannot run: ' + blocked + '.');
+      else if (!hasCompiledPrompt(item)) warnings.push('No compiled prompt recorded \u2014 the source prompt is used.');
+      if (!compiledInfotext(item) && !blocked) warnings.push('No prompt recorded \u2014 nothing to re-generate from.');
+      warnEl.textContent = warnings.join(' ');
+      warnEl.classList.toggle('gv2-modal-hidden', !warnings.length);
+      goBtn.disabled = !!blocked || !compiledInfotext(item);
+      refreshLabel();
+      if (!blocked) input.focus();
+    }).catch(function (err) {
+      nameEl.textContent = key;
+      statusEl.textContent = 'Item lookup failed: ' + err.message;
+      statusEl.classList.add('gv2-modal-warn');
+    });
+
+    goBtn.addEventListener('click', function () {
+      if (phase === 'running' || !item) return;
+      if (phase !== 'idle') { closeVariationDialog(); return; }
+      var n = countValue();
+      phase = 'running';
+      if (typeof window.img2imgModeParamsBeginPaste === 'function') window.img2imgModeParamsBeginPaste();
+      setBusy(true);
+      barEl.classList.remove('gv2-modal-progress-hidden');
+      runVariations(item, n, {
+        progress: function (done, jobs) {
+          fillEl.style.width = Math.round((done / jobs) * 100) + '%';
+          statusEl.textContent = 'Queued ' + done + ' / ' + jobs + '\u2026';
+        },
+        done: function (jobs) {
+          phase = 'done';
+          fillEl.style.width = '100%';
+          statusEl.textContent = 'Queued ' + jobs + ' variation job' + (jobs === 1 ? '' : 's') + '.';
+          goBtn.textContent = 'Done';
+          goBtn.disabled = false;
+          toast(jobs + ' variation job' + (jobs === 1 ? '' : 's') + ' queued');
+          setTimeout(function () {
+            if (el('gv2-var-modal') === host) closeVariationDialog();
+          }, 2000);
+        },
+        fail: function (message) {
+          phase = 'failed';
+          barEl.classList.add('gv2-modal-progress-hidden');
+          statusEl.textContent = message;
+          statusEl.classList.add('gv2-modal-warn');
+          goBtn.textContent = 'Close';
+          goBtn.disabled = false;
+        },
+      });
+    });
+  }
+
   // The txt2img/img2img result panel (javascript/outputPanelActions.js) reuses
   // this menu and the same remembered default, so both entry points send the
   // identical payloads.
@@ -1021,12 +1321,31 @@
       btn.title = sendActionTitle(def[0]);
       menu.appendChild(btn);
     });
+    var sep = document.createElement('div');
+    sep.className = 'gv2-ctx-sep';
+    menu.appendChild(sep);
+    VARIATION_ACTIONS.forEach(function (def) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-variation', def[0]);
+      btn.textContent = def[1];
+      btn.title = def[2];
+      menu.appendChild(btn);
+    });
     document.body.appendChild(menu);
     var w = menu.offsetWidth;
     var h = menu.offsetHeight;
     menu.style.left = Math.max(4, Math.min(ev.clientX, window.innerWidth - w - 6)) + 'px';
     menu.style.top = Math.max(4, Math.min(ev.clientY, window.innerHeight - h - 6)) + 'px';
     menu.addEventListener('click', function (e) {
+      var variation = e.target.closest ? e.target.closest('[data-variation]') : null;
+      if (variation) {
+        closeCtxMenu();
+        var mode = variation.getAttribute('data-variation');
+        if (mode === 'many') openVariationDialog(key);
+        else makeVariation(key);
+        return;
+      }
       var btn = e.target.closest ? e.target.closest('[data-send]') : null;
       if (!btn) return;
       closeCtxMenu();
@@ -1194,6 +1513,9 @@
               '<select id="gv2-thumb-ratio" class="gv2-select" title="Thumbnail aspect ratio">' +
                 THUMB_RATIOS.map(function (r) { return '<option value="' + r[0] + '">Thumb: ' + r[1] + '</option>'; }).join('') +
               '</select>' +
+              '<label class="gv2-opt-toggle" title="Allow several album filters at once. Off (default): clicking an album filter replaces the current one.">' +
+                '<input type="checkbox" id="gv2-multi-album"> Multiple album filters' +
+              '</label>' +
               '<span class="gv2-adv-sep"></span>' +
               '<span class="gv2-row-label">Date</span>' +
               '<input type="date" id="gv2-date-from" class="gv2-date" title="From date (inclusive)">' +
@@ -1325,6 +1647,10 @@
       savePrefs();
       applyThumbRatio();
     });
+    el('gv2-multi-album').checked = !!state.multiAlbum;
+    el('gv2-multi-album').addEventListener('change', function (ev) {
+      setMultiAlbum(!!(ev.target && ev.target.checked));
+    });
     el('gv2-date-from').addEventListener('change', applyDateRange);
     el('gv2-date-to').addEventListener('change', applyDateRange);
     el('gv2-date-clear').addEventListener('click', function () {
@@ -1347,7 +1673,7 @@
       if (action === 'copy-censored') { copySelectedToCensored(); return; }
       if (action === 'album') {
         if (!state.selected.size) { toast('Select items first', true); return; }
-        openAlbumForm();
+        openAlbumDialog();
         return;
       }
       var keys = Array.from(state.selected);
@@ -1433,12 +1759,6 @@
       '<input id="gv2-album-create-name" class="gv2-view-name" placeholder="album name\u2026" maxlength="80" spellcheck="false">' +
       '<button class="gv2-btn" id="gv2-album-create-ok">Create</button>' +
       '<button class="gv2-btn gv2-btn-quiet" id="gv2-album-create-cancel">Cancel</button></span>';
-    html += '<span id="gv2-album-form" class="gv2-save-form gv2-save-hidden">' +
-      '<select id="gv2-album-pick" class="gv2-select" title="Target album"><option value="">new album\u2026</option></select>' +
-      '<input id="gv2-album-new" class="gv2-view-name" placeholder="new album name\u2026" maxlength="80" spellcheck="false">' +
-      '<button class="gv2-btn" id="gv2-album-apply">Add selected</button>' +
-      '<button class="gv2-btn gv2-btn-quiet" id="gv2-album-remove" title="Remove selected items from the picked album">Remove selected</button>' +
-      '<button class="gv2-btn gv2-btn-quiet" id="gv2-album-cancel">Cancel</button></span>';
     html += '</div>';
     var cards = '';
     list.forEach(function (album) {
@@ -1459,16 +1779,6 @@
     html += '<div class="gv2-album-grid">' + cards + '</div>';
     box.innerHTML = html;
 
-    var pick = el('gv2-album-pick');
-    if (pick) {
-      list.forEach(function (album) {
-        var opt = document.createElement('option');
-        opt.value = String(album.id);
-        opt.textContent = album.name;
-        pick.appendChild(opt);
-      });
-      if (activeIds.length === 1) pick.value = String(activeIds[0]);
-    }
     var newBtn = el('gv2-new-album');
     if (newBtn) {
       newBtn.addEventListener('click', function () {
@@ -1494,27 +1804,7 @@
         if (ev.key === 'Enter') createAlbumFlow();
       });
     }
-    var applyBtn = el('gv2-album-apply');
-    if (applyBtn) applyBtn.addEventListener('click', applyAlbumForm);
-    var removeBtn = el('gv2-album-remove');
-    if (removeBtn) removeBtn.addEventListener('click', removeAlbumForm);
-    var cancelBtn = el('gv2-album-cancel');
-    if (cancelBtn) cancelBtn.addEventListener('click', hideAlbumForm);
     applyFolds();
-  }
-
-  function openAlbumForm() {
-    renderAlbums();
-    var form = el('gv2-album-form');
-    if (!form) return;
-    form.classList.remove('gv2-save-hidden');
-    var input = el('gv2-album-new');
-    if (input) input.focus();
-  }
-
-  function hideAlbumForm() {
-    var form = el('gv2-album-form');
-    if (form) form.classList.add('gv2-save-hidden');
   }
 
   function createAlbumFlow() {
@@ -1527,44 +1817,154 @@
       toast('album created: ' + name);
     }).catch(function (err) { toast('Create failed: ' + err.message, true); });
   }
+  // ---------------------------------------------------------------- album dialog
+  //
+  // The batch bar's "Album…" opens a window (instead of the inline form the
+  // Albums fold used to grow): pick one of the existing albums or type a new
+  // name, then add the selection to it — or remove the selection from it.
 
-  function applyAlbumForm() {
-    if (!state.selected.size) { toast('Select items first', true); return; }
-    var keys = Array.from(state.selected);
-    var pick = el('gv2-album-pick');
-    var newName = el('gv2-album-new').value.trim();
-    var body = { add: keys, remove: [] };
-    if (newName) body.new_name = newName;
-    else if (pick && pick.value) body.album = parseInt(pick.value, 10);
-    if (!body.new_name && !body.album) { toast('Pick an album or name a new one', true); return; }
-    api('/gallery/api/albums/items', body).then(function (data) {
-      state.albums = (data && data.albums) || [];
-      renderAlbums();
-      var msg = 'added ' + (data.added || 0);
-      if (data.moved && data.moved.length) msg += ' (moved from ' + data.moved[0].from + ')'; 
-      if (data.errors && data.errors.length) msg += ' \u00b7 ' + data.errors.length + ' failed';
-      toast(msg);
-      hideAlbumForm();
-      if (!(data.errors && data.errors.length)) setSelection([]);
-      resetAndRefresh();
-    }).catch(function (err) { toast('Album add failed: ' + err.message, true); });
+  function closeAlbumDialog() {
+    var host = el('gv2-album-modal');
+    if (host && host.parentNode) host.parentNode.removeChild(host);
   }
 
-  function removeAlbumForm() {
-    if (!state.selected.size) { toast('Select items first', true); return; }
-    var pick = el('gv2-album-pick');
-    if (!pick || !pick.value) { toast('Pick an album to remove from', true); return; }
+  function albumOptionLabel(album) {
+    var bits = [album.name + (album.bundled ? ' \u{1F4E6}' : '')];
+    if (album.count) bits.push(album.count);
+    return bits.join(' \u00b7 ');
+  }
+
+  function openAlbumDialog() {
     var keys = Array.from(state.selected);
-    api('/gallery/api/albums/items', { album: parseInt(pick.value, 10), add: [], remove: keys })
-      .then(function (data) {
-        state.albums = (data && data.albums) || [];
-        renderAlbums();
-        toast('removed ' + (data.removed || 0) + ' from album');
-        hideAlbumForm();
-        setSelection([]);
-        resetAndRefresh();
-      })
-      .catch(function (err) { toast('Remove failed: ' + err.message, true); });
+    if (!keys.length) { toast('Select items first', true); return; }
+    closeAlbumDialog();
+    var root = el(ROOT_ID);
+    if (!root) return;
+    var albums = state.albums || [];
+    var options = albums.map(function (album) {
+      return '<option value="' + album.id + '">' + esc(albumOptionLabel(album)) + '</option>';
+    }).join('');
+    var preselected = (state.filters.albums || []).filter(function (v) { return typeof v === 'number'; })[0];
+    var host = document.createElement('div');
+    host.id = 'gv2-album-modal';
+    host.className = 'gv2-modal';
+    host.innerHTML = '<div class="gv2-modal-card" role="dialog" aria-modal="true" aria-label="Album">' +
+      '<div class="gv2-modal-head"><span>Album \u00b7 ' + keys.length + ' selected</span>' +
+        '<button type="button" class="gv2-modal-close" data-album-dlg="cancel" title="Close (Esc)">\u00d7</button></div>' +
+      '<div class="gv2-modal-body">' +
+        '<div class="gv2-modal-row"><span>Existing album</span>' +
+          '<select class="gv2-select gv2-modal-pick" data-album-dlg="pick">' +
+            (albums.length
+              ? '<option value="">\u2014 pick an album \u2014</option>' + options
+              : '<option value="">no albums yet \u2014 create one below</option>') +
+          '</select></div>' +
+        '<div class="gv2-modal-row"><span>New album</span>' +
+          '<input class="gv2-view-name gv2-modal-input" data-album-dlg="name" ' +
+            'placeholder="name to create\u2026" maxlength="80" spellcheck="false"></div>' +
+        '<div class="gv2-modal-note">An item belongs to one album, so adding it to another album moves it. ' +
+          'A new name wins over the picked album.</div>' +
+        '<div class="gv2-modal-status"></div>' +
+      '</div>' +
+      '<div class="gv2-modal-foot">' +
+        '<button type="button" class="gv2-btn gv2-btn-quiet" data-album-dlg="cancel">Cancel</button>' +
+        '<button type="button" class="gv2-btn gv2-btn-quiet" data-album-dlg="remove"' +
+          (preselected ? '' : ' disabled') + ' title="Remove the selected items from the picked album">Remove selected</button>' +
+        '<button type="button" class="gv2-btn" data-album-dlg="add">Add selected</button>' +
+      '</div></div>';
+    root.appendChild(host);
+
+    var pick = host.querySelector('[data-album-dlg="pick"]');
+    var nameInput = host.querySelector('[data-album-dlg="name"]');
+    var statusEl = host.querySelector('.gv2-modal-status');
+    var removeBtn = host.querySelector('[data-album-dlg="remove"]');
+    var busy = false;
+    if (preselected) pick.value = String(preselected);
+
+    function syncButtons() {
+      removeBtn.disabled = busy || !pick.value;
+    }
+
+    function fail(message) {
+      busy = false;
+      syncButtons();
+      statusEl.textContent = message;
+      statusEl.classList.add('gv2-modal-warn');
+    }
+
+    function done(message) {
+      busy = false;
+      closeAlbumDialog();
+      renderAlbums();
+      setSelection([]);
+      resetAndRefresh();
+      toast(message);
+    }
+
+    function setBusy() {
+      busy = true;
+      syncButtons();
+      statusEl.classList.remove('gv2-modal-warn');
+      statusEl.textContent = 'Working\u2026';
+    }
+
+    function addSelected() {
+      if (busy) return;
+      var newName = nameInput.value.trim();
+      var body = { add: keys, remove: [] };
+      if (newName) body.new_name = newName;
+      else if (pick.value) body.album = parseInt(pick.value, 10);
+      else { fail('Pick an album or type a name to create one'); return; }
+      setBusy();
+      api('/gallery/api/albums/items', body).then(function (data) {
+        state.albums = (data && data.albums) || state.albums;
+        var msg = 'added ' + (data.added || 0) + ' item(s)' + (newName ? ' to ' + newName : '');
+        if (data.moved && data.moved.length) msg += ' (moved from ' + data.moved[0].from + ')';
+        if (data.errors && data.errors.length) msg += ' \u00b7 ' + data.errors.length + ' failed';
+        if (data.errors && data.errors.length) {
+          fail('Album add: ' + msg);
+          return;
+        }
+        done(msg);
+      }).catch(function (err) { fail('Album add failed: ' + err.message); });
+    }
+
+    function removeSelected() {
+      if (busy || !pick.value) return;
+      var album = albumById(parseInt(pick.value, 10));
+      setBusy();
+      api('/gallery/api/albums/items', { album: parseInt(pick.value, 10), add: [], remove: keys })
+        .then(function (data) {
+          state.albums = (data && data.albums) || state.albums;
+          done('removed ' + (data.removed || 0) + ' item(s)' + (album ? ' from ' + album.name : ''));
+        })
+        .catch(function (err) { fail('Remove failed: ' + err.message); });
+    }
+
+    host.addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-album-dlg]') : null;
+      if (!btn) {
+        if (ev.target === host && !busy) closeAlbumDialog();
+        return;
+      }
+      var act = btn.getAttribute('data-album-dlg');
+      if (act === 'cancel') { if (!busy) closeAlbumDialog(); return; }
+      if (act === 'add') addSelected();
+      else if (act === 'remove') removeSelected();
+    });
+    host.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') { ev.stopPropagation(); if (!busy) closeAlbumDialog(); return; }
+      if (ev.key === 'Enter' && ev.target === nameInput) addSelected();
+    });
+    pick.addEventListener('change', function () {
+      syncButtons();
+      nameInput.value = '';
+    });
+    nameInput.addEventListener('input', function () {
+      if (nameInput.value.trim() && removeBtn && !busy) removeBtn.disabled = true;
+      else syncButtons();
+    });
+    syncButtons();
+    nameInput.focus();
   }
 
   function albumAction(act) {
@@ -1621,12 +2021,41 @@
     }
   }
 
+  /** Album filters are single-select unless the Options toggle is on: a click
+   *  replaces the current album, and clicking the active one clears it. */
+  function setMultiAlbum(on) {
+    state.multiAlbum = !!on;
+    var box = el('gv2-multi-album');
+    if (box) box.checked = state.multiAlbum;
+    savePrefs();
+    if (!state.multiAlbum) {
+      var albums = state.filters.albums || [];
+      if (albums.length > 1) {
+        // keep the most recently picked album (filters append) and drop the rest
+        var kept = albums[albums.length - 1];
+        state.filters.albums = [kept];
+        var album = typeof kept === 'number' ? albumById(kept) : null;
+        toast('Single album filter: keeping ' + (album ? album.name : 'No album'));
+        syncControlsFromFilters();
+        resetAndRefresh();
+        return;
+      }
+    }
+    renderAlbums();
+  }
+
   function toggleAlbumFilter(value) {
-    if (!state.filters.albums) state.filters.albums = [];
     var entry = value === 'none' ? 'none' : parseInt(value, 10);
-    var idx = state.filters.albums.indexOf(entry);
-    if (idx >= 0) state.filters.albums.splice(idx, 1);
-    else state.filters.albums.push(entry);
+    if (typeof entry === 'number' && isNaN(entry)) return;
+    var current = state.filters.albums || [];
+    var active = current.indexOf(entry) >= 0;
+    if (state.multiAlbum) {
+      state.filters.albums = active
+        ? current.filter(function (v) { return v !== entry; })
+        : current.concat([entry]);
+    } else {
+      state.filters.albums = active ? [] : [entry];
+    }
     syncControlsFromFilters();
     resetAndRefresh();
   }
@@ -1735,6 +2164,8 @@
     var f = state.filters || {};
     var q = el('gv2-q');
     if (q) q.value = f.q || '';
+    var multi = el('gv2-multi-album');
+    if (multi) multi.checked = !!state.multiAlbum;
     var time = el('gv2-time');
     if (time) time.value = f.preset || 'all';
     var rating = el('gv2-rating');
@@ -1950,6 +2381,7 @@
       if (prefs.thumbSize === 'xs' || prefs.thumbSize === 's' || prefs.thumbSize === 'm' || prefs.thumbSize === 'l') state.thumbSize = prefs.thumbSize;
       state.thumbRatio = thumbRatioValue(prefs.thumbRatio);
       if (prefs.detailMediaLeft === true) state.detailMediaLeft = true;
+      if (prefs.multiAlbum === true) state.multiAlbum = true;
       if (prefs.promptVariant === 'compiled') state.promptVariant = 'compiled';
       if (prefs.folds && typeof prefs.folds === 'object') {
         FOLD_KEYS.forEach(function (key) {
@@ -1973,6 +2405,7 @@
         thumbSize: state.thumbSize,
         thumbRatio: state.thumbRatio,
         detailMediaLeft: !!state.detailMediaLeft,
+        multiAlbum: !!state.multiAlbum,
         promptVariant: state.promptVariant === 'compiled' ? 'compiled' : 'source',
         sendDefaults: state.sendDefaults,
         folds: state.folds
@@ -2053,9 +2486,9 @@
 
   // ---------------------------------------------------------------- query
 
-  /** Reset every filter control to its neutral value (no grid reload). */
+  /** Reset every filter control to its default (Active items only, no reload). */
   function resetFiltersState() {
-    state.filters = { q: '', preset: 'all', states: [], sources: [], albums: [], show_albumed: false, rating: '', tags: {} };
+    state.filters = defaultFilters();
     var q = el('gv2-q');
     if (q) q.value = '';
     var time = el('gv2-time');
@@ -2365,6 +2798,8 @@
     if (window.gv2LightboxNav || ev._lightboxHandled) return;
     if (el('gv2-compare')) return;
     if (el('gv2-batch-confirm')) return;
+    if (el('gv2-var-modal')) return;
+    if (el('gv2-album-modal')) return;
     if (isTypingTarget(ev.target)) return;
     var root = el(ROOT_ID);
     if (!root || !root.getClientRects().length) return;
