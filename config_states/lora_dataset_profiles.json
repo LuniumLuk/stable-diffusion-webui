@@ -73,6 +73,99 @@
       ],
       "require_ahoge": false
     },
+    "durin": {
+      "game": "genshin impact",
+      "character": "durin (genshin impact)",
+      "trigger": "durin_v1",
+      "repeat": 3,
+      "dataset_group": "genshin",
+      "gender": [
+        "1boy",
+        "male focus"
+      ],
+      "identity": [
+        "purple hair",
+        "short hair",
+        "messy hair",
+        "red eyes",
+        "horns",
+        "wings"
+      ],
+      "identity_prompt": "short messy pale-lavender hair in layered spiky tufts, darker violet strands at the tips and long strands framing the face, TWO dark-grey SEGMENTED dragon horns that hook backwards like jagged crystalline blades, one on each side of the head, each horn edged with a faint violet-blue glow, a pair of dark bat-like dragon wings with magenta-red membrane folded behind his back, bright CRIMSON-ROSE eyes, one solid colour in BOTH eyes (never blue, green, gold or violet), a slender young-boy anime face with pale skin",
+      "outfit": [
+        "black jacket",
+        "white lapels",
+        "purple vest",
+        "pink gem",
+        "white gloves",
+        "white pants",
+        "black boots",
+        "coat tails"
+      ],
+      "outfit_prompt": "a black high-collared tailcoat with sharp white angular lapels and silver-edged shoulder plates, a deep purple chest panel carrying a bright pink diamond-shaped gem framed by silver spikes, silver studs running down the seams, short black sleeves with silver diamond ornaments and small hanging red crystal drops, white gloves with spiked silver cuffs, tight white trousers with silver diamond plates at the knees, and polished black boots with silver angular trim and a magenta crystal at each cuff",
+      "must_keep": [
+        "the two dark curved dragon horns stay on his head in every shot - never hidden by the hair or the framing, and never replaced by animal ears, antlers or a hat",
+        "the eyes are one solid CRIMSON-ROSE RED in BOTH eyes - never blue, green, gold or violet, never two different colours, never a glowing iris",
+        "the wings stay folded behind his back and never wrap around the shoulders like a cloak - the outfit has NO hood and NO cape over the shoulders"
+      ],
+      "eye_line": "BOTH eyes are clearly visible and are one solid crimson-rose red - never blue, green, gold or violet, never two different colours.",
+      "traits": [
+        {
+          "id": "eyes",
+          "strict": false,
+          "expect": "BOTH irises one solid crimson to rose-red colour (a deep red with a slight pink cast is correct). 'wrong' if either iris is blue, green, gold/yellow or clearly violet-purple, if the two eyes differ, if the iris is two-tone, or if the eyes glow. 'unclear' if the eyes are too small, closed or hidden to tell."
+        },
+        {
+          "id": "horns",
+          "strict": false,
+          "expect": "one pair of dark-grey SEGMENTED dragon horns that hook backwards like jagged crystalline blades, each with a faint violet-blue inner edge. 'wrong' if there are no horns at all, if the head instead carries animal ears, cat ears, antlers, a hat, a helmet or a headband, or if the horns are smooth, rounded or curled like a ram's horn. 'ok' when only one horn is visible in a strict side or profile view. 'partial' only when the horns are tiny, blunt or clearly simplified from the jagged blade shape in a front or three-quarter view."
+        },
+        {
+          "id": "hair",
+          "strict": false,
+          "kinds": [
+            "face",
+            "upper"
+          ],
+          "expect": "short messy pale-LAVENDER hair in layered tufts with long strands framing the face and darker violet tips. 'wrong' if the hair reads as flat short spiky hair with no layered strands, or if its colour is white, silver, blue or brown instead of pale lavender."
+        },
+        {
+          "id": "wings",
+          "kinds": [
+            "upper",
+            "cowboy",
+            "full"
+          ],
+          "expect": "a pair of dark bat-like dragon wings with magenta-red membrane visible behind his back, folded behind the shoulders rather than spread wide; in an upper-body or full-body shot the wings must be visible at least as folded shapes at the edges of the back"
+        }
+      ],
+      "avoid": [
+        "long hair",
+        "ponytail",
+        "female body",
+        "chibi",
+        "hood",
+        "cape",
+        "hat",
+        "helmet",
+        "animal ears",
+        "cat ears",
+        "antlers",
+        "pointed ears",
+        "elf ears",
+        "beard",
+        "blue eyes",
+        "green eyes",
+        "gold eyes",
+        "violet eyes",
+        "heterochromia",
+        "different colored eyes",
+        "two-tone iris",
+        "glowing eyes",
+        "mask"
+      ],
+      "require_ahoge": false
+    },
     "_example": {
       "game": "genshin impact",
       "character": "klee (genshin impact)",
