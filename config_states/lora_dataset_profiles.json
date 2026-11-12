@@ -7,16 +7,70 @@
       "trigger": "lohen_v4",
       "repeat": 3,
       "dataset_group": "genshin",
-      "gender": ["1boy", "male focus"],
-      "identity": ["green hair", "short hair", "messy hair", "purple eyes", "earring"],
-      "identity_prompt": "short messy sage-green hair with soft spiky layered tufts and a long side-swept fringe over the forehead, striking magenta-purple eyes, a young-boy anime face with light skin",
-      "outfit": ["white shirt", "blue coat", "gold trim", "cape", "black gloves", "white pants", "thigh strap", "armored boots"],
+      "gender": [
+        "1boy",
+        "male focus"
+      ],
+      "identity": [
+        "green hair",
+        "short hair",
+        "messy hair",
+        "red eyes",
+        "earring"
+      ],
+      "identity_prompt": "short messy sage-green hair with soft spiky layered tufts and a long side-swept fringe over the forehead, DULL CRIMSON-RED eyes, one solid colour in BOTH eyes (never pink, magenta or purple; never a two-tone iris, never a green, cyan or white pupil or inner iris), a small beauty mark under his right eye (the viewer's left in a front view), a young-boy anime face with light skin",
+      "outfit": [
+        "white shirt",
+        "blue coat",
+        "gold trim",
+        "cape",
+        "black gloves",
+        "white pants",
+        "thigh strap",
+        "armored boots"
+      ],
       "outfit_prompt": "a white high-collared shirt with a silver and pale-blue winged emblem on the chest, a pale-blue corset-like vest with small diamond details and a dark diagonal chest strap, a long dark-navy coat with gold trim and silver arrow-shaped clasps, a short dark-navy half-cape with a light-blue lining and silver-and-gold shoulder pauldrons, black gloves with blue fingertips and a dark-navy bracer with gold trim, white trousers with a dark-navy thigh strap and a silver cross emblem, and tall dark-navy boots with silver armored toe caps",
       "must_keep": [
         "the short dark-navy half-cape stays over the shoulders and never hides the chest emblem",
-        "the outfit keeps its white trousers and tall dark boots - never a skirt, shorts or bare legs"
+        "the outfit keeps its white trousers and tall dark boots - never a skirt, shorts or bare legs",
+        "the eyes are one solid DULL CRIMSON RED in BOTH eyes - never pink, magenta or purple, never two different colours, and never a two-tone iris with a green, cyan or white pupil"
       ],
-      "avoid": ["long hair", "ponytail", "female body", "chibi", "skirt", "shorts", "hair covering the eyes"],
+      "eye_line": "BOTH eyes are clearly visible and are one solid dull crimson red - never pink, magenta or purple, never a two-tone iris with a green or cyan pupil.",
+      "traits": [
+        {
+          "id": "eyes",
+          "strict": false,
+          "expect": "BOTH irises one solid dull crimson-red colour. 'wrong' if either iris is pink, magenta, purple or vivid scarlet, if the two eyes differ, or if the iris/pupil is two-tone (a green, cyan or white pupil or inner iris). 'partial' if the red base is right but a subtle greenish rim on the outer iris edge is missing - the rim is a bonus, never a requirement. 'unclear' if the eyes are too small or hidden to tell."
+        },
+        {
+          "id": "beauty_mark",
+          "warn_only": true,
+          "kinds": [
+            "face",
+            "upper"
+          ],
+          "expect": "a small beauty mark (mole) under his right eye, which appears on the viewer's LEFT in a front view"
+        }
+      ],
+      "avoid": [
+        "long hair",
+        "ponytail",
+        "female body",
+        "chibi",
+        "skirt",
+        "shorts",
+        "hair covering the eyes",
+        "pink eyes",
+        "magenta eyes",
+        "purple eyes",
+        "heterochromia",
+        "different colored eyes",
+        "green eyes",
+        "two-tone iris",
+        "green pupils",
+        "cyan pupils",
+        "glowing eyes"
+      ],
       "require_ahoge": false
     },
     "_example": {
@@ -25,13 +79,33 @@
       "trigger": "klee_v1",
       "repeat": 3,
       "dataset_group": "genshin",
-      "gender": ["1girl", "female focus"],
-      "identity": ["blonde hair", "long hair", "red eyes", "ahoge", "pointy ears", "elf"],
+      "gender": [
+        "1girl",
+        "female focus"
+      ],
+      "identity": [
+        "blonde hair",
+        "long hair",
+        "red eyes",
+        "ahoge",
+        "pointy ears",
+        "elf"
+      ],
       "identity_prompt": "long blonde hair in two pigtails with small pointed elf ears, red eyes, a child-like anime face",
-      "outfit": ["red hat", "red coat", "white gloves", "brown boots"],
+      "outfit": [
+        "red hat",
+        "red coat",
+        "white gloves",
+        "brown boots"
+      ],
       "outfit_prompt": "a red hooded coat with a white collar, a broad red hat with a four-leaf clover ornament, white gloves and brown boots",
-      "must_keep": ["the big red hat stays on the head in every shot"],
-      "avoid": ["adult body", "realistic proportions"],
+      "must_keep": [
+        "the big red hat stays on the head in every shot"
+      ],
+      "avoid": [
+        "adult body",
+        "realistic proportions"
+      ],
       "require_ahoge": false
     }
   }

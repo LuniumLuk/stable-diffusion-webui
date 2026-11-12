@@ -131,6 +131,23 @@ def download(url: str, out_path: str) -> int:
     return len(data)
 
 
+def name_from_url(url: str) -> str:
+    """File name from an image URL, tolerating wiki '…/revision/latest' tails.
+
+    Fandom URLs look like
+      .../images/5/55/Lohen_Avatar.png/revision/latest?cb=2026…
+    where the last path segment is meaningless, so the real file name is the
+    segment before /revision/."""
+    path = urllib.parse.urlparse(url).path
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return "image.png"
+    last = parts[-1]
+    if last.lower().startswith("latest") and len(parts) >= 3:
+        return "File:" + parts[-3]
+    return "File:" + last
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Download character reference images for a LoRA dataset")
@@ -194,8 +211,7 @@ def main() -> int:
 
     if args.url:
         for url in args.url:
-            title = "File:" + os.path.basename(urllib.parse.urlparse(url).path)
-            _save(title, url, {})
+            _save(name_from_url(url), url, {})
     else:
         pattern = re.compile(args.match or re.escape(args.page), re.IGNORECASE)
         titles = [t for t in page_images(args.page, args.api)

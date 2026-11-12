@@ -69,17 +69,64 @@ collapses into 22 full-body images.
 2. **Judge** — the Gemini *text* model reviews candidates in batches of
    `--judge-batch` (default 4) together with the face reference and returns
    strict JSON: `character` match/weak/wrong, `people`, the `shot`/`view`/
-   `background` it actually drew, `ahoge`, `outfit`, `anatomy`, `artifacts`.
-   Text-model calls do **not** consume image-generation quota.
-3. **Decision** — reject on wrong character, more than one person, broken
-   anatomy, text/watermark/logo/border/multi-panel, wrong outfit, and (for
-   face/upper shots) a missing ahoge. `--lenient` drops the ahoge/outfit
-   warnings. Official references that turn out to be a 3D in-game render are
-   used for generation but kept out of the dataset (`--no-include-refs` turns
-   that off entirely).
+   `background` it actually drew, `ahoge`, `outfit`, `anatomy`, `artifacts`,
+   plus a verdict for every **profile trait**. Text-model calls do **not**
+   consume image-generation quota.
+3. **Confirmation vote** — anything rejected only on a *soft* criterion
+   (a trait, `keep`) is re-judged once; a clean second opinion keeps it. Hard
+   failures (wrong character, extra people, broken anatomy, artifacts, 3D
+   references) are never overturned. This exists because the judge is not
+   perfectly repeatable about subtle colours.
+4. **Decision** — reject on wrong character, more than one person, broken
+   anatomy, text/watermark/logo/border/multi-panel, wrong outfit, a missing
+   ahoge (face/upper shots), and any `trait:*=wrong`. `--lenient` drops the
+   ahoge/outfit/style warnings. Official references that turn out to be a 3D
+   in-game render are used for generation but kept out of the dataset
+   (`--no-include-refs` turns that off entirely).
 
 The judge's reading also rewrites the caption: if a "front view" prompt
 actually came back as a cowboy shot from behind, the caption says so.
+
+### Profile traits (catching "the eyes are the wrong colour")
+
+A profile can verify specific canon details, not just general quality. In
+`config_states/lora_dataset_profiles.json`:
+
+```json
+"traits": [
+  { "id": "eyes", "strict": false,
+    "expect": "BOTH irises one solid dull crimson-red … 'wrong' if pink/magenta/purple or two-tone" },
+  { "id": "beauty_mark", "warn_only": true, "kinds": ["face", "upper"],
+    "expect": "a small beauty mark under his right eye" }
+],
+"eye_line": "BOTH eyes … one solid dull crimson red - never pink, magenta or purple."
+```
+
+* `wrong` always rejects; `partial` rejects only when `strict` is true
+  (use it for traits where "close" is still a lie in the caption).
+* `warn_only` traits are reported in the review sheet and never reject — this
+  is what you want for a beauty mark or a tiny accessory.
+* `kinds` limits a trait to framings where it can honestly be judged.
+* `unclear` never rejects.
+* `eye_line` is appended to **wide** shots only, because that is where a small
+  iris drifts back to the model's prior for the character.
+
+### Auditing and re-shooting without burning the whole budget
+
+```bat
+REM re-judge what is already on disk (text calls only, no image cost)
+.\lora_dataset_builder.bat --profile lohen --face ... --outfit ... ^
+    --output-dir outputs\lora_dataset_builder\lohen_v4 --audit
+
+REM regenerate only the ids that failed; everything else is reused
+.\lora_dataset_builder.bat --profile lohen --face ... --outfit ... ^
+    --output-dir outputs\lora_dataset_builder\lohen_v4 ^
+    --reshoot "01_face_front,06_face_surprised" --max-calls 32
+```
+
+`--audit` prints one line per shot (character / outfit / each trait) and the
+JSON carries a ready-made `reshoot` list. `--reshoot` implies `--resume` for
+every other shot, so a 22-shot plan costs one call per fixed image.
 
 ## Captions
 
@@ -99,7 +146,21 @@ and can be overridden or extended in `config_states/lora_dataset_profiles.json`
 — copy the `_example` block. Fields: `game`, `character`, `trigger`, `repeat`,
 `dataset_group`, `gender`/`identity`/`outfit` (caption tags),
 `identity_prompt`/`outfit_prompt` (generation wording), `must_keep`, `avoid`,
-`require_ahoge`.
+`require_ahoge`, plus `traits`/`eye_line` for per-detail verification (above).
+
+**Check the reference's colours before anything else.** The single most
+expensive mistake is a face reference with the wrong eye colour: the image
+model follows the reference, so every generated image inherits the error and no
+prompt wording fixes it. Zoom the reference's eyes and compare with the canon
+description; a numeric hint:
+
+```powershell
+.\.venv\Scripts\python.exe <skill>\scripts\check_ref_eyes.py data\collection\...\*.png `
+    --expect-from data\collection\...\official_face.png
+```
+
+(It reports the measured iris colour and flags gross differences; a purple
+cloak or card text can trip it, so confirm by eye.)
 
 ## Fetching official references
 

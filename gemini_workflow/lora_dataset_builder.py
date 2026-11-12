@@ -355,6 +355,7 @@ def resolve_profile(profiles: dict, name: str, overrides: dict) -> dict:
     prof.setdefault("outfit", [])
     prof.setdefault("must_keep", [])
     prof.setdefault("avoid", [])
+    prof.setdefault("traits", [])
     prof.setdefault("repeat", 3)
     prof.setdefault("trigger", key)
     prof.setdefault("character", f"{key} ({prof['game']})")
@@ -435,6 +436,12 @@ def build_prompt(shot: dict, prof: dict, refs: dict, desc: str = "") -> str:
         extra = ("\nADDITIONAL REQUIREMENTS (highest priority):\n"
                  + "\n".join(f"* {ln.strip()}" for ln in desc.splitlines()
                              if ln.strip()) + "\n")
+    # Wide shots are where the eyes drift: the iris is a few dozen pixels, so
+    # the model falls back to its prior for the character. Restating the eye
+    # colour at the end of the prompt is what keeps it correct.
+    eye_note = ""
+    if prof.get("eye_line") and kind in ("full", "cowboy"):
+        eye_note = (f"EYES AT THIS DISTANCE: {prof['eye_line']}\n")
 
     return (
         f"Create ONE single, high-resolution anime illustration of "
@@ -450,6 +457,7 @@ def build_prompt(shot: dict, prof: dict, refs: dict, desc: str = "") -> str:
         f"BACKGROUND: {bg['prompt']}\n"
         f"LIGHTING: soft, even, neutral daylight on the character; no harsh "
         f"shadows; the character is evenly lit and clearly readable.\n"
+        f"{eye_note}"
         f"STYLE: clean modern anime illustration, crisp lineart, cel shading "
         f"with soft gradients, official game art quality, high detail.\n"
         f"RULES: exactly ONE character, alone, centered, whole head inside "
@@ -594,6 +602,10 @@ JUDGE_SCHEMA = {
                     "anatomy": {"type": "string",
                                 "enum": ["ok", "minor", "broken"]},
                     "artifacts": {"type": "array", "items": {"type": "string"}},
+                    "traits": {"type": "object",
+                               "additionalProperties": {
+                                   "type": "string",
+                                   "enum": ["ok", "partial", "wrong", "unclear"]}},
                     "keep": {"type": "boolean"},
                     "reason": {"type": "string"},
                 },
@@ -604,6 +616,53 @@ JUDGE_SCHEMA = {
     },
     "required": ["items"],
 }
+
+
+HARD_REASONS = {"wrong_character", "extra_characters", "broken_anatomy",
+                "3d_render_not_for_training"}
+
+
+def confirm_soft_rejections(client, model: str, verdicts: dict, items,
+                            prof: dict, face_ref: str, kind_of,
+                            batch_size: int = 4, verbose: bool = True) -> dict:
+    """Re-judge only the images that failed a *soft* check, and let a clean
+    second opinion overturn the first.
+
+    The vision judge is not perfectly repeatable about subtle traits (a dull red
+    iris vs a pink one), and a single unlucky call must not delete a good image.
+    Hard failures (wrong character, extra people, broken anatomy, artifacts,
+    3D-render references) are never overturned."""
+    soft = []
+    for cid, path in items:
+        if cid.startswith("ref_"):
+            continue
+        keep, reasons = decide(cid, verdicts.get(cid, {}), prof, kind_of(cid))
+        if keep:
+            continue
+        if any(r in HARD_REASONS for r in reasons):
+            continue
+        if any(r.startswith(("artifact:", "small:", "blank", "blur", "gutter"))
+               for r in reasons):
+            continue
+        soft.append((cid, path))
+    if not soft:
+        return verdicts
+    if verbose:
+        print(f"[builder] confirming {len(soft)} soft rejection(s) with a "
+              f"second judge pass", flush=True)
+    second = run_judge(client, model, soft, prof, face_ref,
+                       batch_size=batch_size, verbose=verbose)
+    for cid, _path in soft:
+        v2 = second.get(cid)
+        if not v2:
+            continue
+        keep2, _ = decide(cid, v2, prof, kind_of(cid))
+        if keep2:
+            verdicts[cid] = v2
+            if verbose:
+                print(f"[builder] {cid}: second opinion is clean - kept",
+                      flush=True)
+    return verdicts
 
 
 def _encode_for_judge(path: str, max_side: int = 640) -> dict:
@@ -621,6 +680,9 @@ def _encode_for_judge(path: str, max_side: int = 640) -> dict:
 
 
 def judge_prompt(prof: dict, batch) -> str:
+    """The verification brief: canonical facts, optional per-trait checks, and
+    the exact answer keys the schema expects."""
+    traits = prof.get("traits") or []
     lines = [
         f"You are a strict QA reviewer for a character LoRA dataset of "
         f"{prof['character']} from {prof['game']}.",
@@ -631,38 +693,56 @@ def judge_prompt(prof: dict, batch) -> str:
         f"- identity: {prof.get('identity_prompt', '')}",
         f"- outfit: {prof.get('outfit_prompt', '')}",
         "",
+    ]
+    if traits:
+        lines += [
+            "SPECIFIC TRAITS TO VERIFY - judge each one only from what is "
+            "actually visible in that candidate image:",
+        ]
+        lines += [f"- '{t['id']}': {t['expect']}" for t in traits]
+        lines.append("")
+    lines += [
         "For EVERY candidate return one item:",
         "- character: 'match' if it is clearly this character, 'weak' if the "
         "face is off but plausibly the same character, 'wrong' if it is a "
         "different person.",
         "- people: number of characters visible.",
         "- shot: what is actually framed (face = closer than the shoulders, "
-        "upper = head to waist, cowboy = head to mid-thigh, full = head to "
-        "toe).",
+        "upper = head to waist, cowboy = head to mid-thigh, full = head to toe).",
         "- feet_visible: true only if both feet (or both boots) are actually "
         "inside the frame.",
         "- view: the body/face orientation actually shown.",
-        "- background: 'white' for plain white, 'gradient' for a plain "
-        "colored backdrop, 'scene' for any real environment.",
-        "- ahoge: true only if the tall hair tuft on top of the head is "
-        "clearly visible.",
-        "- outfit: 'correct' if it matches the outfit description, 'partial' "
-        "if some pieces are missing or recolored, 'wrong' if it is a "
-        "different outfit.",
-        "- art_style: '2d_anime' for drawn/painted anime art, '3d_render' for "
-        "a 3D/CGI render (in-game model), 'other' for anything else.",
-        "- anatomy: 'broken' for extra/missing limbs, melted face or hands "
-        "that are visibly wrong; 'minor' for small issues; else 'ok'.",
+        "- background: 'white' for plain white, 'gradient' for a plain colored "
+        "backdrop, 'scene' for any real environment.",
+        "- ahoge: true only if the tall hair tuft on top of the head is clearly "
+        "visible.",
+        "- outfit: 'correct' if it matches the outfit description, 'partial' if "
+        "some pieces are missing or recolored, 'wrong' if it is a different "
+        "outfit.",
+        "- art_style: '2d_anime' for drawn/painted anime art, '3d_render' for a "
+        "3D/CGI render (in-game model), 'other' for anything else.",
+        "- anatomy: 'broken' for extra/missing limbs, melted face or hands that "
+        "are visibly wrong; 'minor' for small issues; else 'ok'.",
         "- artifacts: any of 'text', 'watermark', 'logo', 'border', "
         "'multiple_views', 'panel', 'blurry', 'low_quality' that are present.",
-        "- keep: false if the image must not be used for training "
-        "(wrong character, extra people, text, visible damage).",
+    ]
+    if traits:
+        lines.append(
+            "- traits: an object with one key per trait id above, valued 'ok' "
+            "(exactly as described), 'partial' (right base but a detail is "
+            "missing), 'wrong' (clearly a different colour/shape) or 'unclear' "
+            "(too small or hidden to judge). Judge colour precisely: if the "
+            "canon is a dull red iris whose outer edge is a thin greenish ring, "
+            "then a pink, magenta or plain bright-red iris is 'wrong', and a "
+            "red iris without the greenish outer ring is 'partial'.")
+    lines += [
+        "- keep: false if the image must not be used for training (wrong "
+        "character, extra people, text, visible damage).",
         "- reason: one short sentence.",
         "",
         "Candidates:",
     ]
-    for cid, _path in batch:
-        lines.append(f"- id {cid}")
+    lines += [f"- id {cid}" for cid, _path in batch]
     return "\n".join(lines)
 
 
@@ -705,7 +785,12 @@ def decide(item_id: str, verdict: dict, prof: dict, kind: str = None) -> tuple:
 
     `kind` is the planned shot kind: the ahoge must be clearly visible in
     face/upper shots, while in a full-body frame it is legitimately small, so
-    it is only a warning there."""
+    it is only a warning there.
+
+    Profile `traits` are checked here too. A trait evaluated 'wrong' always
+    rejects; 'partial' rejects only for strict traits (colour/detail traits
+    where "close" is still a lie in the caption), and 'unclear' never rejects
+    (a full body shot cannot show a thin eye ring)."""
     if not verdict:
         return True, []
     reasons = []
@@ -727,8 +812,25 @@ def decide(item_id: str, verdict: dict, prof: dict, kind: str = None) -> tuple:
     if (prof.get("require_ahoge") and verdict.get("ahoge") is False
             and kind in (None, "face", "upper")):
         reasons.append("ahoge_missing")
-    if verdict.get("keep") is False and not reasons:
-        reasons.append("judge_rejected")
+    seen_traits = verdict.get("traits") or {}
+    for trait in prof.get("traits") or []:
+        # A thin iris ring or a beauty mark cannot be judged (or trained) on a
+        # full-body frame, so each trait names the framings it applies to.
+        kinds = trait.get("kinds")
+        if kinds and kind not in kinds:
+            continue
+        if trait.get("warn_only"):
+            continue
+        state = str(seen_traits.get(trait["id"]) or "").lower()
+        if state == "wrong":
+            reasons.append(f"trait:{trait['id']}=wrong")
+        elif state == "partial" and trait.get("strict"):
+            reasons.append(f"trait:{trait['id']}=partial")
+    # The judge's blanket `keep: false` is intentionally NOT a rejection: every
+    # hard criterion has its own field above, and the blanket flag fires on
+    # cosmetic details (a misplaced beauty mark, a missing accessory) that must
+    # not veto an otherwise correct training image. It is still recorded in the
+    # verdict for the review sheet.
     return not reasons, reasons
 
 
@@ -912,6 +1014,31 @@ def selftest() -> int:
           "watermark rejected")
     check(decide("x", {}, prof) == (True, []), "missing verdict does not reject")
 
+    eye_prof = {"traits": [{"id": "eyes", "strict": False}]}
+    check(decide("x", {"character": "match", "people": 1,
+                       "traits": {"eyes": "wrong"}}, eye_prof)[1]
+          == ["trait:eyes=wrong"], "wrong eye colour rejects")
+    check(decide("x", {"character": "match", "people": 1,
+                       "traits": {"eyes": "partial"}}, eye_prof)[0],
+          "missing iris rim (partial, non-strict) is kept")
+    check(decide("x", {"character": "match", "people": 1,
+                       "traits": {"eyes": "unclear"}}, eye_prof)[0],
+          "unjudgeable eye colour is kept")
+    only_full = {"traits": [{"id": "eyes", "kinds": ["face", "upper"]}]}
+    check(decide("x", {"character": "match", "people": 1,
+                       "traits": {"eyes": "wrong"}}, only_full, "full")[0],
+          "trait outside its framing scope does not reject")
+    warn_only = {"traits": [{"id": "beauty_mark", "warn_only": True}]}
+    check(decide("x", {"character": "match", "people": 1,
+                       "traits": {"beauty_mark": "wrong"}}, warn_only)[0],
+          "warn-only trait never rejects")
+    weak_prof = resolve_profile(load_profiles(), "lohen", {})
+    check(bool(weak_prof.get("eye_line")), "lohen profile carries an eye line")
+    wide = build_prompt(full_shot, weak_prof, refs)
+    check("EYES AT THIS DISTANCE" in wide, "wide shots restate the eye colour")
+    check("EYES AT THIS DISTANCE" not in build_prompt(shot, weak_prof, refs),
+          "close-ups do not need the wide-shot eye line")
+
     check(shot_bucket({"aspect": "2:3"}) == (832, 1216), "2:3 shot -> 832x1216")
     check(shot_bucket({"aspect": "1:1"}) == (1024, 1024), "1:1 shot -> 1024x1024")
     check(sanitize_component("genshin impact") == "genshin_impact",
@@ -1014,6 +1141,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "(default: root .venv)")
     ap.add_argument("--resume", action="store_true",
                     help="Reuse already generated raw/<shot>.png files")
+    ap.add_argument("--reshoot", default="",
+                    help="Comma list of shot ids to regenerate (e.g. "
+                         "'01_face_front,05_face_serious'); every other "
+                         "existing shot is reused, so only these cost calls")
+    ap.add_argument("--audit", action="store_true",
+                    help="Judge the shots already in the run folder and print "
+                         "the verdict table (including profile traits); no "
+                         "generation, no dataset write")
     ap.add_argument("--output-dir", default="",
                     help="Raw run folder (default: outputs/lora_dataset_builder/"
                          "<date>/<time>)")
@@ -1089,6 +1224,60 @@ def main() -> int:
         outfit_refs = normalize_refs(outfit_refs, refs_dir)
     refs = {"face": face_refs, "outfit": outfit_refs}
 
+    # ------------------------------ audit --------------------------------
+    # Re-judge what is already on disk (text-model calls only) so a profile fix
+    # - a wrong eye colour, a missing accessory - can be applied to exactly the
+    # shots that need re-shooting instead of the whole plan.
+    if args.audit:
+        if not os.path.isdir(shots_dir):
+            print(json.dumps({"ok": False, "error":
+                              f"no shots to audit at {shots_dir}"}))
+            return 1
+        present = [(s["id"], os.path.join(shots_dir, s["id"] + ".png"))
+                   for s in shots
+                   if os.path.exists(os.path.join(shots_dir, s["id"] + ".png"))]
+        if not present:
+            print(json.dumps({"ok": False, "error": "no shot images found"}))
+            return 1
+        api_key = _resolve_api_key(args)
+        if not api_key:
+            print(json.dumps({"ok": False, "error": "no Gemini API key"}))
+            return 1
+        client = _make_client(api_key)
+        verdicts = run_judge(client, args.judge_model, present, prof,
+                             face_refs[0] if face_refs else "",
+                             batch_size=max(1, args.judge_batch))
+        kinds = {s["id"]: s["kind"] for s in shots}
+        verdicts = confirm_soft_rejections(
+            client, args.judge_model, verdicts, present, prof,
+            face_refs[0] if face_refs else "",
+            lambda cid: kinds.get(cid),
+            batch_size=max(1, args.judge_batch))
+        rows, failing = [], []
+        for sid, _path in present:
+            shot = next(s for s in shots if s["id"] == sid)
+            verdict = verdicts.get(sid, {})
+            keep, reasons = decide(sid, verdict, prof, shot["kind"])
+            traits = verdict.get("traits") or {}
+            rows.append({"id": sid, "kind": shot["kind"], "keep": keep,
+                         "reasons": reasons, "traits": traits,
+                         "character": verdict.get("character"),
+                         "outfit": verdict.get("outfit")})
+            if not keep:
+                failing.append(sid)
+            trait_txt = " ".join(f"{k}={v}" for k, v in traits.items()) or "-"
+            print(f"  {sid:<22} {'ok   ' if keep else 'FAIL '} "
+                  f"char={str(verdict.get('character', '')):<5} "
+                  f"outfit={str(verdict.get('outfit', '')):<7} {trait_txt}"
+                  f"{'  <- ' + ','.join(reasons) if reasons else ''}",
+                  flush=True)
+        ok = not failing
+        print(json.dumps({"ok": ok, "run_dir": run_dir, "audited": len(rows),
+                          "failing": failing,
+                          "reshoot": ",".join(failing),
+                          "rows": rows}, ensure_ascii=False))
+        return 0
+
     # ------------------------------ dry run ------------------------------
     if args.dry_run:
         print(f"\n[builder] PLAN for {prof['character']} "
@@ -1133,9 +1322,19 @@ def main() -> int:
     os.makedirs(shots_dir, exist_ok=True)
 
     generated, generation_errors = [], []
+    reshoot = {s.strip() for s in (args.reshoot or "").split(",") if s.strip()}
+    unknown = sorted(reshoot - {s["id"] for s in shots})
+    if unknown:
+        print(f"[builder] warning: --reshoot ids not in this plan: {unknown}",
+              flush=True)
+    reuse_existing = args.resume or bool(reshoot)
     for shot in shots:
         raw_path = os.path.join(shots_dir, shot["id"] + ".png")
-        if args.resume and os.path.exists(raw_path):
+        if shot["id"] in reshoot and os.path.exists(raw_path):
+            os.remove(raw_path)
+            print(f"[builder] {shot['id']}: re-shooting (deleted old file)",
+                  flush=True)
+        if reuse_existing and os.path.exists(raw_path):
             print(f"[builder] {shot['id']}: reusing {raw_path}", flush=True)
             generated.append((shot["id"], raw_path))
             continue
@@ -1185,6 +1384,14 @@ def main() -> int:
         verdicts = run_judge(client, args.judge_model, judge_items, prof,
                              face_refs[0] if face_refs else "",
                              batch_size=max(1, args.judge_batch))
+        kind_by_id = {s["id"]: s["kind"] for s in shots}
+        kind_by_id.update({f"ref_{i:02d}": "ref"
+                           for i in range(1, len(face_refs) + len(outfit_refs) + 1)})
+        verdicts = confirm_soft_rejections(
+            client, args.judge_model, verdicts, judge_items, prof,
+            face_refs[0] if face_refs else "",
+            lambda cid: kind_by_id.get(cid),
+            batch_size=max(1, args.judge_batch))
         print(f"[builder] judge returned {len(verdicts)} verdict(s)", flush=True)
 
     # ------------------------------- QA ----------------------------------
